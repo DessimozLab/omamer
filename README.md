@@ -11,7 +11,7 @@ Alternatively, clone this repository and install manually.
 
 Download a pre-built database from the links below. More databases to follow shortly -- if you have a request, please create an issue.
 
-(add link to Metazoan database)
+ - Metazoa (from January 2020 OMA release) - [Google Drive](https://drive.google.com/open?id=1iAQJt4ClfqbH3qFB8PBT_0cboWFX1fN0)
 
 
 # omamer mkdb - Building a Database

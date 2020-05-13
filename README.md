@@ -50,3 +50,12 @@ OMAmer is free software: you can redistribute it and/or modify it under the term
 OMAmer is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
 
 You should have received a copy of the GNU Lesser General Public License along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
+
+# Citation
+Rossier Victor, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, and Christophe Dessimoz. 2020. “OMAmer: Tree-Driven and Alignment-Free Protein Assignment to Subfamilies Outperforms Closest Sequence Approaches.” <bioRxiv. https://doi.org/10.1101/2020.04.30.068296>.
+
+Code use for that paper is available here.
+
+(add link to zipped accuracy analyses)
+
+

@@ -73,7 +73,7 @@ def search(args):
     # initialise query
     ids = []
     seqs = []
-
+    
     pbar = tqdm(desc='Searching')
     for rec in filter(lambda x: len(x.seq) >= db.ki.k,
                       SeqIO.parse(args.query, 'fasta')):

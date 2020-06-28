@@ -215,18 +215,12 @@ class Database(object):
             species = set()
 
             for tl in pruned_stree.traverse():
-                #tax = "".join(tl.name.split()).encode("ascii")
-                tax = tl.name.encode("ascii")
-                if tl.up is not None:
-                    #tax2parent[tax] = "".join(tl.up.name.split()).encode("ascii")
-                    tax2parent[tax] = tl.up.name.encode("ascii")
-                tax2children[tax] = [
-                    #"".join(x.name.split()).encode("ascii") for x in tl.children
-                    x.name.encode("ascii") for x in tl.children
-                ]
+                tax = tl.name.encode('ascii')
+                tax2parent[tax] = tl.up.name.encode('ascii') if tl.up else 'root'.encode('ascii')
+                tax2children[tax] = [x.name.encode('ascii') for x in tl.children]
                 tax2level[tax] = tl.get_distance(stree)
                 if tl.is_leaf():
-                    species.add(tl.name.encode('ascii'))#"".join(tl.name.split()).encode("ascii"))
+                    species.add(tl.name.encode('ascii'))
 
             return tax2parent, tax2children, tax2level, species
 
@@ -736,11 +730,8 @@ class DatabaseFromOMA(Database):
                     tax,
                 )
 
-            # store, update fam and current OMA root-HOG if not descendant and start at root taxon
-            # ! ignorint OMA root-HOG younger than roottax !
-            elif tax == roottax:
-
-                # care about HOG quality or number of members?
+            # if tax equal or younger that root taxon: store, update fam and current OMA root-HOG
+            elif tax:
 
                 fam += 1
                 curr_oma_roothog = curr_oma_hog
@@ -905,8 +896,11 @@ class DatabaseFromOMA(Database):
             #sp = b"".join(r["SciName"].split())
             sp = r['SciName']
             sp_code = r['UniProtSpeciesCode'].decode('ascii')
+            
             # load a slice if species in taxonomy
-            if sp in species:
+            
+            # for ~27 cases the uniprot id replaces the scientific name in OMA species tree
+            if sp in species or sp_code in species:
                 entry_off = r["EntryOff"]
                 entry_num = r["TotEntries"]
 

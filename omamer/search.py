@@ -246,7 +246,7 @@ class Search(object):
         prop_fun,
     ):
 
-        hog_cum_counts = hog_counts.copy()
+        hog_cum_counts = hog_counts.copy()  # probably not necessary
 
         # iterate queries
         for q in numba.prange(q_num):

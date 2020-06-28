@@ -105,7 +105,7 @@ mkdb_parser.add_argument(
     "--k", default=6, help="Word size (k-mer) to use to build the indexes.", type=int
 )
 mkdb_parser.add_argument(
-    "--min_hog_size", default=6, help="Minimum HOG size used to build database."
+    "--min_hog_size", default=6, help="Minimum HOG size used to build database.", type=int
 )
 mkdb_parser.add_argument(
     "--root_taxon", required=True, help="Root taxon to build the database for."

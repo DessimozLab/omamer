@@ -26,3 +26,11 @@ __version__ = "0.0.1"
 __copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>".format(
     date.today().year
 )
+
+from .hierarchy import *
+from .alphabets import *
+from .database import *
+from .index import *
+from .flat_search import *
+from .search import *
+from .prob_search import *

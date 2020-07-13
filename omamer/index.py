@@ -122,7 +122,8 @@ class Index(object):
         return sa
 
     def _build_kmer_table(self, sa):
-        @numba.njit(parallel=True)
+        #@numba.njit(parallel=True) --> was breaking for PANTHER database
+        @numba.njit
         def _compute_mask_and_filter(
             sa, sa_mask, sa_filter, k, n, prot2spoff, prot2hogoff, sp_filter
         ):

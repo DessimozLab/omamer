@@ -63,6 +63,7 @@ class Search(object):
         top_n,
         prop_fun,
         norm_hog_fun,
+        threshold
         norm_fam_args=[],
         norm_hog_args=[],
     ):
@@ -122,14 +123,14 @@ class Search(object):
         family_score = queryFam_score[np.arange(len(qseqid)), family] 
 
         # generate the dataframe
-        def generate_results():
+        def generate_results(threshold):
             for i in np.argwhere(~np.isnan(family_score)).flatten():
                 # find best scoring subfamily
                 best_j = None
                 best_s = np.inf
                 for j in np.argwhere(queryHog_bestpath[i]).flatten():
                     s = queryHog_score[i,j]
-                    if s < best_s and s >= 0.05:
+                    if s < best_s and s >= threshold:
                         best_j = j
                         best_s = s
                 if best_j is not None:
@@ -146,7 +147,7 @@ class Search(object):
         if self.include_extant_genes:
             h.append('subfamily-geneset')
 
-        return pd.DataFrame(generate_results())[h]
+        return pd.DataFrame(generate_results(threshold))[h]
 
     ### normalize family ####################################################################################################################
     def norm_fam_query_size(self):

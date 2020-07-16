@@ -81,7 +81,7 @@ def search(args):
         seqs.append(str(rec.seq))
         if len(ids) == args.chunksize:
             fs.flat_search(ids=ids, seqs=seqs)
-            df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size)
+            df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
             pbar.update(len(ids))
             df.to_csv(args.out, sep='\t', index=False, header=print_header)
 

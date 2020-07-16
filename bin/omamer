@@ -133,6 +133,9 @@ search_parser.add_argument(
     "--query", required=True, help="FASTA formatted sequences", type=FileType("r")
 )
 search_parser.add_argument(
+    "--threshold", default=0.05, type=float, help="threshold used to vary placement specificity"
+)
+search_parser.add_argument(
     "--out",
     help="Path to output (default stdout)",
     default=sys.stdout,

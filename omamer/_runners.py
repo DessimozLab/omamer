@@ -93,7 +93,7 @@ def search(args):
 
     # final search
     fs.flat_search(ids=ids, seqs=seqs)
-    df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size)
+    df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
     if len(ids) > 0:
         pbar.update(len(ids))
     df.to_csv(args.out, sep='\t', index=False, header=print_header)

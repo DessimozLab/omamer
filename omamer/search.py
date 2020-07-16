@@ -63,7 +63,7 @@ class Search(object):
         top_n,
         prop_fun,
         norm_hog_fun,
-        threshold
+        threshold,
         norm_fam_args=[],
         norm_hog_args=[],
     ):

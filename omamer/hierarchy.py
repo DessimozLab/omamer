@@ -120,7 +120,7 @@ def leaf_traverse(tax_off, tax_tab, ctax_buff, acc, leaf_fun):
 	extend to main traverse by adding postorder, preorder and midorder funs
 	"""
 
-    for ctax in _children_tax(tax_off, tax_tab, ctax_buff):
+    for ctax in children_tax(tax_off, tax_tab, ctax_buff):
         # reach species
         spe_off = tax_tab[ctax]["SpeOff"]
         if spe_off != -1:

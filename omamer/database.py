@@ -893,14 +893,16 @@ class DatabaseFromOMA(Database):
 
         for r in tqdm(genome_tab, disable=is_progress_disabled()):
 
-            #sp = b"".join(r["SciName"].split())
             sp = r['SciName']
-            sp_code = r['UniProtSpeciesCode'].decode('ascii')
+            sp_code = r['UniProtSpeciesCode']
             
-            # load a slice if species in taxonomy
-            
+            # use species code if scientific name is lacking
             # for ~27 cases the uniprot id replaces the scientific name in OMA species tree
-            if sp in species or sp_code in species:
+            if sp not in species:
+                sp = sp_code
+
+            # filter if species outside root-taxon
+            if sp in species:
                 entry_off = r["EntryOff"]
                 entry_num = r["TotEntries"]
 
@@ -927,7 +929,6 @@ class DatabaseFromOMA(Database):
                         oma_seq_offsets.append(oma_seq_off)
 
                         # store protein row
-                        #prot_rows.append((rr["EntryNr"], 0, seq_len, spe_off, 0, 0))
                         oma_id = '{}{:05d}'.format(sp_code, rr['EntryNr'] - entry_off + 1)
                         prot_rows.append((oma_id.encode('ascii'), 0, seq_len, spe_off, 0, 0))
 

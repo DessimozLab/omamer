@@ -795,7 +795,7 @@ class Validation():
 
 	def compute_precision_recall_specificity_family(self, partitions=np.array([])):
 		return self._compute_precision_recall_specificity_family(
-			self._tp[:], self._fn[:], self._tn[:], self._fp_pos[:], self._fp_neg[:], partitions)
+			self._fam_tp[:], self._fam_fn[:], self._fam_tn[:], self._fam_fp_pos[:], self._fam_fp_neg[:], partitions)
 
 	@staticmethod
 	def _F1max_family(part2pre, part2rec, thresholds):

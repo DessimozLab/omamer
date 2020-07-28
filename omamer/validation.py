@@ -37,7 +37,8 @@ from .index import Index
 
 class Validation():
 
-	def __init__(self, db, filename, thresholds, nwk_fn=None, query_sp=None, focal_taxon=None, bin_num=1, val_mode='golike', neg_root_taxon=None, max_query_nr=None, neg_query_file=None, oma_db_fn=None):
+	def __init__(self, db, filename, thresholds, nwk_fn=None, query_sp=None, focal_taxon=None, bin_num=1, val_mode='golike', 
+		neg_root_taxon=None, max_query_nr=None, neg_query_file=None, oma_db_fn=None, nthreads=1):
 
 		self.db = db
 		self.ki = db.ki
@@ -66,6 +67,7 @@ class Validation():
 		self.max_query_nr = max_query_nr
 		self.neg_query_file = neg_query_file
 		self.oma_db_fn = oma_db_fn
+		self.nthreads = nthreads
 
 		# to pick negative queries
 		random.seed(123)
@@ -529,7 +531,7 @@ class Validation():
 		        ff.write(">{}\n{}\n".format(neg_ids[i], s))
 
 		# search negatives
-		neg_ms = MergeSearch(ki=self.ki, nthreads=2)
+		neg_ms = MergeSearch(ki=self.ki, nthreads=self.nthreads)
 		neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids)
 
 		# validate negatives

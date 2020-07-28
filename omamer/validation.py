@@ -53,9 +53,9 @@ class Validation():
 		else:
 			self.mode = 'w'
 			self.va = tables.open_file(self.filename, self.mode)
+			va.create_carray('/', 'Thresholds', obj=np.array(thresholds, dtype=np.float64), filters=self.db._compr)
 
 		# required for subfamily validation
-		self.va.create_carray('/', 'Thresholds', obj=np.array(thresholds, dtype=np.float64), filters=self.db._compr)
 		self.nwk_fn = nwk_fn
 		self.query_sp = query_sp
 		self.focal_taxon = focal_taxon if focal_taxon else self.db.root_taxon

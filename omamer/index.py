@@ -71,10 +71,53 @@ class Index(object):
         # filter based on species attributes
         self.sp_filter = np.full((len(self.db._sp_tab),), False)
 
+        # corresponding taxonomic filter (used in validation)
+        self.tax_filter = np.full((len(self.db._tax_tab),), False)
+
+    ### useful for validation
     def set_species(self, sp_ii):
         self.sp_filter[:] = True
         for i in sp_ii:
             self.sp_filter[i] = False
+
+    def hide_taxa(self, taxa, nwk_fn):
+        '''
+        enables to hide species of some taxa e.g. for a Validation purpose
+        '''
+        for taxon in taxa:
+            
+            # get all species and descending taxa of a given taxon
+            hidden_taxa, hidden_species = self.get_clade_specific_taxa_species(nwk_fn, taxon)
+            
+            # find species offsets in sp_tab and turn on filter for these
+            hidden_species_offsets = np.searchsorted(self.db._sp_tab.col('ID'), np.array(list(hidden_species)))
+            for sp_off in hidden_species_offsets:
+                self.sp_filter[sp_off] = True
+            
+            # find taxon offsets in tax_tab and turn on filter for these
+            hidden_taxa_offsets = np.searchsorted(self.db._tax_tab.col('ID'), np.array(list(hidden_taxa)))
+            for tax_off in hidden_taxa_offsets:
+                self.tax_filter[tax_off] = True
+
+    @staticmethod
+    def get_clade_specific_taxa_species(nwk_fn, root_taxon):
+        '''
+        gather all taxa and species specific to a given clade
+        '''
+        stree = Tree(nwk_fn, format=1, quoted_node_names=True)
+
+        pruned_stree = [x for x in stree.traverse() if x.name == root_taxon][0]
+
+        taxa = set()
+        species = set()
+
+        for tl in pruned_stree.traverse():
+            taxon = tl.name.encode('ascii')
+            taxa.add(taxon)
+            if tl.is_leaf():
+                species.add(taxon)
+
+        return np.array(sorted(taxa)), species
 
     ### same as in database class; easy access to data ###
     def _get_node_if_exist(self, node):

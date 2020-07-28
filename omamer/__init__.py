@@ -34,3 +34,5 @@ from .index import *
 from .flat_search import *
 from .search import *
 from .prob_search import *
+from .merge_search import *
+from .validation import *

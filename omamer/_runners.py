@@ -49,7 +49,7 @@ def mkdb_oma(args):
     db.close()
     LOG.info('Done')
 
-
+# new search using merge_search.py
 def search(args):
     from Bio import SeqIO
     from tqdm import tqdm
@@ -57,15 +57,13 @@ def search(args):
 
     from .database import Database
     from .index import Index
-    from .flat_search import FlatSearch
-    from .search import Search
+    from .merge_search import MergeSearch
 
     # reload
     db = Database(args.db, nthreads=args.nthreads)
 
     # setup search
-    fs = FlatSearch(db.ki, nthreads=args.nthreads)
-    se = Search(fs, include_extant_genes=args.include_extant_genes)
+    ms = omamer.MergeSearch(ki=db.ki, nthreads=args.nthreads, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output 
     print_header = (args.out.name != sys.stdout.name)
@@ -80,23 +78,72 @@ def search(args):
         ids.append(rec.id)
         seqs.append(str(rec.seq))
         if len(ids) == args.chunksize:
-            fs.flat_search(ids=ids, seqs=seqs)
-            df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
+            ms.merge_search(seqs=seqs, ids=ids)
+            df = ms.output_results(threshold=args.threshold)
             pbar.update(len(ids))
             df.to_csv(args.out, sep='\t', index=False, header=print_header)
-
 
             ids = []
             seqs = []
             print_header = False
 
-
     # final search
-    fs.flat_search(ids=ids, seqs=seqs)
-    df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
+    ms.merge_search(ids=ids, seqs=seqs)
+    df = ms.output_results(threshold=args.threshold)
     if len(ids) > 0:
         pbar.update(len(ids))
     df.to_csv(args.out, sep='\t', index=False, header=print_header)
 
     pbar.close()
     db.close()
+
+# def search(args):
+#     from Bio import SeqIO
+#     from tqdm import tqdm
+#     import sys
+
+#     from .database import Database
+#     from .index import Index
+#     from .flat_search import FlatSearch
+#     from .search import Search
+
+#     # reload
+#     db = Database(args.db, nthreads=args.nthreads)
+
+#     # setup search
+#     fs = FlatSearch(db.ki, nthreads=args.nthreads)
+#     se = Search(fs, include_extant_genes=args.include_extant_genes)
+
+#     # only print header for file output 
+#     print_header = (args.out.name != sys.stdout.name)
+
+#     # initialise query
+#     ids = []
+#     seqs = []
+    
+#     pbar = tqdm(desc='Searching')
+#     for rec in filter(lambda x: len(x.seq) >= db.ki.k,
+#                       SeqIO.parse(args.query, 'fasta')):
+#         ids.append(rec.id)
+#         seqs.append(str(rec.seq))
+#         if len(ids) == args.chunksize:
+#             fs.flat_search(ids=ids, seqs=seqs)
+#             df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
+#             pbar.update(len(ids))
+#             df.to_csv(args.out, sep='\t', index=False, header=print_header)
+
+
+#             ids = []
+#             seqs = []
+#             print_header = False
+
+
+#     # final search
+#     fs.flat_search(ids=ids, seqs=seqs)
+#     df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
+#     if len(ids) > 0:
+#         pbar.update(len(ids))
+#     df.to_csv(args.out, sep='\t', index=False, header=print_header)
+
+#     pbar.close()
+#     db.close()

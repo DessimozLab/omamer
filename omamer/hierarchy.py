@@ -99,9 +99,9 @@ def children_tax(tax_off, tax_tab, ctax_buff):
 
 def get_lca_tax(tax_off, tax2parent, hidden_taxa):
     """
-	get taxon from which tax_off has diverged
-	"""
-    root_leaf = _get_root_leaf_offsets(tax_off, tax2parent)
+    get taxon from which tax_off has diverged
+    """
+    root_leaf = get_root_leaf_hog_offsets(tax_off, tax2parent)
     for x in root_leaf[::-1]:
         if x not in hidden_taxa:
             return x

@@ -610,10 +610,11 @@ class DatabaseFromOMA(Database):
     """
     Used to parse the OMA browser database file
     """
-    def __init__(self, filename, root_taxon, min_prot_nr=6, mode='r'):
+    def __init__(self, filename, root_taxon, min_prot_nr=6, include_younger_fams=True, mode='r'):
         super().__init__(filename, root_taxon, mode=mode)
 
         self.min_prot_nr = min_prot_nr
+        self.include_younger_fams = include_younger_fams
 
     ### main function ###
     def build_database(self, oma_h5_path, stree_path):
@@ -678,6 +679,7 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             roottax,
+            include_younger_fams
         ):
             """
 			- decide whether an OMA HOG should be stored based on current root-HOG and HOG taxa
@@ -733,24 +735,27 @@ class DatabaseFromOMA(Database):
             # if tax equal or younger that root taxon: store, update fam and current OMA root-HOG
             elif tax:
 
-                fam += 1
-                curr_oma_roothog = curr_oma_hog
+                # include only family at root-taxon if include_younger_fams==False
+                if (not include_younger_fams and tax == roottax) or include_younger_fams:
 
-                # store after updating fam
-                _store(
-                    fam,
-                    curr_oma_hog,
-                    curr_oma_roothog,
-                    fam2hogs,
-                    hog2oma_hog,
-                    hog2tax,
-                    tax,
-                )
+                    fam += 1
+                    curr_oma_roothog = curr_oma_hog
+
+                    # store after updating fam
+                    _store(
+                        fam,
+                        curr_oma_hog,
+                        curr_oma_roothog,
+                        fam2hogs,
+                        hog2oma_hog,
+                        hog2tax,
+                        tax,
+                    )
 
             return fam, curr_oma_roothog
 
         def _process_oma_fam(
-            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, roottax
+            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, roottax, include_younger_fams
         ):
             """
 			apply _process_oma_hog to one OMA family
@@ -778,6 +783,7 @@ class DatabaseFromOMA(Database):
                         hog2oma_hog,
                         hog2tax,
                         roottax,
+                        include_younger_fams
                     )
 
                     # reset for new HOG
@@ -798,6 +804,7 @@ class DatabaseFromOMA(Database):
                 hog2oma_hog,
                 hog2tax,
                 roottax,
+                include_younger_fams
             )
 
             return fam
@@ -836,6 +843,7 @@ class DatabaseFromOMA(Database):
                     hog2oma_hog,
                     hog2tax,
                     self.root_taxon.encode("ascii"),
+                    include_younger_fams
                 )
 
                 # move pointer and update current family
@@ -854,6 +862,7 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             self.root_taxon.encode("ascii"),
+            include_younger_fams
         )
 
         del hog_tab, families

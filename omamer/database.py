@@ -117,9 +117,9 @@ class Database(object):
         '''
         self.__exit__()
         try:
-            os.remove(self.file)
+            os.remove(self.filename)
         except FileNotFoundError:
-            print("{} already cleaned".format(self.file))
+            print("{} already cleaned".format(self.filename))
 
     ### method attributes to facilitate access to data stored in hdf5 file ###
     @property

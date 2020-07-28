@@ -515,10 +515,11 @@ class Validation():
 		# get the negative queries
 		if self.neg_root_taxon:
 			all_neg_seqs, all_neg_ids = self.clade_specific_negatives
-			query_i = self._query_ids.size
+			query_i = self._query_ids.nrows
 			query_j = query_i + se._query_ids.size
 			assert query_j <= len(all_neg_seqs), 'lacking clade-specific negative sequences'
-			neg_seqs, neg_ids = all_neg_seqs[query_i: query_j]
+			neg_seqs = all_neg_seqs[query_i: query_j]
+			neg_ids = all_neg_ids[query_i: query_j]
 		else:
 			neg_seqs, neg_ids = self.get_random_negatives(self.db._prot_tab.col('SeqLen')[se._query_ids[:]])
 

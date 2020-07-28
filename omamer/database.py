@@ -111,6 +111,16 @@ class Database(object):
     def __exit__(self, *_):
         self.close()
 
+    def clean(self):
+        '''
+        close and remove hdf5 file
+        '''
+        self.__exit__()
+        try:
+            os.remove(self.file)
+        except FileNotFoundError:
+            print("{} already cleaned".format(self.file))
+
     ### method attributes to facilitate access to data stored in hdf5 file ###
     @property
     def _prot_tab(self):

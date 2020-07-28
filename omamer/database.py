@@ -843,7 +843,7 @@ class DatabaseFromOMA(Database):
                     hog2oma_hog,
                     hog2tax,
                     self.root_taxon.encode("ascii"),
-                    include_younger_fams
+                    self.include_younger_fams
                 )
 
                 # move pointer and update current family
@@ -862,7 +862,7 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             self.root_taxon.encode("ascii"),
-            include_younger_fams
+            self.include_younger_fams
         )
 
         del hog_tab, families

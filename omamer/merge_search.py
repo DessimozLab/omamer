@@ -31,6 +31,8 @@ from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
 from .hierarchy import get_descendant_hogs, get_descendant_prots
 
+# --> will be renamed Search
+
 # numba does not like nested methods 
 @numba.njit
 def get_fam_hog2parent(fam_ent, hog_tab):

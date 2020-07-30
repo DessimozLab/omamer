@@ -53,7 +53,7 @@ class Validation():
 		else:
 			self.mode = 'w'
 			self.va = tables.open_file(self.filename, self.mode)
-			va.create_carray('/', 'Thresholds', obj=np.array(thresholds, dtype=np.float64), filters=self.db._compr)
+			self.va.create_carray('/', 'Thresholds', obj=np.array(thresholds, dtype=np.float64), filters=self.db._compr)
 
 		# required for subfamily validation
 		self.nwk_fn = nwk_fn
@@ -73,21 +73,29 @@ class Validation():
 		random.seed(123)
 		np.random.seed(123)
 
+	def close(self):
+	    self.va.close()
+
 	def __enter__(self):
 	    return self
 
 	def __exit__(self, *_):
-	    self.va.close()
+	    self.close()
 	    
 	def clean(self):
 	    '''
 	    close and remove hdf5 file
+	    as well as fasta of negative sequences
 	    '''
 	    self.__exit__()
 	    try:
 	        os.remove(self.filename)
 	    except FileNotFoundError:
 	        print("{} already cleaned".format(self.filename))
+	    try:
+	        os.remove(self.neg_query_file)
+	    except FileNotFoundError:
+	        print("{} already cleaned".format(self.neg_query_file))
 
 	@lazy_property
 	def hog_off2taxbin(self):
@@ -479,7 +487,7 @@ class Validation():
 		return part2bin2f1_max, part2bin2f1_tval, part2bin2f1_toff
 
 	def F1max_subfamily(self, partitions=np.array([])):
-		part2bin2pre, part2bin2rec, part2bin2query_nr = self.compute_precision_recall(partitions)
+		part2bin2pre, part2bin2rec, part2bin2query_nr = self.compute_precision_recall_subfamily(partitions)
 		return self._F1max_subfamily(part2bin2pre, part2bin2rec, self._thresholds[:])
 
 	@staticmethod
@@ -814,7 +822,7 @@ class Validation():
 
 		return part2f1_max, part2f1_tval, part2f1_toff
 
-	def F1max(self, partitions=np.array([])):
+	def F1max_family(self, partitions=np.array([])):
 		part2pre, part2rec, part2spe, part2query_nr = self.compute_precision_recall_specificity_family(partitions)
 		return self._F1max_family(part2pre, part2rec, self._thresholds[:])
 

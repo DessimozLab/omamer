@@ -189,7 +189,6 @@ class MergeSearch(object):
 		self.include_extant_genes = include_extant_genes
 		self.query_sp = None
 
-	# cached properties from Index
 	@cached_property
 	def trans(self):
 	    return get_transform(self.ki.k, self.ki.alphabet.DIGITS_AA)
@@ -205,8 +204,16 @@ class MergeSearch(object):
 	    return x[:] if not self.low_mem else x
 
 	@cached_property
-	def hog2fam(self):
-	    return self.db._hog_tab.col("FamOff")
+	def fam_tab(self):
+	    return self.db._fam_tab[:]
+
+	@cached_property
+	def hog_tab(self):
+	    return self.db._hog_tab[:]
+
+	@cached_property
+	def level_arr(self):
+	    return self.db._level_arr[:]	    
 
 	@cached_property
 	def max_hog_nr(self):
@@ -225,14 +232,11 @@ class MergeSearch(object):
 		    self.trans,
 		    self.table_idx,
 		    self.table_buff,
-		    self.hog2fam,
-		    self.db._fam_tab.nrows,
-		    self.db._hog_tab.nrows,
 		    self.ki.k,
 		    self.ki.alphabet.DIGITS_AA_LOOKUP,
-		    self.db._fam_tab[:],
-		    self.db._hog_tab[:],
-		    self.db._level_arr[:],
+		    self.fam_tab,
+		    self.hog_tab,
+		    self.level_arr,
 		    self.max_hog_nr,
 		    top_n_fams = 1,
 		    top_m_fams = 10,
@@ -299,9 +303,6 @@ class MergeSearch(object):
 		    trans,
 		    table_idx,
 		    table_buff,
-		    hog2fam,
-		    n_fams,
-		    n_hogs,
 		    k,
 		    DIGITS_AA_LOOKUP,
 		    fam_tab,
@@ -328,10 +329,13 @@ class MergeSearch(object):
 
 		    # to ignore k-mers with X (88 == b'X')
 		    x_char = DIGITS_AA_LOOKUP[88]
-		    x_kmer = 0
-		    for j in range(k):
-		        x_kmer += trans[j] * x_char
-		    x_kmer += 1
+		    # get a flag for k-mer with any X (= last k-mer + 1)
+		    x_flag = table_idx.size - 1
+		    # last_char = DIGITS_AA_LOOKUP[-1]
+		    # x_flag = 0
+		    # for j in range(k):
+		    #     x_flag += trans[j] * last_char
+		    # x_flag += 1
 
 		    # iterate of sequences
 		    for zz in numba.prange(len(seqs_idx) - 1):
@@ -354,35 +358,36 @@ class MergeSearch(object):
 		            # numba can't do np.dot with non-float
 		            for j in numba.prange(k):
 		                r[i] += trans[j] * s_norm[i + j]
-		            # to ignore k-mers with X
+		            # does k-mer contain any X?
 		            x_seen = np.any(s_norm[i:i+k] == x_char)
-		            r[i] = r[i] if not x_seen else x_kmer
+		            # if yes, replace it by the x_flag
+		            r[i] = r[i] if not x_seen else x_flag
 		        r1 = np.unique(r)
 
 		        # skip if one k-mer with X
 		        if len(r1) > 1:
 		            pass
-		        elif r1[0] == x_kmer:
+		        elif r1[0] == x_flag:
 		            continue
 
 		        ## search k-mer table
-		        hog_counts = np.zeros(n_hogs, dtype=np.uint16)
-		        fam_counts = np.zeros(n_fams, dtype=np.uint16)
+		        hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
+		        fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
 
 		        # iterate unique k-mers
 		        for m in numba.prange(r1.shape[0]):
 		            kmer = r1[m]
 
 		            # to ignore k-mers with X
-		            if kmer < x_kmer:
-		                pass
-		            else:
+		            if kmer == x_flag:
 		                continue
+		            else:
+		                pass
 
 		            # get mapping to HOGs
 		            x = table_idx[kmer : kmer + 2]
 		            hogs = table_buff[x[0] : x[1]]
-		            fams = hog2fam[hogs]
+		            fams = hog_tab['FamOff'][hogs]
 		            hog_counts[hogs] += np.uint16(1)
 		            fam_counts[fams] += np.uint16(1)
 
@@ -469,7 +474,7 @@ class MergeSearch(object):
 
 		if not self.low_mem:
 		    # Set nthreads, note: this only works before numba called first time!
-		    # numba.config.NUMBA_NUM_THREADS = self.nthreads --> breaking my kernel
+		    numba.set_num_threads(self.nthreads)
 		    return numba.jit(func, parallel=(True if self.nthreads > 1 else False), nopython=True, nogil=True)
 		else:
 		    return func

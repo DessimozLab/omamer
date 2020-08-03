@@ -45,7 +45,7 @@ def mkdb_oma(args):
     LOG.info('Building index')
     ki = Index(db, k=args.k, reduced_alphabet=False)
     hidden_taxa = args.hidden_taxa.split(',')
-    if hidden_taxa:
+    if hidden_taxa[0]:
         ki.hide_taxa(hidden_taxa, nwk_fn)
     ki.build_kmer_table()
 

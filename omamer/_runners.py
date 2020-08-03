@@ -31,7 +31,7 @@ def mkdb_oma(args):
     LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
-        args.db, root_taxon=args.root_taxon, min_prot_nr=args.min_hog_size, mode='w'
+        args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_prot_nr=args.min_hog_size, mode='w'
     )
 
     oma_db_fn = os.path.join(args.oma_path, "data", "OmaServer.h5")
@@ -44,6 +44,7 @@ def mkdb_oma(args):
     # build index
     LOG.info('Building index')
     ki = Index(db, k=args.k, reduced_alphabet=False)
+    ki.hide_taxa(args.hidden_taxa.split(',', nwk_fn)
     ki.build_kmer_table()
 
     db.close()

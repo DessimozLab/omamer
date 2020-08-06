@@ -82,20 +82,21 @@ def search(args):
         seqs.append(str(rec.seq))
         if len(ids) == args.chunksize:
             ms.merge_search(seqs=seqs, ids=ids)
-            df = ms.output_results(threshold=args.threshold)
             pbar.update(len(ids))
-            df.to_csv(args.out, sep='\t', index=False, header=print_header)
-
+            df = ms.output_results(threshold=args.threshold)
+            if df.size >0:
+                df.to_csv(args.out, sep='\t', index=False, header=print_header)
             ids = []
             seqs = []
             print_header = False
 
     # final search
-    ms.merge_search(ids=ids, seqs=seqs)
-    df = ms.output_results(threshold=args.threshold)
     if len(ids) > 0:
+        ms.merge_search(ids=ids, seqs=seqs)
+        df = ms.output_results(threshold=args.threshold)
         pbar.update(len(ids))
-    df.to_csv(args.out, sep='\t', index=False, header=print_header)
+        if df.size >0:
+            df.to_csv(args.out, sep='\t', index=False, header=print_header)
 
     pbar.close()
     db.close()

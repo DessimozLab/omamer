@@ -293,7 +293,11 @@ class MergeSearch(object):
 		if self.include_extant_genes:
 		    h.append('subfamily-geneset')
 		
-		return pd.DataFrame(generate_results(threshold))[h]
+		# if >0 family hit
+		if np.max(family_score) >= threshold:
+			return pd.DataFrame(generate_results(threshold))[h]
+		else:
+			return pd.DataFrame()
 
 	@lazy_property
 	def _lookup(self):

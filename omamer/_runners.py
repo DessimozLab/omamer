@@ -34,8 +34,8 @@ def mkdb_oma(args):
         args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_prot_nr=args.min_hog_size, mode='w'
     )
 
-    oma_db_fn = os.path.join(args.oma_path, "data", "OmaServer.h5")
-    nwk_fn = os.path.join(args.oma_path, "data", "speciestree.nwk")
+    oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
+    nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
 
     # add sequences from database
     LOG.info('Adding sequences')
@@ -66,7 +66,7 @@ def search(args):
     db = Database(args.db, nthreads=args.nthreads)
 
     # setup search
-    ms = omamer.MergeSearch(ki=db.ki, nthreads=args.nthreads, include_extant_genes=args.include_extant_genes)
+    ms = MergeSearch(ki=db.ki, nthreads=args.nthreads, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output 
     print_header = (args.out.name != sys.stdout.name)

@@ -65,8 +65,7 @@ class Search(object):
         norm_hog_fun,
         threshold,
         norm_fam_args=[],
-        norm_hog_args=[],
-    ):
+        norm_hog_args=[]):
         """
         args
          - norm_fam_fun: choice of function to normalize k-mer count of families

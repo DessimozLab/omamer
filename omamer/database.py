@@ -84,7 +84,7 @@ class Database(object):
         SpeOff = tables.Int64Col(pos=5)
         Level = tables.Int64Col(pos=6)
 
-    def __init__(self, filename, root_taxon=None, hidden_taxa=None, mode='r', nthreads=1):
+    def __init__(self, filename, root_taxon=None, mode='r', nthreads=1):
         assert (mode != 'w' or root_taxon), "A root_taxon must be defined when building the database"
         self.root_taxon = root_taxon
         self.filename = filename

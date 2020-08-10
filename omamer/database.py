@@ -90,7 +90,7 @@ class Database(object):
         self.filename = filename
         self.mode = mode
 
-        self.nthreads = nthread
+        self.nthreads = nthreads
         self._compr = tables.Filters(complevel=6, complib="blosc", fletcher32=True)
 
         if os.path.isfile(self.filename) and self.mode in {'a', 'w'}:

@@ -17,7 +17,7 @@ def run_validation_pipeline(
     if not os.path.exists(out_path):
         os.mkdir(out_path)
     db_fn = '{}{}_{}wo_{}.h5'.format(out_path, root_taxon, 'younfams_' if include_younger_fams else '', '_'.join(['_'.join(x.split()) for x in query_sp2hidden_taxa[query_sp]]))
-    va_fn = '{}_{}_{}.h5'.format(db_fn.split('.')[0], neg_root_taxon if neg_root_taxon else 'Random', '_'.join(query_sp.split()))
+    va_fn = '{}_{}_{}.h5'.format(db_fn.split('.h5')[0], neg_root_taxon if neg_root_taxon else 'Random', '_'.join(query_sp.split()))
 
     va = _run_validation_pipeline(
         db_fn, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa[query_sp], 

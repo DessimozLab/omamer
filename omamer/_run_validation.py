@@ -108,7 +108,7 @@ nwk_fn = os.path.join(oma_path, "speciestree.nwk")
 k = 6
 reduced_alphabet = False
 
-query_sp = sys.argv[5]
+query_sp = ' '.join(sys.argv[5].split('_'))
 
 query_species = ['Ornithorhynchus anatinus', 'Lepisosteus oculatus', 'Branchiostoma floridae', 'Branchiostoma lanceolatum']
 query_hidden_taxa = [['Ornithorhynchus anatinus'], ['Lepisosteus oculatus'], ['Branchiostoma'], ['Branchiostoma']]

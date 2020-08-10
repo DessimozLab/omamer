@@ -128,8 +128,6 @@ val_mode = 'golike'
 neg_root_taxon_arg = sys.argv[7]
 neg_root_taxon = None if (neg_root_taxon_arg == 'Random') else neg_root_taxon_arg
 
-print(omamer_path, working_path, include_younger_fams, oma_path, query_sp, neg_root_taxon)
-
 chunksize = int(sys.argv[8])
 
 run_validation_pipeline(

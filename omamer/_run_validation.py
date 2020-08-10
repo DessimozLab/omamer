@@ -108,6 +108,8 @@ nwk_fn = os.path.join(oma_path, "speciestree.nwk")
 k = 6
 reduced_alphabet = False
 
+query_sp = sys.argv[5]
+
 query_species = ['Ornithorhynchus anatinus', 'Lepisosteus oculatus', 'Branchiostoma floridae', 'Branchiostoma lanceolatum']
 query_hidden_taxa = [['Ornithorhynchus anatinus'], ['Lepisosteus oculatus'], ['Branchiostoma'], ['Branchiostoma']]
 query_sp2hidden_taxa = dict(zip(query_species, query_hidden_taxa))
@@ -123,8 +125,8 @@ subfamily_query_sp2thresholds = {
 focal_taxon = "Metazoa"
 bin_num = 1
 val_mode = 'golike' 
-neg_root_taxon = (None if sys.argv[5] == 'Random') else sys.argv[5]
-chunksize = int(sys.argv[6])
+neg_root_taxon = (None if sys.argv[6] == 'Random') else sys.argv[5]
+chunksize = int(sys.argv[7])
 
 run_validation_pipeline(
     working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,

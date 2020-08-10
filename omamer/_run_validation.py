@@ -4,7 +4,7 @@ sys.path.insert(0, omamer_path)
 
 import os
 import omamer
-import numby as np
+import numpy as np
 from tqdm import tqdm
 
 def run_validation_pipeline(

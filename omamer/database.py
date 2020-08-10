@@ -719,11 +719,11 @@ class DatabaseFromOMA(Database):
                 hog2oma_hog[hog] = curr_oma_hog
                 hog2tax[hog] = tax
 
-            # compute most ancestral taxon; when absent, consider more ancestral (-1)
-            tax_levels = list(map(lambda x: tax2level.get(x, -1), curr_oma_taxa))
+            # compute most ancestral taxon; when absent, flag it with 1000000
+            tax_levels = list(map(lambda x: tax2level.get(x, 1000000), curr_oma_taxa))
             min_level = min(tax_levels)
 
-            if min_level == -1:
+            if min_level == 1000000:
                 tax = None
             else:
                 tax = curr_oma_taxa[tax_levels.index(min_level)]
@@ -947,7 +947,7 @@ class DatabaseFromOMA(Database):
                         oma_seq_offsets.append(oma_seq_off)
 
                         # store protein row
-                        oma_id = '{}{:05d}'.format(sp_code, rr['EntryNr'] - entry_off + 1)
+                        oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
                         prot_rows.append((oma_id.encode('ascii'), 0, seq_len, spe_off, 0, 0))
 
         LOG.debug(" - filter by family protein number")

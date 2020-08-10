@@ -130,8 +130,6 @@ neg_root_taxon = None if (neg_root_taxon_arg == 'Random') else neg_root_taxon_ar
 
 chunksize = int(sys.argv[8])
 
-print(include_younger_fams)
-
 run_validation_pipeline(
     working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
     query_sp, subfamily_query_sp2thresholds, focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize)

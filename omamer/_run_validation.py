@@ -125,7 +125,8 @@ subfamily_query_sp2thresholds = {
 focal_taxon = "Metazoa"
 bin_num = 1
 val_mode = 'golike' 
-neg_root_taxon = None if (sys.argv[6] == 'Random') else sys.argv[6]
+neg_root_taxon_arg = sys.argv[6]
+neg_root_taxon = None if (neg_root_taxon_arg == 'Random') else neg_root_taxon_arg
 chunksize = int(sys.argv[7])
 
 run_validation_pipeline(

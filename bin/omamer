@@ -96,7 +96,7 @@ mkdb_parser.add_argument(
 )
 mkdb_parser.add_argument(
     "--nthreads",
-    default=get_thread_count(),
+    default=1,
     type=int,
     help="Number of threads to use (default {}).".format(get_thread_count()),
 )
@@ -146,7 +146,7 @@ search_parser.add_argument(
 )
 search_parser.add_argument('--include_extant_genes', action='store_true', help='Include extant gene IDs as comma separated entry in results')
 search_parser.add_argument(
-    "--chunksize", default=500, type=int, help="Number of queries to process at once (default 500)"
+    "--chunksize", default=5000, type=int, help="Number of queries to process at once (default 5000)"
 )
 search_parser.add_argument(
     "--nthreads",
@@ -160,7 +160,6 @@ search_parser.add_argument(
     choices=["debug", "info", "warning"],
     help="Logging level.",
 )
-
 
 args = parser.parse_args()
 if hasattr(args, "func"):

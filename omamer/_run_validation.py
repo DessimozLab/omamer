@@ -101,7 +101,7 @@ def _run_validation_pipeline(
 working_path = sys.argv[2]
 root_taxon = sys.argv[3]
 min_hog_size = 6
-include_younger_fams = bool(sys.argv[4])
+include_younger_fams = True if (sys.argv[4] == 'True') else False
 oma_path = sys.argv[5]
 oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
 nwk_fn = os.path.join(oma_path, "speciestree.nwk")
@@ -129,6 +129,8 @@ neg_root_taxon_arg = sys.argv[7]
 neg_root_taxon = None if (neg_root_taxon_arg == 'Random') else neg_root_taxon_arg
 
 chunksize = int(sys.argv[8])
+
+print(include_younger_fams)
 
 run_validation_pipeline(
     working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,

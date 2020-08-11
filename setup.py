@@ -30,7 +30,7 @@ with open('{:s}/__init__.py'.format(name), 'rt') as fp:
             exec(line.rstrip())
 
 # TODO
-requirements = ['biopython', 'ete3', 'numba', 'numpy', 'pandas', 'property_manager', 'pysais', 'tables', 'tqdm']
+requirements = ['biopython', 'ete3', 'numba', 'numpy', 'pandas', 'property_manager', 'pysais', 'scipy', 'tables', 'tqdm']
 
 desc = 'OMAmer - tree-driven and alignment-free protein assignment to sub-families'
 

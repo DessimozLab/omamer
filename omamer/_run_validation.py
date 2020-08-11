@@ -3,9 +3,13 @@ omamer_path = sys.argv[1]
 sys.path.insert(0, omamer_path)
 
 import os
-import omamer
 import numpy as np
 from tqdm import tqdm
+
+from omamer.database import DatabaseFromOMA
+from omamer.index import Index, QuerySequenceBuffer
+from omamer.merge_search import MergeSearch
+from omamer.validation import Validation
 
 def run_validation_pipeline(
     working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
@@ -31,33 +35,32 @@ def _run_validation_pipeline(
     
     # build or reload database
     if not os.path.isfile(db_fn):
-        db = omamer.DatabaseFromOMA(
+        db = DatabaseFromOMA(
             filename=db_fn, root_taxon=root_taxon, min_prot_nr=min_hog_size, 
             include_younger_fams=include_younger_fams, mode='w')
         
         # load sequences from OMA database
-        db.build_database(oma_db_fn, nwk_fn)# build index
+        db.build_database(oma_db_fn, nwk_fn)
         
         # build k-mer table
-        ki = omamer.Index(db, k=k, reduced_alphabet=reduced_alphabet)
-        ki.hide_taxa(hidden_taxa, nwk_fn)
+        ki = Index(db, k=k, reduced_alphabet=reduced_alphabet, hidden_taxa=hidden_taxa)
         ki.build_kmer_table()
 
         db.close()
     
     # reload database
-    db = omamer.DatabaseFromOMA(
+    db = DatabaseFromOMA(
         filename=db_fn, root_taxon=root_taxon, min_prot_nr=min_hog_size, 
         include_younger_fams=include_younger_fams)
     
-    qbuff = omamer.QuerySequenceBuffer(db, query_sp)
+    qbuff = QuerySequenceBuffer(db, query_sp)
 
     # run or reload validation
     if not os.path.isfile(va_fn):
                       
         # setup search and validation
-        ms = omamer.MergeSearch(ki=db.ki, nthreads=1)  # fails for nthreads > 1 BECAUSE numba version is <0.50
-        va = omamer.Validation(
+        ms = MergeSearch(ki=db.ki, nthreads=1)  # fails for nthreads > 1 BECAUSE numba version is <0.50
+        va = Validation(
             db, filename=va_fn, thresholds=thresholds, nwk_fn=nwk_fn, query_sp=query_sp, 
             focal_taxon=focal_taxon, bin_num=bin_num, val_mode=val_mode, neg_root_taxon=neg_root_taxon, 
             max_query_nr=qbuff.prot_nr, neg_query_file='{}.fa'.format(va_fn.split('.')[0]), 
@@ -90,7 +93,7 @@ def _run_validation_pipeline(
         pbar.close()
         va.va.close()
         
-    va = omamer.Validation(
+    va = Validation(
         db, filename=va_fn, thresholds=thresholds, nwk_fn=nwk_fn, query_sp=query_sp, 
         focal_taxon=focal_taxon, bin_num=bin_num, val_mode=val_mode, neg_root_taxon=neg_root_taxon, 
         max_query_nr=qbuff.prot_nr, neg_query_file='{}.fa'.format(va_fn.split('.')[0]), 
@@ -110,8 +113,8 @@ reduced_alphabet = False
 
 query_sp = ' '.join(sys.argv[6].split('_'))
 
-query_species = ['Ornithorhynchus anatinus', 'Lepisosteus oculatus', 'Branchiostoma floridae', 'Branchiostoma lanceolatum']
-query_hidden_taxa = [['Ornithorhynchus anatinus'], ['Lepisosteus oculatus'], ['Branchiostoma'], ['Branchiostoma']]
+query_species = ['Ornithorhynchus anatinus', 'Lepisosteus oculatus', 'Branchiostoma floridae', 'Branchiostoma lanceolatum', 'Homo sapiens']
+query_hidden_taxa = [['Ornithorhynchus anatinus'], ['Lepisosteus oculatus'], ['Branchiostoma'], ['Branchiostoma'], ['Homo sapiens']]
 query_sp2hidden_taxa = dict(zip(query_species, query_hidden_taxa))
 
 omamer_thresholds = np.arange(0.001, 1.001, 0.005)
@@ -120,7 +123,15 @@ subfamily_query_sp2thresholds = {
     ('Lepisosteus oculatus'): omamer_thresholds,
     ('Branchiostoma floridae'): omamer_thresholds,
     ('Branchiostoma lanceolatum'): omamer_thresholds,
+    ('Homo sapiens'): omamer_thresholds
 }
+
+root_taxon2focal_taxon = {
+    "Metazoa": "Metazoa",
+    "LUCA": "Metazoa",
+    "Hominidae": "Hominidae"
+}
+
 
 focal_taxon = "Metazoa"
 bin_num = 1

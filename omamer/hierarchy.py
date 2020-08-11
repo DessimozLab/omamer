@@ -88,7 +88,7 @@ def is_ancestor(hog1, hog2, hog2parent):
 # Taxonomy
 
 
-def children_tax(tax_off, tax_tab, ctax_buff):
+def _children_tax(tax_off, tax_tab, ctax_buff):
     """
 	collect direct children of a taxon
 	"""
@@ -120,7 +120,7 @@ def leaf_traverse(tax_off, tax_tab, ctax_buff, acc, leaf_fun):
 	extend to main traverse by adding postorder, preorder and midorder funs
 	"""
 
-    for ctax in children_tax(tax_off, tax_tab, ctax_buff):
+    for ctax in _children_tax(tax_off, tax_tab, ctax_buff):
         # reach species
         spe_off = tax_tab[ctax]["SpeOff"]
         if spe_off != -1:
@@ -140,6 +140,29 @@ def get_descendant_species(tax_off, tax_tab, ctax_buff):
         dtype=np.uint64,
     )
 
+def traverse_taxonomy(tax_off, tax_tab, ctax_buff, acc, leaf_fun, prefix_fun):
+
+    prefix_fun(tax_off, acc)
+
+    for ctax in _children_tax(tax_off, tax_tab, ctax_buff):
+
+        # stop when no children
+        if tax_tab[ctax]["ChildrenOff"] == -1:
+            leaf_fun(ctax, acc)
+        else:
+            traverse_taxonomy(ctax, tax_tab, ctax_buff, acc, leaf_fun, prefix_fun)
+
+    return acc
+
+def get_descendant_taxa(tax_off, tax_tab, ctax_buff):
+    def append_taxon(tax_off, list):
+        list.append(tax_off)
+        return list
+
+    descendant_taxa = traverse_taxonomy(tax_off, tax_tab, ctax_buff, [], append_taxon, append_taxon)
+    descendant_taxa.remove(tax_off)
+
+    return np.array(np.unique(descendant_taxa), dtype=np.uint64)
 
 # HOGs
 

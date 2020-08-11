@@ -636,6 +636,26 @@ class Validation():
 	    return tn_query2tresh, fp_query2tresh
 
 	@staticmethod
+	def get_clade_specific_taxa_species(nwk_fn, root_taxon):
+	    '''
+	    gather all taxa and species specific to a given clade
+	    '''
+	    stree = Tree(nwk_fn, format=1, quoted_node_names=True)
+
+	    pruned_stree = [x for x in stree.traverse() if x.name == root_taxon][0]
+
+	    taxa = set()
+	    species = set()
+
+	    for tl in pruned_stree.traverse():
+	        taxon = tl.name.encode('ascii')
+	        taxa.add(taxon)
+	        if tl.is_leaf():
+	            species.add(taxon)
+
+	    return np.array(sorted(taxa)), species
+
+	@staticmethod
 	def get_clade_specific_negatives(stree_path, oma_h5_path, neg_root_taxon, min_prot_nr, max_query_nr):
 	    '''
 	    1.	precompute clade taxonomic levels
@@ -647,7 +667,7 @@ class Validation():
 	    '''
 
 	    print(' - gather clade specific taxa to restrict OMA families')
-	    clade_taxa, clade_species = Index.get_clade_specific_taxa_species(stree_path, neg_root_taxon)
+	    clade_taxa, clade_species = self.get_clade_specific_taxa_species(stree_path, neg_root_taxon)
 
 	    # load OMA h5 file and create pointers
 	    h5file = tables.open_file(oma_h5_path, mode="r")

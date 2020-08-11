@@ -22,17 +22,7 @@
 from datetime import date
 
 __packagename__ = "omamer"
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>".format(
     date.today().year
 )
-
-from .hierarchy import *
-from .alphabets import *
-from .database import *
-from .index import *
-from .flat_search import *
-from .search import *
-from .prob_search import *
-from .merge_search import *
-from .validation import *

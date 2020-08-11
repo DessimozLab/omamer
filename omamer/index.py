@@ -35,7 +35,7 @@ import tables
 
 from ._utils import LOG
 from .alphabets import Alphabet
-from .hierarchy import get_lca_hog_off
+from .hierarchy import get_lca_hog_off, get_descendant_species, get_descendant_taxa
 
 
 @numba.njit
@@ -48,76 +48,86 @@ def get_transform(k, DIGITS_AA):
 
 class Index(object):
     def __init__(
-        self, db, k=None, reduced_alphabet=False, nthreads=1
+        self, db, k=6, reduced_alphabet=False, nthreads=1, hidden_taxa=[]
     ):
+        
         # load database object
         self.db = db
 
-        if k is None:
-            if '/Index' not in self.db.db:
-                # default k
-                self.k = 6
-            else:
-                self.k = self.db.db.root.Index._v_attrs['k']
+        # load k, alphabet size and hidden taxa
+        if '/Index' in self.db.db:
+            self.k = self.db.db.root.Index._v_attrs['k']
+            alphabet_n = self.db.db.root.Index._v_attrs['alphabet_n']
+            self.hidden_taxa = self.db.db.root.Index._v_attrs['hidden_taxa']
         else:
             self.k = k
+            alphabet_n = 21 if not reduced_alphabet else 13
+            self.hidden_taxa = hidden_taxa
 
-        # set index related features
-        self.alphabet = Alphabet(n=(21 if not reduced_alphabet else 13))
+        self.alphabet = Alphabet(n=alphabet_n)
 
         # performance features
         self.nthreads = nthreads
 
-        # filter based on species attributes
-        self.sp_filter = np.full((len(self.db._sp_tab),), False)
-
-        # corresponding taxonomic filter (used in validation)
-        self.tax_filter = np.full((len(self.db._tax_tab),), False)
-
     ### useful for validation
     def set_species(self, sp_ii):
-        self.sp_filter[:] = True
+        self.sp_filter = np.full((len(self.db._sp_tab),), True)
+        #self.sp_filter[:] = True
         for i in sp_ii:
             self.sp_filter[i] = False
 
-    def hide_taxa(self, taxa, nwk_fn):
-        '''
-        enables to hide species of some taxa e.g. for a Validation purpose
-        '''
-        for taxon in taxa:
+    @property
+    def sp_filter(self):
+        sp_filter = np.full((len(self.db._sp_tab),), False)
+        for hidden_taxon in self.hidden_taxa:
+            descendant_species = get_descendant_species(
+                np.searchsorted(self.db._tax_tab.col('ID'), hidden_taxon.encode('ascii')), self.db._tax_tab, self.db._ctax_arr)
+            # case where hidden taxon is species
+            if descendant_species.size == 0:
+                sp_filter[np.searchsorted(self.db._sp_tab.col('ID'), hidden_taxon.encode('ascii'))] = True
+            else:
+                for sp_off in descendant_species:
+                    sp_filter[sp_off] = True
+        return sp_filter
+
+    @property
+    def tax_filter(self):
+        tax_filter = np.full((len(self.db._tax_tab),), False)
+        for hidden_taxon in self.hidden_taxa:
+            htax_off = np.searchsorted(self.db._tax_tab.col('ID'), hidden_taxon.encode('ascii'))
+            tax_filter[htax_off] = True
+            descendant_taxa = get_descendant_taxa(htax_off, self.db._tax_tab, self.db._ctax_arr)
+            for htax_off in descendant_taxa:
+                tax_filter[htax_off] = True
+        return tax_filter
+
+    # @property
+    # def sp_tax_filters(self):
+    #     '''
+    #     enables to hide species of some taxa e.g. for a Validation purpose
+    #     '''
+    #     # filter based on species attributes
+    #     sp_filter = np.full((len(self.db._sp_tab),), False)
+
+    #     # corresponding taxonomic filter (used in validation)
+    #     tax_filter = np.full((len(self.db._tax_tab),), False)
+
+    #     for taxon in self.hidden_taxa:
             
-            # get all species and descending taxa of a given taxon
-            hidden_taxa, hidden_species = self.get_clade_specific_taxa_species(nwk_fn, taxon)
+    #         # get all species and descending taxa of a given taxon
+    #         hidden_taxa, hidden_species = self.get_clade_specific_taxa_species(self.db.nwk_fn, taxon)
             
-            # find species offsets in sp_tab and turn on filter for these
-            hidden_species_offsets = np.searchsorted(self.db._sp_tab.col('ID'), np.array(list(hidden_species)))
-            for sp_off in hidden_species_offsets:
-                self.sp_filter[sp_off] = True
+    #         # find species offsets in sp_tab and turn on filter for these
+    #         hidden_species_offsets = np.searchsorted(self.db._sp_tab.col('ID'), np.array(list(hidden_species)))
+    #         for sp_off in hidden_species_offsets:
+    #             self.sp_filter[sp_off] = True
             
-            # find taxon offsets in tax_tab and turn on filter for these
-            hidden_taxa_offsets = np.searchsorted(self.db._tax_tab.col('ID'), np.array(list(hidden_taxa)))
-            for tax_off in hidden_taxa_offsets:
-                self.tax_filter[tax_off] = True
+    #         # find taxon offsets in tax_tab and turn on filter for these
+    #         hidden_taxa_offsets = np.searchsorted(self.db._tax_tab.col('ID'), np.array(list(hidden_taxa)))
+    #         for tax_off in hidden_taxa_offsets:
+    #             self.tax_filter[tax_off] = True
 
-    @staticmethod
-    def get_clade_specific_taxa_species(nwk_fn, root_taxon):
-        '''
-        gather all taxa and species specific to a given clade
-        '''
-        stree = Tree(nwk_fn, format=1, quoted_node_names=True)
-
-        pruned_stree = [x for x in stree.traverse() if x.name == root_taxon][0]
-
-        taxa = set()
-        species = set()
-
-        for tl in pruned_stree.traverse():
-            taxon = tl.name.encode('ascii')
-            taxa.add(taxon)
-            if tl.is_leaf():
-                species.add(taxon)
-
-        return np.array(sorted(taxa)), species
+    #     return (sp_filter, tax_filter)
 
     ### same as in database class; easy access to data ###
     def _get_node_if_exist(self, node):
@@ -353,6 +363,8 @@ class Index(object):
         LOG.debug(" - write k-mer table")
         idx = self.db.db.create_group('/', 'Index', 'hog indexes')
         idx._f_setattr('k', self.k)
+        idx._f_setattr('alphabet_n', self.alphabet.n)
+        idx._f_setattr('hidden_taxa', self.hidden_taxa)
         self.db.db.create_carray(idx, "TableIndex", obj=table_idx, filters=self.db._compr)
         self.db.db.create_carray(
             idx, "TableBuffer", obj=table_buff, filters=self.db._compr

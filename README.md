@@ -7,12 +7,13 @@ Requires Python >= 3.6. Download the package from the PyPI, resolving the depend
 
 Alternatively, clone this repository and install manually.
 
-# Pre-Built Database
+# Pre-Built Databases
 
-Download a pre-built database from the links below. More databases to follow shortly -- if you have a request, please create an issue.
+Download pre-built databases from the links below. More databases to follow shortly -- if you have a request, please create an issue.
 
- - Metazoa (from January 2020 OMA release) - [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3974680.svg)](https://doi.org/10.5281/zenodo.3974680)
-
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3978356.svg)](https://doi.org/10.5281/zenodo.3978356)
+ - Metazoa (from January 2020 OMA release)
+ - Hominidae (from January 2020 OMA release)
 
 # omamer mkdb - Building a Database
 This is currently reliant on the OMA browser's database file and the species phylogeny of HOGs. Building using OrthoXML files available shortly. 
@@ -80,10 +81,13 @@ Similar but with the _k_-mers specific to the sub-family (~unique to that subtre
 
 # Change log
 #### Version 0.0.1
-Initial release.
+ - Initial release.
 
 #### Version 0.1.0
- - Added hidden_taxa and threshold arguments
+ - Added hidden_taxa and threshold arguments.
+ 
+#### Version 0.1.2
+ - Debugging
 
 # License
 OMAmer is a free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -95,6 +99,5 @@ You should have received a copy of the GNU Lesser General Public License along w
 # Citation
 Rossier Victor, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, and Christophe Dessimoz. 2020. “OMAmer: Tree-Driven and Alignment-Free Protein Assignment to Subfamilies Outperforms Closest Sequence Approaches.” <bioRxiv. https://doi.org/10.1101/2020.04.30.068296>.
 
-Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3974680.svg)](https://doi.org/10.5281/zenodo.3974680)
-
+Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3978356.svg)](https://doi.org/10.5281/zenodo.3978356)
 

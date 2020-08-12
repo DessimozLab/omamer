@@ -101,46 +101,48 @@ def _run_validation_pipeline(
     
     return va
 
-working_path = sys.argv[2]
-root_taxon = sys.argv[3]
-min_hog_size = 6
-include_younger_fams = True if (sys.argv[4] == 'True') else False
-oma_path = sys.argv[5]
-oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
-nwk_fn = os.path.join(oma_path, "speciestree.nwk")
-k = 6
-reduced_alphabet = False
+if __name__ == "__main__":
+    
+    working_path = sys.argv[2]
+    root_taxon = sys.argv[3]
+    min_hog_size = 6
+    include_younger_fams = True if (sys.argv[4] == 'True') else False
+    oma_path = sys.argv[5]
+    oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
+    nwk_fn = os.path.join(oma_path, "speciestree.nwk")
+    k = 6
+    reduced_alphabet = False
 
-query_sp = ' '.join(sys.argv[6].split('_'))
+    query_sp = ' '.join(sys.argv[6].split('_'))
 
-query_species = ['Ornithorhynchus anatinus', 'Lepisosteus oculatus', 'Branchiostoma floridae', 'Branchiostoma lanceolatum', 'Homo sapiens']
-query_hidden_taxa = [['Ornithorhynchus anatinus'], ['Lepisosteus oculatus'], ['Branchiostoma'], ['Branchiostoma'], ['Homo sapiens']]
-query_sp2hidden_taxa = dict(zip(query_species, query_hidden_taxa))
+    query_species = ['Ornithorhynchus anatinus', 'Lepisosteus oculatus', 'Branchiostoma floridae', 'Branchiostoma lanceolatum', 'Homo sapiens']
+    query_hidden_taxa = [['Ornithorhynchus anatinus'], ['Lepisosteus oculatus'], ['Branchiostoma'], ['Branchiostoma'], ['Homo sapiens']]
+    query_sp2hidden_taxa = dict(zip(query_species, query_hidden_taxa))
 
-omamer_thresholds = np.arange(0.001, 1.001, 0.005)
-subfamily_query_sp2thresholds = {
-    ('Ornithorhynchus anatinus'): omamer_thresholds,
-    ('Lepisosteus oculatus'): omamer_thresholds,
-    ('Branchiostoma floridae'): omamer_thresholds,
-    ('Branchiostoma lanceolatum'): omamer_thresholds,
-    ('Homo sapiens'): omamer_thresholds
-}
+    omamer_thresholds = np.arange(0.001, 1.001, 0.005)
+    subfamily_query_sp2thresholds = {
+        ('Ornithorhynchus anatinus'): omamer_thresholds,
+        ('Lepisosteus oculatus'): omamer_thresholds,
+        ('Branchiostoma floridae'): omamer_thresholds,
+        ('Branchiostoma lanceolatum'): omamer_thresholds,
+        ('Homo sapiens'): omamer_thresholds
+    }
 
-root_taxon2focal_taxon = {
-    "Metazoa": "Metazoa",
-    "LUCA": "Metazoa",
-    "Hominidae": "Hominidae"
-}
+    root_taxon2focal_taxon = {
+        "Metazoa": "Metazoa",
+        "LUCA": "Metazoa",
+        "Hominidae": "Hominidae"
+    }
 
 
-focal_taxon = "Metazoa"
-bin_num = 1
-val_mode = 'golike' 
-neg_root_taxon_arg = sys.argv[7]
-neg_root_taxon = None if (neg_root_taxon_arg == 'Random') else neg_root_taxon_arg
+    focal_taxon = "Metazoa"
+    bin_num = 1
+    val_mode = 'golike' 
+    neg_root_taxon_arg = sys.argv[7]
+    neg_root_taxon = None if (neg_root_taxon_arg == 'Random') else neg_root_taxon_arg
 
-chunksize = int(sys.argv[8])
+    chunksize = int(sys.argv[8])
 
-run_validation_pipeline(
-    working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
-    query_sp, subfamily_query_sp2thresholds, focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize)
+    run_validation_pipeline(
+        working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
+        query_sp, subfamily_query_sp2thresholds, focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize)

@@ -25,7 +25,7 @@ def run_validation_pipeline(
 
     va = _run_validation_pipeline(
         db_fn, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa[query_sp], 
-        va_fn, query_sp, subfamily_query_sp2thresholds[query_sp], root_taxon, bin_num, val_mode, neg_root_taxon, chunksize)
+        va_fn, query_sp, subfamily_query_sp2thresholds[query_sp], focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize)
     
     return va
 

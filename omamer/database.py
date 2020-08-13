@@ -720,13 +720,14 @@ class DatabaseFromOMA(Database):
             tax_levels = list(map(lambda x: tax2level.get(x, 1000000), curr_oma_taxa))
             min_level = min(tax_levels)
             
-            # skip HOGs outside of taxonomic scope defined by the root-taxon
+            # if none of the HOG taxa within the taxonomic scope defined by the root-taxon, skip the HOG
             if min_level == 1000000:
                 return fam, curr_oma_roothog
             else:
+                # the HOG taxon is the older taxon within the taxonimic scope defined by the root-taxon
                 tax = curr_oma_taxa[tax_levels.index(min_level)]  
                 
-                # whether HOG is descendant of current OMA root-HOG 
+                # if the HOG is descendant of current OMA root-HOG, new sub-HOG
                 if _is_descendant(curr_oma_hog, curr_oma_roothog):
 
                     _store(
@@ -739,7 +740,7 @@ class DatabaseFromOMA(Database):
                         tax,
                     )
                 
-                # or create a new family (include only family at root-taxon if include_younger_fams==False)
+                # else, create a new family (include only family at root-taxon if include_younger_fams==False)
                 elif (not include_younger_fams and tax == roottax) or include_younger_fams:
 
                     fam += 1
@@ -758,50 +759,6 @@ class DatabaseFromOMA(Database):
 
             return fam, curr_oma_roothog
             
-            # # compute most ancestral taxon; when absent, flag it with 1000000
-            # tax_levels = list(map(lambda x: tax2level.get(x, 1000000), curr_oma_taxa))
-            # min_level = min(tax_levels)
-
-            # if min_level == 1000000:
-            #     tax = None
-            # else:
-            #     tax = curr_oma_taxa[tax_levels.index(min_level)]
-
-            # # store if descendant of current OMA root-HOG
-            # if _is_descendant(curr_oma_hog, curr_oma_roothog):
-
-            #     _store(
-            #         fam,
-            #         curr_oma_hog,
-            #         curr_oma_roothog,
-            #         fam2hogs,
-            #         hog2oma_hog,
-            #         hog2tax,
-            #         tax,
-            #     )
-
-            # # if tax equal or younger that root taxon: store, update fam and current OMA root-HOG
-            # elif tax:
-
-            #     # include only family at root-taxon if include_younger_fams==False
-            #     if (not include_younger_fams and tax == roottax) or include_younger_fams:
-
-            #         fam += 1
-            #         curr_oma_roothog = curr_oma_hog
-
-            #         # store after updating fam
-            #         _store(
-            #             fam,
-            #             curr_oma_hog,
-            #             curr_oma_roothog,
-            #             fam2hogs,
-            #             hog2oma_hog,
-            #             hog2tax,
-            #             tax,
-            #         )
-
-            # return fam, curr_oma_roothog
-
         def _process_oma_fam(
             fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, roottax, include_younger_fams
         ):

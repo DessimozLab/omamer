@@ -350,27 +350,23 @@ class Index(object):
 
 
 class SequenceBuffer(object):
-    """
-    to load sequences from db or files
-    adapted from alex
-    """
-
-    def __init__(self, seqs=None, ids=None, db=None, fasta_file=None):
-        self.prot_off = 0
-        if seqs is not None:
-            self.add_seqs(*seqs)
-            self.ids = np.array(ids) if ids else np.array(range(len(seqs)))
-        elif db is not None:
-            self._prot_tab = db._prot_tab
-            self._seq_buff = db._seq_buff
-            self.load_from_db()
-        elif fasta_file is not None:
-            seqs = self.parse_fasta(fasta_file)
-            self.add_seqs(*seqs)
-        else:
-            raise ValueError(
-                "need to pass array of seqs or db to load from to SequenceBuffer"
-            )
+    '''
+    makes list of sequences search friendly
+    adapted from Alex
+    TO DO:
+    - sanitize seqs
+    - debug reduced alphabet
+    - (debug __getitem__, which does not work with negative values)
+    '''
+    def __init__(self, seqs, ids, alphabet_n=21):
+        '''
+        args:
+         - seqs: list of sequences
+         - ids: list of corresponding ids
+        '''
+        self.alphabet = Alphabet(n=alphabet_n)
+        self.add_seqs(*seqs)
+        self.ids = (np.array(ids) if ids else np.array(range(len(seqs))))
 
     def __getstate__():
         return (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr)
@@ -378,6 +374,38 @@ class SequenceBuffer(object):
     def __setstate__(state):
         (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr) = state
 
+    def add_seqs(self, *seqs):
+        self.prot_nr = len(seqs)
+        self.n = self.prot_nr + sum(len(s) for s in seqs)
+
+        self.buff_shr = sharedctypes.RawArray(ctypes.c_uint8, self.n)
+        self.buff[:] = self.alphabet.translate(
+            np.frombuffer((" ".join(seqs) + " ").encode('ascii'), dtype='|S1')).view(np.uint8)
+
+        self.buff_idx_shr = sharedctypes.RawArray(ctypes.c_uint64, self.prot_nr + 1)
+        for i in range(len(seqs)):
+            self.idx[i + 1] = len(seqs[i]) + 1 + self.idx[i]
+    
+    @lazy_property
+    def buff(self):
+        return np.frombuffer(self.buff_shr, dtype=np.uint8).reshape(self.n)
+    
+    @lazy_property
+    def idx(self):
+        return np.frombuffer(self.buff_idx_shr, dtype=np.uint64).reshape(
+            self.prot_nr + 1)
+
+    def __getitem__(self, i):
+        s = int(self.idx[i])
+        e = int(self.idx[i + 1] - 1)
+        return self.buff[s:e].tobytes().decode("ascii")
+
+
+class SequenceBufferFasta(SequenceBuffer):
+    def __init__(self, fasta_file, alphabet_n=21):
+        seqs, ids = self.parse_fasta(fasta_file)
+        super().__init__(seqs, ids, alphabet_n)
+        
     def parse_fasta(self, fasta_file):
         ids = []
         seqs = []
@@ -386,83 +414,156 @@ class SequenceBuffer(object):
             for rec in SeqIO.parse(fp, "fasta"):
                 ids.append(rec.id)
                 seqs.append(str(rec.seq))
-        self.ids = np.array(ids)
-        return seqs
-
-    def add_seqs(self, *seqs):
-        self.prot_nr = len(seqs)
-        self.n = self.prot_nr + sum(len(s) for s in seqs)
-
-        self.buff_shr = sharedctypes.RawArray(ctypes.c_uint8, self.n)
-        self.buff[:] = np.frombuffer(
-            (" ".join(seqs) + " ").encode("ascii"), dtype=np.uint8
-        )
-
-        self.buff_idx_shr = sharedctypes.RawArray(ctypes.c_uint64, self.prot_nr + 1)
-        for i in range(len(seqs)):
-            self.idx[i + 1] = len(seqs[i]) + 1 + self.idx[i]
-
-    def load_from_db(self):
-        self.prot_nr = len(self._prot_tab)
-        self.n = len(self._seq_buff)
-
-        self.buff_shr = sharedctypes.RawArray(ctypes.c_uint8, self.n)
-        self.buff[:] = self._seq_buff[:].view(np.uint8)
-
-        self.buff_idx_shr = sharedctypes.RawArray(ctypes.c_uint64, self.prot_nr + 1)
-        # self.idx[:-1] = self._prot_tab.cols.SeqOff[:]
-        self.idx[:-1] = self._prot_tab[:]["SeqOff"]
-        self.idx[-1] = self.n
-
-        # store offsets as ids
-        self.ids = np.arange(
-            self.prot_off, self.prot_off + self.prot_nr, dtype=np.uint64
-        )[:, None]
-
-    @lazy_property
-    def buff(self):
-        return np.frombuffer(self.buff_shr, dtype=np.uint8).reshape(self.n)
-
-    @lazy_property
-    def idx(self):
-        return np.frombuffer(self.buff_idx_shr, dtype=np.uint64).reshape(
-            self.prot_nr + 1
-        )
-
-    # @lazy_property
-    # def prot_offsets(self):
-    #     return np.arange(self.prot_off, self.prot_off + self.prot_nr, dtype=np.uint64)
-
-    def __getitem__(self, i):
-        s = int(self.idx[i])
-        e = int(self.idx[i + 1] - 1)
-        return self.buff[s:e].tobytes().decode("ascii")
-
-
-class QuerySequenceBuffer(SequenceBuffer):
-    """
-    get a sliced version of the sequence buffer object for a given species in db
-    TO DO: put an __super__
-    """
-
-    def __init__(self, db, query_sp):
-        self.query_sp = (
-            query_sp if isinstance(query_sp, bytes) else query_sp.encode("ascii")
-        )
-        self.set_query_prot_tab(db)
-        self.filter_query_seq_buff(db)
-        self.load_from_db()
-
-    def set_query_prot_tab(self, db):
-        sp_off = np.searchsorted(db._sp_tab.col("ID"), self.query_sp)
+        return seqs, ids
+    
+class SequenceBufferDB(SequenceBuffer):
+    '''
+    TO DO:
+     - bypass add_seqs
+    '''
+    def __init__(self, prot_offsets, db, alphabet_n=21):
+        seqs, ids = self.load_from_db(prot_offsets, db._prot_tab, db._seq_buff)
+        super().__init__(seqs, list(ids), alphabet_n)
+    
+    @staticmethod
+    def _get_seq(prot_off, prot_tab, seq_buff):
+        prot_ent = prot_tab[prot_off]
+        seq_off = prot_ent['SeqOff']
+        return seq_buff[seq_off:seq_off + prot_ent['SeqLen'] - 1].tobytes().decode("ascii")
+    
+    def load_from_db(self, prot_offsets, prot_tab, seq_buff):
+        seqs = [self._get_seq(prot_off, prot_tab, seq_buff) for prot_off in prot_offsets]
+        return seqs, prot_offsets
+        
+class QuerySequenceBuffer(SequenceBufferDB):
+    '''
+    mimic old QuerySequenceBuffer
+    '''
+    def __init__(self, db, query_sp, alphabet_n=21):
+        self.query_sp = query_sp if isinstance(query_sp, bytes) else query_sp.encode('ascii')
+        sp_off = np.searchsorted(db._sp_tab.col('ID'), self.query_sp)
         sp_ent = db._sp_tab[sp_off]
-        self.prot_off = sp_ent["ProtOff"]
-        self._prot_tab = db._prot_tab[self.prot_off : self.prot_off + sp_ent["ProtNum"]]
+        prot_off = sp_ent['ProtOff']
+        prot_offsets = np.arange(prot_off, prot_off + sp_ent['ProtNum'], dtype=int)
+        super().__init__(prot_offsets, db, alphabet_n)
 
-    def filter_query_seq_buff(self, db):
-        self._seq_buff = db._seq_buff[
-            self._prot_tab[0]["SeqOff"] : self._prot_tab[-1]["SeqOff"]
-            + self._prot_tab[-1]["SeqLen"]
-        ]
-        # initialize sequence buffer offset
-        self._prot_tab["SeqOff"] -= db._prot_tab[self.prot_off]["SeqOff"]
+class SequenceBufferOMA(SequenceBuffer):
+    pass
+
+# class SequenceBuffer(object):
+#     """
+#     to load sequences from db or files
+#     adapted from alex
+#     """
+
+#     def __init__(self, seqs=None, ids=None, db=None, fasta_file=None):
+#         self.prot_off = 0
+#         if seqs is not None:
+#             self.add_seqs(*seqs)
+#             self.ids = np.array(ids) if ids else np.array(range(len(seqs)))
+#         elif db is not None:
+#             self._prot_tab = db._prot_tab
+#             self._seq_buff = db._seq_buff
+#             self.load_from_db()
+#         elif fasta_file is not None:
+#             seqs = self.parse_fasta(fasta_file)
+#             self.add_seqs(*seqs)
+#         else:
+#             raise ValueError(
+#                 "need to pass array of seqs or db to load from to SequenceBuffer"
+#             )
+
+#     def __getstate__():
+#         return (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr)
+
+#     def __setstate__(state):
+#         (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr) = state
+
+#     def parse_fasta(self, fasta_file):
+#         ids = []
+#         seqs = []
+#         func = open if not fasta_file.endswith('.gz') else gzip.open
+#         with func(fasta_file, 'rt') as fp:
+#             for rec in SeqIO.parse(fp, "fasta"):
+#                 ids.append(rec.id)
+#                 seqs.append(str(rec.seq))
+#         self.ids = np.array(ids)
+#         return seqs
+
+#     def add_seqs(self, *seqs):
+#         self.prot_nr = len(seqs)
+#         self.n = self.prot_nr + sum(len(s) for s in seqs)
+
+#         self.buff_shr = sharedctypes.RawArray(ctypes.c_uint8, self.n)
+#         self.buff[:] = np.frombuffer(
+#             (" ".join(seqs) + " ").encode("ascii"), dtype=np.uint8
+#         )
+
+#         self.buff_idx_shr = sharedctypes.RawArray(ctypes.c_uint64, self.prot_nr + 1)
+#         for i in range(len(seqs)):
+#             self.idx[i + 1] = len(seqs[i]) + 1 + self.idx[i]
+
+#     def load_from_db(self):
+#         self.prot_nr = len(self._prot_tab)
+#         self.n = len(self._seq_buff)
+
+#         self.buff_shr = sharedctypes.RawArray(ctypes.c_uint8, self.n)
+#         self.buff[:] = self._seq_buff[:].view(np.uint8)
+
+#         self.buff_idx_shr = sharedctypes.RawArray(ctypes.c_uint64, self.prot_nr + 1)
+#         # self.idx[:-1] = self._prot_tab.cols.SeqOff[:]
+#         self.idx[:-1] = self._prot_tab[:]["SeqOff"]
+#         self.idx[-1] = self.n
+
+#         # store offsets as ids
+#         self.ids = np.arange(
+#             self.prot_off, self.prot_off + self.prot_nr, dtype=np.uint64
+#         )[:, None]
+
+#     @lazy_property
+#     def buff(self):
+#         return np.frombuffer(self.buff_shr, dtype=np.uint8).reshape(self.n)
+
+#     @lazy_property
+#     def idx(self):
+#         return np.frombuffer(self.buff_idx_shr, dtype=np.uint64).reshape(
+#             self.prot_nr + 1
+#         )
+
+#     # @lazy_property
+#     # def prot_offsets(self):
+#     #     return np.arange(self.prot_off, self.prot_off + self.prot_nr, dtype=np.uint64)
+
+#     def __getitem__(self, i):
+#         s = int(self.idx[i])
+#         e = int(self.idx[i + 1] - 1)
+#         return self.buff[s:e].tobytes().decode("ascii")
+
+
+# class QuerySequenceBuffer(SequenceBuffer):
+#     """
+#     get a sliced version of the sequence buffer object for a given species in db
+#     TO DO: put an __super__
+#     """
+
+#     def __init__(self, db, query_sp):
+#         self.query_sp = (
+#             query_sp if isinstance(query_sp, bytes) else query_sp.encode("ascii")
+#         )
+#         self.set_query_prot_tab(db)
+#         self.filter_query_seq_buff(db)
+#         self.load_from_db()
+
+#     def set_query_prot_tab(self, db):
+#         sp_off = np.searchsorted(db._sp_tab.col("ID"), self.query_sp)
+#         sp_ent = db._sp_tab[sp_off]
+#         self.prot_off = sp_ent["ProtOff"]
+#         self._prot_tab = db._prot_tab[self.prot_off : self.prot_off + sp_ent["ProtNum"]]
+
+#     def filter_query_seq_buff(self, db):
+#         self._seq_buff = db._seq_buff[
+#             self._prot_tab[0]["SeqOff"] : self._prot_tab[-1]["SeqOff"]
+#             + self._prot_tab[-1]["SeqLen"]
+#         ]
+#         # initialize sequence buffer offset
+#         self._prot_tab["SeqOff"] -= db._prot_tab[self.prot_off]["SeqOff"]

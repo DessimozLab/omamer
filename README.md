@@ -11,7 +11,7 @@ Alternatively, clone this repository and install manually.
 
 Download pre-built databases from the links below. More databases to follow shortly -- if you have a request, please create an issue.
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3978356.svg)](https://doi.org/10.5281/zenodo.3978356)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3987182.svg)](https://doi.org/10.5281/zenodo.3987182)
  - Metazoa (from January 2020 OMA release)
  - Hominidae (from January 2020 OMA release)
 
@@ -86,7 +86,7 @@ Similar but with the _k_-mers specific to the sub-family (~unique to that subtre
 #### Version 0.1.0
  - Added hidden_taxa and threshold arguments.
  
-#### Version 0.1.2
+#### Version 0.1.2 - 0.1.3
  - Debugging
 
 # License
@@ -99,5 +99,7 @@ You should have received a copy of the GNU Lesser General Public License along w
 # Citation
 Rossier Victor, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, and Christophe Dessimoz. 2020. “OMAmer: Tree-Driven and Alignment-Free Protein Assignment to Subfamilies Outperforms Closest Sequence Approaches.” <bioRxiv. https://doi.org/10.1101/2020.04.30.068296>.
 
-Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3978356.svg)](https://doi.org/10.5281/zenodo.3978356)
+Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3987182.svg)](https://doi.org/10.5281/zenodo.3987182)
+
+
 

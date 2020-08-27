@@ -92,12 +92,31 @@ if __name__ == "__main__":
         oma_path = sys.argv[8]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
-        build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn)
+        build_database_from_oma(
+            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn)
     
     elif step == 'sa':
-        pass
+        db_path = sys.argv[3]
+        root_taxon = sys.argv[4]
+        min_fam_size = int(sys.argv[5])
+        min_completeness = float(sys.argv[6])
+        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        build_suffix_array(
+            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet)
+
     elif step == 'ki':
-        pass
+        db_path = sys.argv[3]
+        root_taxon = sys.argv[4]
+        min_fam_size = int(sys.argv[5])
+        min_completeness = float(sys.argv[6])
+        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
+        k = int(sys.argv[10])
+        build_kmer_table(
+            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k)    
+
     else:
         print('unknown step')
 

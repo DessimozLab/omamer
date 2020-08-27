@@ -616,10 +616,11 @@ class DatabaseFromOMA(Database):
     """
     Used to parse the OMA browser database file
     """
-    def __init__(self, filename, root_taxon, min_prot_nr=6, include_younger_fams=True, mode='r'):
+    def __init__(self, filename, root_taxon, min_fam_size=6, min_completeness=0, include_younger_fams=True, mode='r'):
         super().__init__(filename, root_taxon, mode=mode)
 
-        self.min_prot_nr = min_prot_nr
+        self.min_fam_size = min_fam_size
+        self.min_completeness = min_completeness
         self.include_younger_fams = include_younger_fams
 
     ### main function ###
@@ -648,7 +649,7 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             species,
-            self.min_prot_nr
+            self.min_fam_size
         )
 
         LOG.debug(
@@ -685,7 +686,11 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             roottax,
-            include_younger_fams
+            include_younger_fams,
+            hog_gene_nr,
+            min_fam_size,
+            hog_completeness,
+            min_completeness
         ):
             """
 			- decide whether an OMA HOG should be stored based on current root-HOG and HOG taxa
@@ -743,6 +748,11 @@ class DatabaseFromOMA(Database):
                 # else, create a new family (include only family at root-taxon if include_younger_fams==False)
                 elif (not include_younger_fams and tax == roottax) or include_younger_fams:
 
+                    # New!
+                    # filter by CompletenessScore and NrMemberGenes
+                    if hog_gene_nr < min_fam_size or hog_completeness < min_completeness:
+                        return fam, curr_oma_roothog
+
                     fam += 1
                     curr_oma_roothog = curr_oma_hog
 
@@ -760,7 +770,7 @@ class DatabaseFromOMA(Database):
             return fam, curr_oma_roothog
             
         def _process_oma_fam(
-            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, roottax, include_younger_fams
+            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, roottax, include_younger_fams, min_fam_size, min_completeness
         ):
             """
 			apply _process_oma_hog to one OMA family
@@ -773,7 +783,7 @@ class DatabaseFromOMA(Database):
             curr_oma_taxa = []
 
             for r in fam_tab_sort:
-                oma_hog, oma_tax = r[1], r[2] #b"".join(r[2].split())
+                oma_hog, oma_tax, hog_completeness, hog_gene_nr = r[1], r[2], r[3], r[5]
 
                 # evaluation at new oma HOG
                 if oma_hog != curr_oma_hog:
@@ -788,7 +798,11 @@ class DatabaseFromOMA(Database):
                         hog2oma_hog,
                         hog2tax,
                         roottax,
-                        include_younger_fams
+                        include_younger_fams,
+                        hog_gene_nr,
+                        min_fam_size,
+                        hog_completeness,
+                        min_completeness
                     )
 
                     # reset for new HOG
@@ -809,7 +823,11 @@ class DatabaseFromOMA(Database):
                 hog2oma_hog,
                 hog2tax,
                 roottax,
-                include_younger_fams
+                include_younger_fams,
+                hog_gene_nr,
+                min_fam_size,
+                hog_completeness,
+                min_completeness
             )
 
             return fam
@@ -848,7 +866,9 @@ class DatabaseFromOMA(Database):
                     hog2oma_hog,
                     hog2tax,
                     self.root_taxon.encode("ascii"),
-                    self.include_younger_fams
+                    self.include_younger_fams,
+                    self.min_fam_size, 
+                    self.min_completeness
                 )
 
                 # move pointer and update current family
@@ -867,7 +887,9 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             self.root_taxon.encode("ascii"),
-            self.include_younger_fams
+            self.include_younger_fams,
+            self.min_fam_size, 
+            self.min_completeness
         )
 
         del hog_tab, families
@@ -875,34 +897,35 @@ class DatabaseFromOMA(Database):
         return fam2hogs, hog2oma_hog, hog2tax
 
     def select_and_filter_OMA_proteins(
-        self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_prot_nr
+        self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_fam_size
     ):
         """
         One small diff compared to DatabaseFromFasta is that proteins in protein table are not following the species in species table. This should be fine.
         """
         genome_tab = h5file.root.Genome[:]
-        ent_tab = h5file.root.Protein.Entries
         oma_seq_buffer = h5file.root.Protein.SequenceBuffer
+        ent_tab = h5file.root.Protein.Entries
 
-        # temporary mappers
+        # temporary mappers and booking for latter
+        sp2sp_off = dict(zip(sorted(species), range(len(species))))  # this is to sort the species table
         oma_hog2hog = dict(zip(hog2oma_hog.values(), hog2oma_hog.keys()))
-        spe2speoff = dict(
-            zip(sorted(species), range(len(species)))
-        )  # this is to sort the species table
+        hog2protoffs = collections.defaultdict(set)
 
         LOG.debug(" - select proteins from selected HOGs")
-        # remember the size of families and bookkeep family of each protein for filtering
-        fam2prot_nr = collections.Counter()
-        prot_fams = []
 
-        # bookkeep HOG of each protein to later build the hog2protoffs mapper
-        prot_hogs = []
+        # track current species
+        curr_sp = None
 
-        # bookkeep sequence offset of each protein to later build the local seq_buff
-        oma_seq_offsets = []
+        # pointer to sequence in buffer
+        seq_off = self._seq_buff.nrows
 
-        # store temporary rows for species and protein tables
-        oma_species = [b""] * len(species)  # to keep species sorted
+        # pointer to protein in protein table
+        prot_off = self._prot_tab.nrows
+        curr_prot_off = prot_off
+
+        # store rows for species and protein tables and sequence buffer
+        sp_rows = [()] * len(species)  # keep sorted
+        seq_buff = []
         prot_rows = []
 
         for r in tqdm(genome_tab, disable=is_progress_disabled()):
@@ -917,131 +940,77 @@ class DatabaseFromOMA(Database):
 
             # filter if species outside root-taxon
             if sp in species:
-                entry_off = r["EntryOff"]
-                entry_num = r["TotEntries"]
+                sp_off = sp2sp_off[sp]  
 
-                spe_off = spe2speoff[sp]
-                oma_species[spe_off] = sp
-
-                # sub entry table for species
-                sp_ent_tab = ent_tab[entry_off : entry_off + entry_num]
-
-                for rr in sp_ent_tab:
-                    oma_hog = rr["OmaHOG"]
-                    # select protein if member of selected OMA HOG
-                    if oma_hog in oma_hog2hog:
-                        # update counter and track hogs and families
-                        hog = oma_hog2hog[oma_hog]
-                        fam = int(hog.split(b".")[0].decode("ascii"))
-                        fam2prot_nr[fam] += 1
-                        prot_hogs.append(hog)
-                        prot_fams.append(fam)
-
-                        # track sequence length and offset
-                        oma_seq_off = rr["SeqBufferOffset"]
-                        seq_len = rr["SeqBufferLength"]
-                        oma_seq_offsets.append(oma_seq_off)
-
-                        # store protein row
-                        oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
-                        prot_rows.append((oma_id.encode('ascii'), 0, seq_len, spe_off, 0, 0))
-
-        LOG.debug(" - filter by family protein number")
-        # now filter the mappers
-        f_fam2hogs = collections.defaultdict(set)
-        f_hog2oma_hog = dict()
-        f_hog2tax = dict()
-
-        for fam, hogs in fam2hogs.items():
-
-            prot_nr = fam2prot_nr[fam]
-
-            # filter by size
-            if prot_nr >= min_prot_nr:
-
-                f_fam2hogs[fam] = hogs
-                f_hog2oma_hog.update(
-                    dict(zip(hogs, list(map(lambda x: hog2oma_hog[x], hogs))))
-                )
-                f_hog2tax.update(dict(zip(hogs, list(map(lambda x: hog2tax[x], hogs)))))
-
-        LOG.debug(" - filter proteins based on filtered families")
-        # bookkeeping for later
-        hog2protoffs = collections.defaultdict(set)
-
-        # pointer to species in species table
-        curr_spe_off = prot_rows[0][3]
-
-        # pointer to protein in protein table
-        prot_off = self._prot_tab.nrows
-        curr_prot_off = prot_off
-
-        # pointer to sequence in buffer
-        seq_off = self._seq_buff.nrows
-
-        # store rows for species and protein tables	and sequence buffer
-        spe_rows = [()] * len(species)  # keep sorted
-        f_prot_rows = []
-        seq_buff = []
-
-        # iter trough temporary protein rows
-        i = 0
-        for r in tqdm(prot_rows, disable=is_progress_disabled()):
-            if prot_fams[i] in f_fam2hogs:
-                spe_off = r[3]
+                # initiate curr_spe
+                if not curr_sp: 
+                    curr_sp = sp
 
                 # change of species --> store current species
-                if spe_off != curr_spe_off:
-
-                    spe_rows[curr_spe_off] = (
-                        oma_species[curr_spe_off],
+                if sp != curr_sp:
+                         
+                    sp_rows[sp2sp_off[curr_sp]] = (
+                        curr_sp,
                         curr_prot_off,
                         prot_off - curr_prot_off,
                         0,
                     )
 
                     curr_prot_off = prot_off
-                    curr_spe_off = spe_off
+                    curr_sp = sp
 
                     # take advantage to dump sequence buffer
                     self._seq_buff.append(seq_buff)
                     self._seq_buff.flush()
                     seq_buff = []
 
-                # sequence
-                oma_seq_off = oma_seq_offsets[i]
-                seq_len = r[2]
-                seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len]
-                seq_buff.extend(list(seq))
+                # load sub entry table for species
+                entry_off = r["EntryOff"]
+                entry_num = r["TotEntries"]
+                sp_ent_tab = ent_tab[entry_off : entry_off + entry_num]
 
-                # store protein row
-                f_prot_rows.append((r[0], seq_off, seq_len, spe_off, 0, 0))
+                for rr in sp_ent_tab:
+                    oma_hog = rr["OmaHOG"]
+                    
+                    # select protein if member of selected OMA HOG
+                    if oma_hog not in oma_hog2hog:
+                        continue
 
-                # book keeping
-                hog2protoffs[prot_hogs[i]].add(prot_off)
+                    # sequence
+                    oma_seq_off = rr["SeqBufferOffset"]
+                    seq_len = rr["SeqBufferLength"]
+                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len]    
+                    seq_buff.extend(list(seq))      
+                    
+                    # store protein row
+                    oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
+                    prot_rows.append((oma_id.encode('ascii'), seq_off, seq_len, sp_off, 0, 0))                        
+                    
+                    # track hog and family
+                    hog = oma_hog2hog[oma_hog]
+                    fam = int(hog.split(b".")[0].decode("ascii"))
+                    hog2protoffs[hog].add(prot_off)
 
-                # update offset of protein sequence in buffer and of protein raw in table
-                seq_off += seq_len
-                prot_off += 1
-            i += 1
+                    # update offset of protein sequence in buffer and of protein raw in table
+                    seq_off += seq_len
+                    prot_off += 1     
 
         # end
-        spe_rows[curr_spe_off] = (
-            oma_species[curr_spe_off],
+        sp_rows[sp2sp_off[curr_sp]] = (
+            curr_sp,
             curr_prot_off,
             prot_off - curr_prot_off,
             0,
         )
-
         self._seq_buff.append(seq_buff)
         self._seq_buff.flush()
 
         # fill species and protein tables
-        self._sp_tab.append(spe_rows)
+        self._sp_tab.append(sp_rows)
         self._sp_tab.flush()
-        self._prot_tab.append(f_prot_rows)
+        self._prot_tab.append(prot_rows)
         self._prot_tab.flush()
 
         del genome_tab, ent_tab, oma_seq_buffer
 
-        return f_fam2hogs, hog2protoffs, f_hog2tax, f_hog2oma_hog
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog

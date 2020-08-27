@@ -108,7 +108,7 @@ mkdb_parser.add_argument(
     "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo sapiens\")", type=str
 )
 mkdb_parser.add_argument(
-    "--min_hog_size", default=6, help="Minimum HOG size used to build database.", type=int
+    "--min_fam_size", default=6, help="Minimum root-HOG size used to build database.", type=int
 )
 mkdb_parser.add_argument(
     "--root_taxon", required=True, help="Root taxon to build the database for."

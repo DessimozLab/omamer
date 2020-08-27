@@ -12,7 +12,7 @@ from omamer.merge_search import MergeSearch
 from omamer.validation import Validation
 
 def run_validation_pipeline(
-    working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
+    working_path, root_taxon, min_fam_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
     query_sp, subfamily_query_sp2thresholds, focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize):
     '''
     including automatic filenames
@@ -24,19 +24,19 @@ def run_validation_pipeline(
     va_fn = '{}_{}_{}.h5'.format(db_fn.split('.h5')[0], neg_root_taxon if neg_root_taxon else 'Random', '_'.join(query_sp.split()))
 
     va = _run_validation_pipeline(
-        db_fn, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa[query_sp], 
+        db_fn, root_taxon, min_fam_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa[query_sp], 
         va_fn, query_sp, subfamily_query_sp2thresholds[query_sp], focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize)
     
     return va
 
 def _run_validation_pipeline(
-    db_fn, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, hidden_taxa,
+    db_fn, root_taxon, min_fam_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, hidden_taxa,
     va_fn, query_sp, thresholds, focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize):
     
     # build or reload database
     if not os.path.isfile(db_fn):
         db = DatabaseFromOMA(
-            filename=db_fn, root_taxon=root_taxon, min_prot_nr=min_hog_size, 
+            filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, 
             include_younger_fams=include_younger_fams, mode='w')
         
         # load sequences from OMA database
@@ -50,7 +50,7 @@ def _run_validation_pipeline(
     
     # reload database
     db = DatabaseFromOMA(
-        filename=db_fn, root_taxon=root_taxon, min_prot_nr=min_hog_size, 
+        filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, 
         include_younger_fams=include_younger_fams)
     
     qbuff = QuerySequenceBuffer(db, query_sp)
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     
     working_path = sys.argv[2]
     root_taxon = sys.argv[3]
-    min_hog_size = 6
+    min_fam_size = 6
     include_younger_fams = True if (sys.argv[4] == 'True') else False
     oma_path = sys.argv[5]
     oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
@@ -144,5 +144,5 @@ if __name__ == "__main__":
     chunksize = int(sys.argv[8])
 
     run_validation_pipeline(
-        working_path, root_taxon, min_hog_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
+        working_path, root_taxon, min_fam_size, include_younger_fams, oma_db_fn, nwk_fn, k, reduced_alphabet, query_sp2hidden_taxa,
         query_sp, subfamily_query_sp2thresholds, focal_taxon, bin_num, val_mode, neg_root_taxon, chunksize)

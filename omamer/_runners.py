@@ -31,7 +31,7 @@ def mkdb_oma(args):
     LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
-        args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_prot_nr=args.min_hog_size, mode='w'
+        args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_fam_size=args.min_fam_size, mode='w'
     )
 
     oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")

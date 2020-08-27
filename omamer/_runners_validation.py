@@ -15,7 +15,7 @@ def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness,
     parse OMA HOGs
     '''
     db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], '_yf' if include_younger_fams else '_rf')
+        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
     db = DatabaseFromOMA(
         filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_completeness=min_completeness,
         include_younger_fams=include_younger_fams, mode='w')
@@ -30,7 +30,7 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
     '''
     # reload database
     db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], '_yf' if include_younger_fams else '_rf')
+        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
     db = DatabaseFromOMA(
         filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_completeness=min_completeness,
         include_younger_fams=include_younger_fams, mode='r')
@@ -55,7 +55,7 @@ def build_kmer_table(
 
     # copy database
     db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], '_yf' if include_younger_fams else '_rf')    
+        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')    
     ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         '_yf' if include_younger_fams else '_rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))

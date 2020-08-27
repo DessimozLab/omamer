@@ -7,6 +7,7 @@ from omamer.index import Index
 from omamer.alphabets import Alphabet
 
 import tables
+import shutil
 import os
 
 def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn):

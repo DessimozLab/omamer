@@ -43,7 +43,7 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
     # store it in HDF5
     sa_fn = '{}SA_{}_MinFamSize{}_MinFamComp0{}_{}_A{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
-        '_yf' if include_younger_fams else '_rf', alphabet_n)
+        'yf' if include_younger_fams else 'rf', alphabet_n)
     sa_h5 = tables.open_file(sa_fn, 'w', filters=db._compr)
     sa_h5.create_carray('/', 'SuffixArray', obj=sa, filters=db._compr)
     sa_h5.close()
@@ -58,7 +58,7 @@ def build_kmer_table(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')    
     ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
-        '_yf' if include_younger_fams else '_rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
+        'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
     
     shutil.copyfile(db_fn, ki_fn)
 
@@ -70,7 +70,7 @@ def build_kmer_table(
     # load suffix array
     sa_fn = '{}SA_{}_MinFamSize{}_MinFamComp0{}_{}_A{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
-        '_yf' if include_younger_fams else '_rf', alphabet_n) 
+        'yf' if include_younger_fams else 'rf', alphabet_n) 
     sa_h5 = tables.open_file(sa_fn, 'r', filters=db._compr)
     sa = sa_h5.root.SuffixArray[:]
     

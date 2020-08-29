@@ -11,6 +11,7 @@ from omamer.validation import Validation
 import os
 import tables
 import shutil
+import numpy as np
 from tqdm import tqdm
 
 def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn):

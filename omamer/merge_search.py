@@ -26,7 +26,7 @@ import tables
 import os
 import pandas as pd
 import sys
-import scipy
+from scipy import special
 
 from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
@@ -344,7 +344,7 @@ def norm_hog_querysize_hogsize_kmerfreq(
 
 ## probabilistic scoring schemes
 def poisson_log_pmf(k, lda):
-    return k * np.lib.scimath.log(lda) - lda - scipy.special.gammaln(k + 1)
+    return k * np.lib.scimath.log(lda) - lda - special.gammaln(k + 1)
 
 def compute_log_poisson_pvalue(query_counts, hog_cum_counts, kmer_bernoulli):
         
@@ -353,7 +353,7 @@ def compute_log_poisson_pvalue(query_counts, hog_cum_counts, kmer_bernoulli):
     tail_log_probs = poisson_log_pmf(np.arange(hog_cum_counts, query_counts + 1), np.full(tail_size + 1, kmer_bernoulli * query_counts))
 
     # sum of these tail probabilities
-    return scipy.special.logsumexp(tail_log_probs)
+    return special.logsumexp(tail_log_probs)
 
 def compute_fam_mash_pvalue(alphabet_n, k, ref_fam_counts, query_counts, fam_counts):
     

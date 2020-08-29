@@ -88,7 +88,7 @@ def build_kmer_table(
 def search_validate(
     db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
     thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-    pvalue_score):
+    pvalue_score, query_sp):
     
     alphabet_n = 21 if not reduced_alphabet else 13
     
@@ -205,6 +205,7 @@ if __name__ == "__main__":
         focal_taxon = sys.argv[18]
         fam_bin_num = int(sys.argv[19])
         hog_bin_num = int(sys.argv[20])
+        query_sp = sys.argv[21]
 
         if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
             pvalue_score = True
@@ -214,7 +215,7 @@ if __name__ == "__main__":
         search_validate(
             db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
             thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-            pvalue_score)
+            pvalue_score, query_sp)
     else:
         print('unknown step')
 

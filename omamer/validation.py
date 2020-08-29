@@ -37,8 +37,8 @@ from .index import Index
 
 class Validation():
 
-	def __init__(self, db, filename, thresholds, nwk_fn=None, query_sp=None, focal_taxon=None, bin_num=1, val_mode='golike', 
-		neg_root_taxon=None, max_query_nr=None, neg_query_file=None, oma_db_fn=None, nthreads=1):
+	def __init__(self, db, filename, thresholds, oma_db_fn=None, nwk_fn=None, neg_query_file=None, nthreads=1, query_sp=None, max_query_nr=None, 
+		val_mode='golike', neg_root_taxon='random', focal_taxon=None, fam_bin_num=1, hog_bin_num=1):
 
 		self.db = db
 		self.ki = db.ki
@@ -55,19 +55,17 @@ class Validation():
 			self.va = tables.open_file(self.filename, self.mode)
 			self.va.create_carray('/', 'Thresholds', obj=np.array(thresholds, dtype=np.float64), filters=self.db._compr)
 
-		# required for subfamily validation
-		self.nwk_fn = nwk_fn
-		self.query_sp = query_sp
-		self.focal_taxon = focal_taxon if focal_taxon else self.db.root_taxon
-		self.val_mode = val_mode
-		self.bin_num = bin_num
-
-		# and family validation
-		self.neg_root_taxon = neg_root_taxon
-		self.max_query_nr = max_query_nr
-		self.neg_query_file = neg_query_file
 		self.oma_db_fn = oma_db_fn
+		self.nwk_fn = nwk_fn
+		self.neg_query_file = neg_query_file
 		self.nthreads = nthreads
+		self.query_sp = query_sp
+		self.max_query_nr = max_query_nr
+		self.val_mode = val_mode
+		self.neg_root_taxon = neg_root_taxon
+		self.focal_taxon = focal_taxon if focal_taxon else self.db.root_taxon
+		self.fam_bin_num = fam_bin_num
+		self.hog_bin_num = hog_bin_num
 
 		# to pick negative queries
 		random.seed(123)
@@ -98,20 +96,21 @@ class Validation():
 	        print("{} already cleaned".format(self.neg_query_file))
 
 	@lazy_property
-	def hog_off2taxbin(self):
+	def fam_off2taxbin(self):
 		tax_off2taxbin = self.bin_taxa(self.nwk_fn, self.focal_taxon, self.db._tax_tab[:], self.query_sp, self.ki.tax_filter, 
-			bin_num=self.bin_num, focal_bin=False, merge_post_lca_taxa=True)
-		return np.array([tax_off2taxbin.get(tax, -1) for tax in self.db._hog_tab.col('TaxOff')], np.int64)
+			bin_num=self.fam_bin_num, focal_bin=False, merge_post_lca_taxa=True)
+		return np.array([tax_off2taxbin.get(tax, -1) for tax in self.db._fam_tab.col('TaxOff')], np.int64)
 
 	@lazy_property
-	def fam_off2taxbin(self):
-		'''
-		one more been because of focal taxon bin
-		'''
+	def hog_off2taxbin(self):
 		tax_off2taxbin = self.bin_taxa(self.nwk_fn, self.focal_taxon, self.db._tax_tab[:], self.query_sp, self.ki.tax_filter, 
-			bin_num=self.bin_num + 1, focal_bin=True, merge_post_lca_taxa=True)
-		return np.array([tax_off2taxbin.get(tax, -1) for tax in self.db._fam_tab.col('TaxOff')], np.int64)
-	
+			bin_num=self.hog_bin_num, focal_bin=False, merge_post_lca_taxa=True)
+		return np.array([tax_off2taxbin.get(tax, -1) for tax in self.db._hog_tab.col('TaxOff')], np.int64)
+
+	@cached_property
+	def fam_filter_lca(self):
+		return self.ki.tax_filter[self.db._hog_tab.col('LCAtaxOff')[self.db._fam_tab.col('HOGoff')]]
+
 	@cached_property
 	def hog_filter_lca(self):
 		return self.ki.tax_filter[self.db._hog_tab.col('LCAtaxOff')]
@@ -135,29 +134,29 @@ class Validation():
 		else:
 			return self.va.get_node('/QueryFamBins')
 
-	def _get_node(self, node):
+	def _get_node_hog(self, node):
 		if '/{}'.format(node) in self.va:
 		    return self.va.get_node('/{}'.format(node))
 		else:
 			# if root-taxon and focal taxon are not the same, there are two additional taxonomic bins for the ancestral and outgroup taxa
-			bn = self.bin_num if self.focal_taxon == self.db.root_taxon else self.bin_num + 2
+			bn = self.hog_bin_num if self.focal_taxon == self.db.root_taxon else self.hog_bin_num + 2
 			return self.va.create_earray('/', node, tables.UInt16Atom(), shape=(0, bn, self._thresholds.nrows), filters=self.db._compr)
 	
 	@property      
 	def _tp_pre(self):
-	    return self._get_node('TP_pre')
+	    return self._get_node_hog('TP_pre')
 
 	@property
 	def _tp_rec(self):
-	    return self._get_node('TP_rec')
+	    return self._get_node_hog('TP_rec')
 	    
 	@property
 	def _fn(self):
-	    return self._get_node('FN')
+	    return self._get_node_hog('FN')
 
 	@property
 	def _fp(self):
-	    return self._get_node('FP')
+	    return self._get_node_hog('FP')
 
 	# for family validation
 	def _get_node_fam(self, node):
@@ -187,22 +186,22 @@ class Validation():
 	    return self._get_node_fam('FP_pos_neg')
 
 	####################################################################################################################################
-	def validate(self, se, prob=False, hog2bin=True, hf_lca=True):
+	def validate(self, se, pvalue_score=False, hog2bin=True):
 		'''
 		validate both family and subfamily leves
 		'''
-		self.validate_family(se, prob)
-		self.validate_subfamily(se, hog2bin, hf_lca, prob)
+		self.validate_family(se, pvalue_score)
+		self.validate_subfamily(se, hog2bin, pvalue_score)
 
 	####################################################################################################################################
 	# Subfamily validation
-	def validate_subfamily(self, se, hog2bin=True, hf_lca=True, prob=False):
+	def validate_subfamily(self, se, hog2bin=True, pvalue_score=False):
 		assert (self.mode in {'w', 'a'}), 'Validation must be opened in write mode.'
 
 		tp_pre_query2x2tresh, tp_rec_query2x2tresh, fn_query2x2tresh, fp_query2x2tresh = self._validate_subfamily(
 			self._thresholds[:], se._queryFam_ranked, se._query_ids, se._queryRankHog_bestpath, se._queryRankHog_scores, 
-			self.db._prot_tab[:], self.db._fam_tab[:], self.db._hog_tab.col('ParentOff'), get_root_leaf_hog_offsets, prob, 
-			self.hog_off2taxbin if hog2bin else np.array([]), self.hog_filter_lca if hf_lca else np.array([]), self.val_mode)
+			self.db._prot_tab[:], self.db._fam_tab[:], self.db._hog_tab.col('ParentOff'), get_root_leaf_hog_offsets, pvalue_score, 
+			self.hog_off2taxbin if hog2bin else np.array([]), self.fam_filter_lca, self.hog_filter_lca, self.val_mode)
 
 		# store results
 		self._tp_pre.append(tp_pre_query2x2tresh)
@@ -223,7 +222,7 @@ class Validation():
 	@staticmethod
 	def _validate_subfamily(
 		thresholds, queryFam_ranked, query_prot_offsets, queryRankHog_bestpath, queryRankHog_scores,
-		prot_tab, fam_tab, hog2parent, fun_root_leaf, prob, hog2bin, hog_filter_lca, val_mode):
+		prot_tab, fam_tab, hog2parent, fun_root_leaf, pvalue_score, hog2bin, fam_filter_lca, hog_filter_lca, val_mode):
 		'''
 		args:
 		 - pv: whether p-value type of score (the lower the better)
@@ -284,6 +283,11 @@ class Validation():
 			# true data
 			prot_off = query_prot_offsets[q]
 			true_fam = prot_tab[prot_off]['FamOff']
+
+			# skip families specific to a hidden taxon
+			if (fam_filter_lca.size > 0) and fam_filter_lca[true_fam]:
+			    continue
+
 			true_leafhog = prot_tab[prot_off]['HOGoff']
 			true_hogs = fun_root_leaf(true_leafhog, hog2parent)[1:]  # ignore root-HOG
 
@@ -309,7 +313,7 @@ class Validation():
 			    t_val = thresholds[t_off]
 			    
 			    # pred hogs
-			    pred_hogs = hogs_bestpath[(hogs_bestpath_score < t_val) if prob else (hogs_bestpath_score >= t_val)]
+			    pred_hogs = hogs_bestpath[(hogs_bestpath_score < t_val) if pvalue_score else (hogs_bestpath_score >= t_val)]
 			    
 			    # confront true classes against predicted classes to get benchmark results
 			    # not supported by numba ...
@@ -520,10 +524,10 @@ class Validation():
 	def clade_specific_negatives(self):
 		return self.get_clade_specific_negatives(self.nwk_fn, self.oma_db_fn, self.neg_root_taxon, self.db.min_prot_nr, self.max_query_nr)
 
-	def validate_family(self, se, prob=False):
+	def validate_family(self, se, pvalue_score=False):
 
 		# get the negative queries
-		if self.neg_root_taxon:
+		if self.neg_root_taxon != 'random':
 			all_neg_seqs, all_neg_ids = self.clade_specific_negatives
 			query_i = self._query_ids.nrows
 			query_j = query_i + se._query_ids.size
@@ -543,10 +547,12 @@ class Validation():
 		neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids)
 
 		# validate negatives
-		tn_query2tresh, fp_neg_query2tresh = self._validate_negative(self._thresholds[:], neg_ms._queryFam_ranked, neg_ms._queryFam_scores, prob)
+		tn_query2tresh, fp_neg_query2tresh = self._validate_negative(
+			self._thresholds[:], neg_ms._queryFam_ranked, neg_ms._queryFam_scores, pvalue_score)
 
 		# validate positives
-		tp_query2tresh, fn_query2tresh, fp_pos_query2tresh = self._validate_positive(se._query_ids, self._thresholds[:], se._queryFam_ranked, se._queryFam_scores, self.db._prot_tab[:], prob)
+		tp_query2tresh, fn_query2tresh, fp_pos_query2tresh = self._validate_positive(
+			se._query_ids, self._thresholds[:], se._queryFam_ranked, se._queryFam_scores, self.db._prot_tab[:], pvalue_score, self.fam_filter_lca)
 
 		# store results
 		self._fam_tn.append(tn_query2tresh)
@@ -561,7 +567,7 @@ class Validation():
 		self._fam_fp_pos.flush()
 
 	@staticmethod
-	def _validate_positive(query_prot_offsets, thresholds, queryFam_ranked, queryFam_scores, prot_tab, prob):
+	def _validate_positive(query_prot_offsets, thresholds, queryFam_ranked, queryFam_scores, prot_tab, pvalue_score, fam_filter_lca):
 	    '''
 	    results from the positive query set
 	    '''
@@ -579,6 +585,10 @@ class Validation():
 	        prot_off = query_prot_offsets[q]
 	        true_fam = prot_tab[prot_off]['FamOff']
 
+	        # skip families specific to a hidden taxon
+	        if (fam_filter_lca.size > 0) and fam_filter_lca[true_fam]:
+	            continue
+
 	        # pred data
 	        pred_fam = queryFam_ranked[q]
 	        score = queryFam_scores[q]
@@ -587,7 +597,7 @@ class Validation():
 	        for t_off in range(thresholds.size):
 	            t_val = thresholds[t_off]
 
-	            is_pred = (True if score < t_val else False) if prob else (True if score >= t_val else False)
+	            is_pred = (True if score < t_val else False) if pvalue_score else (True if score >= t_val else False)
 
 	            # TP
 	            if is_pred:
@@ -603,7 +613,7 @@ class Validation():
 	    return tp_query2tresh, fn_query2tresh, fp_query2tresh
 
 	@staticmethod
-	def _validate_negative(thresholds, queryFam_ranked, queryFam_scores, prob):
+	def _validate_negative(thresholds, queryFam_ranked, queryFam_scores, pvalue_score):
 	    '''
 	    results from the negative query set
 	    '''
@@ -624,7 +634,7 @@ class Validation():
 	        for t_off in range(thresholds.size):
 	            t_val = thresholds[t_off]
 
-	            is_pred = (True if score < t_val else False) if prob else (True if score >= t_val else False)
+	            is_pred = (True if score < t_val else False) if pvalue_score else (True if score >= t_val else False)
 
 	            # FP
 	            if is_pred:

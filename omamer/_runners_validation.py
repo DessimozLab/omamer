@@ -192,7 +192,8 @@ if __name__ == "__main__":
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
         hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
         k = int(sys.argv[10])
-        thresholds = np.arange(*(float(x) for x in sys.argv[11].split(',')))  # e.g. "0,1.01,0.01"
+        str_thresholds = sys.argv[11]
+        thresholds = np.arange(*(float(x) for x in str_thresholds.split(',')))  # e.g. "0,1.01,0.01"
         oma_path = sys.argv[12]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")

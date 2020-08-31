@@ -109,7 +109,7 @@ def search_validate(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
     
-    assert os.path.exists(db_fn), 'database missing'
+    assert os.path.exists(db_ki_fn), 'database missing'
 
     # load in append mode
     db = DatabaseFromOMA(

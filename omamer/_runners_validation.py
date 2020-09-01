@@ -35,6 +35,9 @@ def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness,
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
 
     if not is_complete(db_fn, db_path):
+        if os.path.exists(db_fn):
+            os.remove(db_fn)
+            
         db = DatabaseFromOMA(
             filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_completeness=min_completeness,
             include_younger_fams=include_younger_fams, mode='w')
@@ -66,6 +69,9 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
         'yf' if include_younger_fams else 'rf', alphabet_n)
 
     if not is_complete(sa_fn, db_path):
+        if os.path.exists(sa_fn):
+            os.remove(sa_fn)
+
         alphabet = Alphabet(n=alphabet_n)
         sa = Index._build_suffixarray(alphabet.translate(db._seq_buff[:]), len(db._prot_tab))
 
@@ -96,6 +102,8 @@ def build_kmer_table(
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
 
     if not is_complete(ki_fn, db_path):
+        if os.path.exists(ki_fn):
+            os.remove(ki_fn)
 
         # copy database
         shutil.copyfile(db_fn, ki_fn)
@@ -148,6 +156,8 @@ def search_validate(
         score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
 
     if not is_complete(se_va_fn, db_path):
+        if os.path.exists(se_va_fn):
+            os.remove(se_va_fn)
 
         ms = MergeSearch(ki=db.ki, nthreads=1)
         va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 

@@ -14,14 +14,23 @@ import shutil
 import numpy as np
 from tqdm import tqdm
 
-def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn, overwrite):
+def is_complete(fn, db_path):
+    with open('{}COMPLETE.txt'.format(db_path), 'r') as inf:
+        complete_fns = set(map(lambda x: x.rstrip(), inf.readlines()))
+    return fn in complete_fns
+
+def set_complete(fn, db_path):
+    with open('{}COMPLETE.txt'.format(db_path), 'a') as inf:
+        inf.write(fn)
+
+def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn):
     '''
     parse OMA HOGs
     '''
     db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
 
-    if not os.path.exists(db_fn) or overwrite:
+    if not is_complete(db_fn, db_path):
         db = DatabaseFromOMA(
             filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_completeness=min_completeness,
             include_younger_fams=include_younger_fams, mode='w')
@@ -30,7 +39,9 @@ def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness,
         db.build_database(oma_db_fn, nwk_fn)
         db.close()
 
-def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, overwrite=False):
+        set_complete(db_fn, db_path)
+
+def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet):
     '''
     compute SA 
     '''
@@ -50,7 +61,7 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n)
 
-    if not os.path.exists(sa_fn) or overwrite:
+    if not is_complete(sa_fn, db_path)
         alphabet = Alphabet(n=alphabet_n)
         sa = Index._build_suffixarray(alphabet.translate(db._seq_buff[:]), len(db._prot_tab))
 
@@ -59,23 +70,30 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
         sa_h5.create_carray('/', 'SuffixArray', obj=sa, filters=db._compr)
         sa_h5.close()
 
+        set_complete(sa_fn, db_path)
+
 def build_kmer_table(
     db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k, overwrite=False):
     
     alphabet_n = 21 if not reduced_alphabet else 13
 
-    # copy database
     db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
+    
+    sa_fn = '{}SA_{}_MinFamSize{}_MinFamComp0{}_{}_A{}.h5'.format(
+        db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
+        'yf' if include_younger_fams else 'rf', alphabet_n) 
 
     assert os.path.exists(db_fn), 'database missing'
+    assert os.path.exists(sa_fn), 'suffix array missing'
 
     ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
-    
-    if not os.path.exists(sa_fn) or overwrite:
 
+    if not is_complete(ki_fn, db_path)
+
+        # copy database
         shutil.copyfile(db_fn, ki_fn)
 
         # load in append mode
@@ -84,9 +102,6 @@ def build_kmer_table(
             include_younger_fams=include_younger_fams, mode='a')   
 
         # load suffix array
-        sa_fn = '{}SA_{}_MinFamSize{}_MinFamComp0{}_{}_A{}.h5'.format(
-            db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
-            'yf' if include_younger_fams else 'rf', alphabet_n) 
         sa_h5 = tables.open_file(sa_fn, 'r', filters=db._compr)
         sa = sa_h5.root.SuffixArray[:]
         
@@ -97,6 +112,8 @@ def build_kmer_table(
         db.close()
         sa_h5.close()
 
+        set_complete(ki_fn, db_path)
+
 def search_validate(
     db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
     thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
@@ -105,15 +122,15 @@ def search_validate(
     alphabet_n = 21 if not reduced_alphabet else 13
     
     # reload k-mer table
-    db_ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
+    ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
     
-    assert os.path.exists(db_ki_fn), 'database missing'
+    assert os.path.exists(ki_fn), 'index missing'
 
     # load in append mode
     db = DatabaseFromOMA(
-        filename=db_ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_completeness=min_completeness,
+        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_completeness=min_completeness,
         include_younger_fams=include_younger_fams, mode='r')
 
     # load query sequences
@@ -126,46 +143,44 @@ def search_validate(
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]),
         score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
 
-    ms = MergeSearch(ki=db.ki, nthreads=1)
-    va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 
-                    neg_query_file='{}.fa'.format(se_va_fn.split('.')[0]), nthreads=1, query_sp=query_sp, 
-                    max_query_nr=sbuff.prot_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
-                    fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num)
-    if overwrite:
-        va.clean()
+    if not is_complete(se_va_fn, db_path):
+
+        ms = MergeSearch(ki=db.ki, nthreads=1)
         va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 
-                neg_query_file='{}.fa'.format(se_va_fn.split('.')[0]), nthreads=1, query_sp=query_sp, 
-                max_query_nr=sbuff.prot_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
-                fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num)
+                        neg_query_file='{}.fa'.format(se_va_fn.split('.')[0]), nthreads=1, query_sp=query_sp, 
+                        max_query_nr=sbuff.prot_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
+                        fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num)
 
-    assert va.mode == 'w'
-    
-    # search and validate
-    ids = []
-    seqs = []
+        assert va.mode == 'w'
+        
+        # search and validate
+        ids = []
+        seqs = []
 
-    pbar = tqdm(desc='Searching')
-    for i, q in enumerate(sbuff.ids):
-        ids.append(q)
-        seqs.append(sbuff[i])
-        if len(ids) == chunksize:
-            # search and validate the chunk
+        pbar = tqdm(desc='Searching')
+        for i, q in enumerate(sbuff.ids):
+            ids.append(q)
+            seqs.append(sbuff[i])
+            if len(ids) == chunksize:
+                # search and validate the chunk
+                ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
+                va.validate(ms, pvalue_score=pvalue_score)     
+
+                pbar.update(len(ids))
+                ids = []
+                seqs = []
+
+        # search and validate last chunk
+        if len(ids) > 0:
             ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
-            va.validate(ms, pvalue_score=pvalue_score)     
-
+            va.validate(ms, pvalue_score=pvalue_score)
             pbar.update(len(ids))
-            ids = []
-            seqs = []
 
-    # search and validate last chunk
-    if len(ids) > 0:
-        ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
-        va.validate(ms, pvalue_score=pvalue_score)
-        pbar.update(len(ids))
+        # close stuff
+        pbar.close()
+        va.va.close()
 
-    # close stuff
-    pbar.close()
-    va.va.close()
+        set_complete(se_va_fn, db_path)
 
 if __name__ == "__main__":
     
@@ -179,7 +194,6 @@ if __name__ == "__main__":
         oma_path = sys.argv[8]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
-        overwrite = sys.argv[9]
         build_database_from_oma(
             db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn, overwrite)
     
@@ -190,7 +204,6 @@ if __name__ == "__main__":
         min_completeness = float(sys.argv[6])
         include_younger_fams =  True if (sys.argv[7] == 'True') else False
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
-        overwrite = sys.argv[9]
         build_suffix_array(
             db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, overwrite)
 
@@ -203,7 +216,6 @@ if __name__ == "__main__":
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
         hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
         k = int(sys.argv[10])
-        overwrite = sys.argv[11]
         build_kmer_table(
             db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k, overwrite)    
 
@@ -229,7 +241,6 @@ if __name__ == "__main__":
         fam_bin_num = int(sys.argv[19])
         hog_bin_num = int(sys.argv[20])
         query_sp = ' '.join(sys.argv[21].split('_'))
-        overwrite = sys.argv[22]
 
         if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
             pvalue_score = True

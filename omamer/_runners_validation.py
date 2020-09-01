@@ -25,7 +25,7 @@ def is_complete(fn, db_path):
 
 def set_complete(fn, db_path):
     with open('{}COMPLETE.txt'.format(db_path), 'a') as inf:
-        inf.write(fn)
+        inf.write('{}\n'.format(fn))
 
 def build_database_from_oma(db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn):
     '''
@@ -129,7 +129,7 @@ def build_kmer_table(
 def search_validate(
     db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
     thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-    pvalue_score, query_sp):
+    pvalue_score, query_sp, overwrite=False):
     
     alphabet_n = 21 if not reduced_alphabet else 13
     
@@ -155,7 +155,7 @@ def search_validate(
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]),
         score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
 
-    if not is_complete(se_va_fn, db_path):
+    if not is_complete(se_va_fn, db_path) or overwrite:
         if os.path.exists(se_va_fn):
             os.remove(se_va_fn)
 
@@ -255,6 +255,7 @@ if __name__ == "__main__":
         fam_bin_num = int(sys.argv[19])
         hog_bin_num = int(sys.argv[20])
         query_sp = ' '.join(sys.argv[21].split('_'))
+        overwrite = True if (sys.argv[22] == 'True') else False
 
         if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
             pvalue_score = True
@@ -264,7 +265,7 @@ if __name__ == "__main__":
         search_validate(
             db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
             thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-            pvalue_score, query_sp)
+            pvalue_score, query_sp, overwrite)
     else:
         print('unknown step')
 

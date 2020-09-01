@@ -413,10 +413,10 @@ def compute_hog_mash_pvalue(
         
         for j in range(hog_offsets.size):
             if fam_hog_cumcounts[hog_offsets[j]] > 0:
-                fam_hog_scores[j] = compute_log_poisson_pvalue(
+                fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
                     qh_count[j], fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
             else:
-                fam_hog_scores[j] = 0.0
+                fam_hog_scores[hog_offsets[j]] = 0.0
             
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)
@@ -460,10 +460,10 @@ def compute_hog_kmerfreq_pvalue(
 
         for j in range(hog_offsets.size):
             if fam_hog_cumcounts[hog_offsets[j]] > 0:
-                fam_hog_scores[j] = compute_log_poisson_pvalue(
+                fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
                     qh_count[j], fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
             else:
-                fam_hog_scores[j] = 0.0
+                fam_hog_scores[hog_offsets[j]] = 0.0
 
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)

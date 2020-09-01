@@ -73,7 +73,7 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
         set_complete(sa_fn, db_path)
 
 def build_kmer_table(
-    db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k, overwrite=False):
+    db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k):
     
     alphabet_n = 21 if not reduced_alphabet else 13
 
@@ -117,7 +117,7 @@ def build_kmer_table(
 def search_validate(
     db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
     thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-    pvalue_score, query_sp, overwrite=False):
+    pvalue_score, query_sp):
     
     alphabet_n = 21 if not reduced_alphabet else 13
     
@@ -195,7 +195,7 @@ if __name__ == "__main__":
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
         build_database_from_oma(
-            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn, overwrite)
+            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, oma_db_fn, nwk_fn)
     
     elif step == 'sa':
         db_path = sys.argv[3]
@@ -205,7 +205,7 @@ if __name__ == "__main__":
         include_younger_fams =  True if (sys.argv[7] == 'True') else False
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
         build_suffix_array(
-            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, overwrite)
+            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet)
 
     elif step == 'ki':
         db_path = sys.argv[3]
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
         k = int(sys.argv[10])
         build_kmer_table(
-            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k, overwrite)    
+            db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k)    
 
     elif step == 'se_va':
         db_path = sys.argv[3]
@@ -250,7 +250,7 @@ if __name__ == "__main__":
         search_validate(
             db_path, root_taxon, min_fam_size, min_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
             thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-            pvalue_score, query_sp, overwrite)
+            pvalue_score, query_sp)
     else:
         print('unknown step')
 

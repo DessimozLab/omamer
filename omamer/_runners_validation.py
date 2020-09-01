@@ -61,7 +61,7 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_completeness, incl
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n)
 
-    if not is_complete(sa_fn, db_path)
+    if not is_complete(sa_fn, db_path):
         alphabet = Alphabet(n=alphabet_n)
         sa = Index._build_suffixarray(alphabet.translate(db._seq_buff[:]), len(db._prot_tab))
 
@@ -91,7 +91,7 @@ def build_kmer_table(
         db_path, root_taxon, min_fam_size, str(min_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
 
-    if not is_complete(ki_fn, db_path)
+    if not is_complete(ki_fn, db_path):
 
         # copy database
         shutil.copyfile(db_fn, ki_fn)

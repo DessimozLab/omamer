@@ -15,7 +15,11 @@ import numpy as np
 from tqdm import tqdm
 
 def is_complete(fn, db_path):
-    with open('{}COMPLETE.txt'.format(db_path), 'r') as inf:
+    cf = '{}COMPLETE.txt'.format(db_path)
+    if not os.path.exists(cf):
+        with open(cf, 'w') as inf:
+            pass
+    with open(cf, 'r') as inf:
         complete_fns = set(map(lambda x: x.rstrip(), inf.readlines()))
     return fn in complete_fns
 

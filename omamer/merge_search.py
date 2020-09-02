@@ -508,7 +508,7 @@ def compute_hog_kmerfreqmin_pvalue(
         for j in range(hog_offsets.size):
             if fam_hog_cumcounts[hog_offsets[j]] > 0:
                 # !min(hog size, query size) instead of query size
-                n = min(qh_count[j], fam_ref_hog_counts[hog_offsets[j]])
+                n = np.int64(min(qh_count[j], fam_ref_hog_counts[hog_offsets[j]]))
                 fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
                     n, fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
             else:

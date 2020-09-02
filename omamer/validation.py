@@ -441,33 +441,29 @@ class Validation():
 
 		part2bin2pre = np.zeros((part_num, bin_num, thresh_num), dtype=np.float64)
 		part2bin2rec = np.zeros((part_num, bin_num, thresh_num), dtype=np.float64)
-		part2bin2tp_pre_nr = np.zeros((part_num, bin_num, thresh_num), dtype=np.uint64)
-		part2bin2tp_rec_nr = np.zeros((part_num, bin_num, thresh_num), dtype=np.uint64)
-		part2bin2fn_nr = np.zeros((part_num, bin_num, thresh_num), dtype=np.uint64)
-		part2bin2fp_nr = np.zeros((part_num, bin_num, thresh_num), dtype=np.uint64)
+		part2bin2true_hog_nr = np.zeros((part_num, bin_num), dtype=np.uint64)
+		part2bin2query_nr = np.zeros((part_num, bin_num), dtype=np.uint64)
 
 		for p in range(part_num):
 		    part = partitions[p]
 		    for b in range(bin_num):
 		        for t in range(thresh_num):
 		            tp_pre_nr = np.sum(tp_pre_query2bin2tresh[:, b, t][part])
-		            tp_rec_nr = np.sum(tp_rec_query2bin2tresh[:, b, t][part])
+		            tp_rec_nr = np.sum(tp_rec_query2bin2tresh[:, b, t][part])  
 		            fn_nr = np.sum(fn_query2bin2tresh[:, b, t][part])
 		            fp_nr = np.sum(fp_query2bin2tresh[:, b, t][part])
 		            part2bin2pre[p, b, t] = (tp_pre_nr/(tp_pre_nr + fp_nr)) if tp_pre_nr or fp_nr else 0
 		            part2bin2rec[p, b, t] = (tp_rec_nr/(tp_rec_nr + fn_nr)) if tp_rec_nr or fn_nr else 0
-		            part2bin2tp_pre_nr[p, b, t] = tp_pre_nr
-		            part2bin2tp_rec_nr[p, b, t] = tp_rec_nr
-		            part2bin2fn_nr[p, b, t] = fn_nr
-		            part2bin2fp_nr[p, b, t] = fp_nr
+		            
+		            # number of true non-hidden subfamily in bin 
+		            part2bin2true_hog_nr[p, b] = np.sum((tp_pre_query2bin2tresh[:, b, t][part] + 
+		                                              fn_query2bin2tresh[:, b, t][part]))
+		            
+		            # number of query from non-hidden subfamilies in bin
+		            part2bin2query_nr[p, b] = np.sum((tp_pre_query2bin2tresh[:, b, t][part] + 
+		                                              fn_query2bin2tresh[:, b, t][part]) != 0)
 
-		part2bin2query_nr = np.zeros((part_num, bin_num), dtype=np.uint64)
-
-		for p in range(part_num):
-		    for b in range(bin_num):
-		        part2bin2query_nr[p, b] = part2bin2tp_rec_nr[p, b, 0] + part2bin2fn_nr[p, b, 0]
-		        
-		return part2bin2pre, part2bin2rec, part2bin2query_nr
+		return part2bin2pre, part2bin2rec, part2bin2true_hog_nr, part2bin2query_nr
 
 	def compute_precision_recall_subfamily(self, partitions=np.array([])):
 		return self._compute_precision_recall_subfamily(
@@ -491,7 +487,7 @@ class Validation():
 		return part2bin2f1_max, part2bin2f1_tval, part2bin2f1_toff
 
 	def F1max_subfamily(self, partitions=np.array([])):
-		part2bin2pre, part2bin2rec, part2bin2query_nr = self.compute_precision_recall_subfamily(partitions)
+		part2bin2pre, part2bin2rec, part2bin2true_hog_nr, part2bin2query_nr = self.compute_precision_recall_subfamily(partitions)
 		return self._F1max_subfamily(part2bin2pre, part2bin2rec, self._thresholds[:])
 
 	@staticmethod
@@ -515,7 +511,7 @@ class Validation():
 		return part2bin2f1_max, part2bin2f1_tval, part2bin2f1_toff
 
 	def PREpro_subfamily(self, partitions=np.array([])):
-		part2bin2pre, part2bin2rec, part2bin2query_nr = self.compute_precision_recall(partitions)
+		part2bin2pre, part2bin2rec, part2bin2true_hog_nr, part2bin2query_nr = self.compute_precision_recall(partitions)
 		return self._PREpro_subfamily(part2bin2pre, part2bin2rec, self._thresholds[:])
 
 	####################################################################################################################################

@@ -257,7 +257,7 @@ if __name__ == "__main__":
         query_sp = ' '.join(sys.argv[21].split('_'))
         overwrite = True if (sys.argv[22] == 'True') else False
 
-        if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
+        if score in {'mash_pvalue', 'kmerfreq_pvalue', 'kmerfreqmin_pvalue'}:
             pvalue_score = True
         else:
             pvalue_score = False

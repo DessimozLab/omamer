@@ -470,6 +470,54 @@ def compute_hog_kmerfreq_pvalue(
 
     return fam_hog_scores, fam_bestpath
 
+def compute_hog_kmerfreqmin_pvalue(
+    fam_hog_cumcounts, query_counts, query_occurs, all_kmer_occurs, fam_ref_hog_counts, fam_level_offsets, hog2parent, fam_hog_counts, fam_hog_occurs):
+
+    fam_hog_scores = np.zeros(fam_hog_cumcounts.shape, dtype=np.float64)
+    fam_bestpath = np.full(fam_hog_cumcounts.shape, False)
+    revcum_counts = np.full(fam_hog_cumcounts.shape, query_counts, dtype=np.uint16)
+    revcum_occurs = np.full(fam_hog_cumcounts.shape, query_occurs, dtype=np.uint32)
+
+    ## root-HOG score
+    # compute expected number of k-mer matches
+    kmer_prob = query_kmer_prob_freq(query_occurs, query_counts, all_kmer_occurs)
+    kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
+    fam_hog_scores[0] = compute_log_poisson_pvalue(query_counts, fam_hog_cumcounts[0], kmer_bernoulli)
+
+    # set the root-HOG as best path
+    fam_bestpath[0] = True
+    
+    # loop through hog levels
+    for i in range(1, fam_level_offsets.size - 2):
+        x = fam_level_offsets[i : i + 2]
+        hog_offsets = np.arange(x[0], x[1])
+
+        # grab parents
+        parent_offsets = hog2parent[hog_offsets]
+
+        # update query revcumcount and revcumoccur, basically substracting parent counts/occurs from query counts/occurs
+        qh_count = revcum_counts[parent_offsets] - fam_hog_counts[parent_offsets]
+        qh_occur = revcum_occurs[parent_offsets] - fam_hog_occurs[parent_offsets]
+        revcum_counts[hog_offsets] = qh_count
+        revcum_occurs[hog_offsets] = qh_occur
+
+        ## HOG score
+        kmer_prob = query_kmer_prob_freq(qh_occur, qh_count, all_kmer_occurs)
+        kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[hog_offsets])
+
+        for j in range(hog_offsets.size):
+            if fam_hog_cumcounts[hog_offsets[j]] > 0:
+                # !min(hog size, query size) instead of query size
+                n = min(qh_count[j], fam_ref_hog_counts[hog_offsets[j]])
+                fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
+                    n, fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
+            else:
+                fam_hog_scores[hog_offsets[j]] = 0.0
+
+        # store bestpath
+        store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)
+
+    return fam_hog_scores, fam_bestpath
 
 class MergeSearch(object):
 	def __init__(self, ki, nthreads=None, low_mem=False, include_extant_genes=False):
@@ -551,7 +599,7 @@ class MergeSearch(object):
 			ref_hog_counts = self.ref_hog_counts_max
 
 		# set to low mem if probabilistic score
-		if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
+		if score in {'mash_pvalue', 'kmerfreq_pvalue', 'kmerfreqmin_pvalue'}:
 			self.low_mem = True
 			lookup_fun = self._lookup_pvalue
 		else:
@@ -1021,7 +1069,7 @@ class MergeSearch(object):
 	                top_fam_scores = compute_fam_mash_pvalue(
 	                    alphabet_n, k, ref_fam_counts[top_fam], r1.size, top_fam_counts)
 	                
-	            elif score == 'kmerfreq_pvalue':
+	            elif score == 'kmerfreq_pvalue' or score == 'kmerfreqmin_pvalue':
 	                top_fam_scores = compute_fam_kmerfreq_pvalue(
 	                    query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam], top_fam_counts)
 	                
@@ -1030,7 +1078,7 @@ class MergeSearch(object):
 	                continue     
 	            
 	            # resort by score
-	            if (score == 'mash_pvalue') or (score == 'kmerfreq_pvalue'):
+	            if (score == 'mash_pvalue') or (score == 'kmerfreq_pvalue') or (score == 'kmerfreqmin_pvalue'):
 	                idx = (top_fam_scores).argsort()
 	            else:
 	                idx = (-top_fam_scores).argsort()
@@ -1093,6 +1141,11 @@ class MergeSearch(object):
 	                    fam_hog_scores, fam_bestpath = compute_hog_kmerfreq_pvalue(
 	                        fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
 	                        fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
+
+                    elif score == 'kmerfreqmin_pvalue':
+                        fam_hog_scores, fam_bestpath = compute_hog_kmerfreqmin_pvalue(
+                            fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
+                            fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
 
 	                # to enable parallel loop, pick one score and such else-continue statement
 	                else: 

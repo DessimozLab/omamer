@@ -584,7 +584,7 @@ class MergeSearch(object):
     def ref_fam_counts_max(self):
     	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]		
 
-    def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10):
+    def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10, top_n_fams=1):
     	# load query sequences
     	if seqs:
     	    sbuff = SequenceBuffer(seqs=seqs, ids=ids)
@@ -619,7 +619,7 @@ class MergeSearch(object):
     	    self.hog_tab,
     	    self.level_arr,
     	    self.max_hog_nr,
-    	    top_n_fams = 1,
+    	    top_n_fams = top_n_fams,
     	    top_m_fams = top_m_fams,
     	    cum_mode = cum_mode, 
     	    score = score,

@@ -175,8 +175,7 @@ def norm_fam_querysize_hogsize(fam_counts, alphabet_n, k, ref_fam_counts, query_
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, ref_fam_counts)
     exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
     
-    # makes sense to remove exp_kmer_counts query_counts too right?
-    return (fam_counts - exp_kmer_counts) / (query_counts - exp_kmer_counts)
+    return (fam_counts - exp_kmer_counts) / query_counts
 
 @numba.njit
 def norm_fam_querysize_kmerfreq():
@@ -192,8 +191,7 @@ def norm_fam_querysize_hogsize_kmerfreq(fam_counts, query_occurs, query_counts, 
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, ref_fam_counts)
     exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
     
-    # makes sense to remove exp_kmer_counts query_counts too right?
-    return (fam_counts - exp_kmer_counts) / (query_counts - exp_kmer_counts)
+    return (fam_counts - exp_kmer_counts) / query_counts
 
 @numba.njit(parallel=True, nogil=True)
 def cumulate_counts_nfams(
@@ -261,7 +259,7 @@ def norm_hog_querysize_hogsize(
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
     exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
     
-    fam_hog_scores[0] = (np.float64(fam_hog_cumcounts[0]) - exp_kmer_counts) / (query_counts - exp_kmer_counts)
+    fam_hog_scores[0] = (np.float64(fam_hog_cumcounts[0]) - exp_kmer_counts) / query_counts
 
     # set the root-HOG as best path
     fam_bestpath[0] = True
@@ -284,7 +282,7 @@ def norm_hog_querysize_hogsize(
         kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[hog_offsets])
         exp_kmer_counts = get_expected_kmer_counts(qh_count, kmer_bernoulli)
 
-        fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - exp_kmer_counts) / (qh_count - exp_kmer_counts)
+        fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - exp_kmer_counts) / qh_count
 
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=False)
@@ -310,7 +308,7 @@ def norm_hog_querysize_hogsize_kmerfreq(
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
     exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
 
-    fam_hog_scores[0] = (np.float64(fam_hog_cumcounts[0]) - exp_kmer_counts) / (query_counts - exp_kmer_counts)
+    fam_hog_scores[0] = (np.float64(fam_hog_cumcounts[0]) - exp_kmer_counts) / query_counts
 
     # set the root-HOG as best path
     fam_bestpath[0] = True
@@ -335,7 +333,7 @@ def norm_hog_querysize_hogsize_kmerfreq(
         kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[hog_offsets])
         exp_kmer_counts = get_expected_kmer_counts(qh_count, kmer_bernoulli)
 
-        fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - exp_kmer_counts) / (qh_count - exp_kmer_counts)
+        fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - exp_kmer_counts) / qh_count
 
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=False)
@@ -364,7 +362,10 @@ def compute_fam_mash_pvalue(alphabet_n, k, ref_fam_counts, query_counts, fam_cou
     # log p-value
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in range(fam_counts.size): 
-        fam_scores[i] = compute_log_poisson_pvalue(query_counts, fam_counts[i], kmer_bernoulli[i])
+
+        # !min(hog size, query size) instead of query size
+        n = np.int64(min(query_counts, ref_fam_counts[i]))
+        fam_scores[i] = compute_log_poisson_pvalue(n, fam_counts[i], kmer_bernoulli[i])
         
     return fam_scores
 
@@ -377,7 +378,10 @@ def compute_fam_kmerfreq_pvalue(query_occurs, query_counts, all_kmer_occurs, ref
     # log p-value
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in range(fam_counts.size): 
-        fam_scores[i] = compute_log_poisson_pvalue(query_counts, fam_counts[i], kmer_bernoulli[i])
+
+        # !min(hog size, query size) instead of query size
+        n = np.int64(min(query_counts, ref_fam_counts[i]))
+        fam_scores[i] = compute_log_poisson_pvalue(n, fam_counts[i], kmer_bernoulli[i])
         
     return fam_scores
 
@@ -391,7 +395,10 @@ def compute_hog_mash_pvalue(
     ## root-HOG p-value
     kmer_prob = kmer_prob_mash(alphabet_n, k)
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
-    fam_hog_scores[0] = compute_log_poisson_pvalue(query_counts, fam_hog_cumcounts[0], kmer_bernoulli)
+
+    # !min(hog size, query size) instead of query size
+    n = np.int64(min(query_counts, fam_ref_hog_counts[0]))
+    fam_hog_scores[0] = compute_log_poisson_pvalue(n, fam_hog_cumcounts[0], kmer_bernoulli)
     
     # set the root-HOG as best path
     fam_bestpath[0] = True
@@ -413,8 +420,11 @@ def compute_hog_mash_pvalue(
         
         for j in range(hog_offsets.size):
             if fam_hog_cumcounts[hog_offsets[j]] > 0:
+                
+                # !min(hog size, query size) instead of query size
+                n = np.int64(min(qh_count[j], fam_ref_hog_counts[hog_offsets[j]]))
                 fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
-                    qh_count[j], fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
+                    n, fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
             else:
                 fam_hog_scores[hog_offsets[j]] = 0.0
             
@@ -422,7 +432,7 @@ def compute_hog_mash_pvalue(
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)
 
     return fam_hog_scores, fam_bestpath
-    
+
 def compute_hog_kmerfreq_pvalue(
     fam_hog_cumcounts, query_counts, query_occurs, all_kmer_occurs, fam_ref_hog_counts, fam_level_offsets, hog2parent, fam_hog_counts, fam_hog_occurs):
 
@@ -435,7 +445,10 @@ def compute_hog_kmerfreq_pvalue(
     # compute expected number of k-mer matches
     kmer_prob = query_kmer_prob_freq(query_occurs, query_counts, all_kmer_occurs)
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
-    fam_hog_scores[0] = compute_log_poisson_pvalue(query_counts, fam_hog_cumcounts[0], kmer_bernoulli)
+
+    # !min(hog size, query size) instead of query size
+    n = np.int64(min(query_counts, fam_ref_hog_counts[0]))
+    fam_hog_scores[0] = compute_log_poisson_pvalue(n, fam_hog_cumcounts[0], kmer_bernoulli)
 
     # set the root-HOG as best path
     fam_bestpath[0] = True
@@ -460,53 +473,7 @@ def compute_hog_kmerfreq_pvalue(
 
         for j in range(hog_offsets.size):
             if fam_hog_cumcounts[hog_offsets[j]] > 0:
-                fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
-                    qh_count[j], fam_hog_cumcounts[hog_offsets[j]], kmer_bernoulli[j])
-            else:
-                fam_hog_scores[hog_offsets[j]] = 0.0
-
-        # store bestpath
-        store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)
-
-    return fam_hog_scores, fam_bestpath
-
-def compute_hog_kmerfreqmin_pvalue(
-    fam_hog_cumcounts, query_counts, query_occurs, all_kmer_occurs, fam_ref_hog_counts, fam_level_offsets, hog2parent, fam_hog_counts, fam_hog_occurs):
-
-    fam_hog_scores = np.zeros(fam_hog_cumcounts.shape, dtype=np.float64)
-    fam_bestpath = np.full(fam_hog_cumcounts.shape, False)
-    revcum_counts = np.full(fam_hog_cumcounts.shape, query_counts, dtype=np.uint16)
-    revcum_occurs = np.full(fam_hog_cumcounts.shape, query_occurs, dtype=np.uint32)
-
-    ## root-HOG score
-    # compute expected number of k-mer matches
-    kmer_prob = query_kmer_prob_freq(query_occurs, query_counts, all_kmer_occurs)
-    kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
-    fam_hog_scores[0] = compute_log_poisson_pvalue(query_counts, fam_hog_cumcounts[0], kmer_bernoulli)
-
-    # set the root-HOG as best path
-    fam_bestpath[0] = True
-    
-    # loop through hog levels
-    for i in range(1, fam_level_offsets.size - 2):
-        x = fam_level_offsets[i : i + 2]
-        hog_offsets = np.arange(x[0], x[1])
-
-        # grab parents
-        parent_offsets = hog2parent[hog_offsets]
-
-        # update query revcumcount and revcumoccur, basically substracting parent counts/occurs from query counts/occurs
-        qh_count = revcum_counts[parent_offsets] - fam_hog_counts[parent_offsets]
-        qh_occur = revcum_occurs[parent_offsets] - fam_hog_occurs[parent_offsets]
-        revcum_counts[hog_offsets] = qh_count
-        revcum_occurs[hog_offsets] = qh_occur
-
-        ## HOG score
-        kmer_prob = query_kmer_prob_freq(qh_occur, qh_count, all_kmer_occurs)
-        kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[hog_offsets])
-
-        for j in range(hog_offsets.size):
-            if fam_hog_cumcounts[hog_offsets[j]] > 0:
+                
                 # !min(hog size, query size) instead of query size
                 n = np.int64(min(qh_count[j], fam_ref_hog_counts[hog_offsets[j]]))
                 fam_hog_scores[hog_offsets[j]] = compute_log_poisson_pvalue(
@@ -1067,7 +1034,7 @@ class MergeSearch(object):
                 # probabilistic schemes
                 elif score == 'mash_pvalue':
                     top_fam_scores = compute_fam_mash_pvalue(
-                        alphabet_n, k, ref_fam_counts[top_fam], r1.size, top_fam_counts)
+                        alphabet_n - 1, k, ref_fam_counts[top_fam], r1.size, top_fam_counts)
                     
                 elif score == 'kmerfreq_pvalue' or score == 'kmerfreqmin_pvalue':
                     top_fam_scores = compute_fam_kmerfreq_pvalue(
@@ -1134,7 +1101,7 @@ class MergeSearch(object):
                     # probabilistic schemes
                     elif score == 'mash_pvalue':
                         fam_hog_scores, fam_bestpath = compute_hog_mash_pvalue(
-                            fam_hog_cumcounts,  r1.size, alphabet_n, k, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr], 
+                            fam_hog_cumcounts,  r1.size, alphabet_n - 1, k, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr], 
                             fam_level_offsets, fam_hog2parent, fam_hog_counts)
                     
                     elif score == 'kmerfreq_pvalue':

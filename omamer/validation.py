@@ -595,14 +595,18 @@ class Validation():
 
 	            is_pred = (True if score < t_val else False) if pvalue_score else (True if score >= t_val else False)
 
-	            # TP
 	            if is_pred:
+	                
+	                # TP
 	                if pred_fam==true_fam:
 	                    tp_query2tresh[q, t_off] = True
-	                # FP
+	                
+	                # FP and FN
 	                else:
 	                    fp_query2tresh[q, t_off] = True
-	            # FN
+	                    fn_query2tresh[q, t_off] = True
+	            
+	            # FN only
 	            else:
 	                fn_query2tresh[q, t_off] = True
 

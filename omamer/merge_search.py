@@ -566,7 +566,7 @@ class MergeSearch(object):
     		ref_hog_counts = self.ref_hog_counts_max
 
     	# set to low mem if probabilistic score
-    	if score in {'mash_pvalue', 'kmerfreq_pvalue', 'kmerfreqmin_pvalue'}:
+    	if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
     		self.low_mem = True
     		lookup_fun = self._lookup_pvalue
     	else:
@@ -1036,7 +1036,7 @@ class MergeSearch(object):
                     top_fam_scores = compute_fam_mash_pvalue(
                         alphabet_n - 1, k, ref_fam_counts[top_fam], r1.size, top_fam_counts)
                     
-                elif score == 'kmerfreq_pvalue' or score == 'kmerfreqmin_pvalue':
+                elif score == 'kmerfreq_pvalue':
                     top_fam_scores = compute_fam_kmerfreq_pvalue(
                         query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam], top_fam_counts)
                     
@@ -1045,7 +1045,7 @@ class MergeSearch(object):
                     continue     
                 
                 # resort by score
-                if (score == 'mash_pvalue') or (score == 'kmerfreq_pvalue') or (score == 'kmerfreqmin_pvalue'):
+                if (score == 'mash_pvalue') or (score == 'kmerfreq_pvalue'):
                     idx = (top_fam_scores).argsort()
                 else:
                     idx = (-top_fam_scores).argsort()
@@ -1106,11 +1106,6 @@ class MergeSearch(object):
                     
                     elif score == 'kmerfreq_pvalue':
                         fam_hog_scores, fam_bestpath = compute_hog_kmerfreq_pvalue(
-                            fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
-                            fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
-
-                    elif score == 'kmerfreqmin_pvalue':
-                        fam_hog_scores, fam_bestpath = compute_hog_kmerfreqmin_pvalue(
                             fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
                             fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
 

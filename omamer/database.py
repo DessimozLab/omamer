@@ -61,6 +61,8 @@ class Database(object):
         ChildrenProtNum = tables.Int64Col(pos=8)
         OmaID = tables.StringCol(255, pos=9, dflt=b"")
         LCAtaxOff = tables.UInt64Col(pos=10)
+        CompletenessScore = tables.Float64Col(pos=11)
+        NrMemberGenes = tables.Int64Col(pos=12)
 
     class FamilyTableFormat(tables.IsDescription):
         ID = tables.UInt64Col(pos=1)
@@ -69,8 +71,6 @@ class Database(object):
         HOGnum = tables.UInt64Col(pos=4)
         LevelOff = tables.UInt64Col(pos=5)
         LevelNum = tables.UInt64Col(pos=6)
-        CompletenessScore = tables.Float64Col(pos=7)
-        NrMemberGenes = tables.Int64Col(pos=8)
 
     class SpeciesTableFormat(tables.IsDescription):
         ID = tables.StringCol(255, pos=1, dflt=b"")
@@ -288,7 +288,7 @@ class Database(object):
         return tax2taxoff, species
 
     def update_hog_and_fam_tabs(
-        self, fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog=None, fam2completeness=None, fam2gene_nr=None
+        self, fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog=None, hog2gene_nr=None, hog2completeness=None
     ):
         assert self.mode in {"w", "a"}, "Database must be opened in write mode."
 
@@ -440,6 +440,19 @@ class Database(object):
                 else repeat(b"", hog_num)
             )
 
+            # quality measures
+            oma_hog_sizes = (
+                list(map(lambda x: hog2gene_nr[x], hogs))
+                if hog2gene_nr
+                else repeat(-1, hog_num)
+            )
+            
+            oma_hog_comps = (
+                list(map(lambda x: hog2completeness[x], hogs))
+                if hog2completeness
+                else repeat(-1, hog_num)
+            )
+
             hog_rows.extend(
                 list(
                     zip(
@@ -453,6 +466,8 @@ class Database(object):
                         child_prots_numbers,
                         oma_hogs,
                         repeat(0),
+                        oma_hog_sizes,
+                        oma_hog_comps
                     )
                 )
             )
@@ -465,9 +480,7 @@ class Database(object):
                     hog_off,
                     hog_num,
                     level_offsets_off,
-                    hog_level_offsets_num,
-                    fam2completeness[fam_id] if fam2completeness else -1,
-                    fam2gene_nr[fam_id] if fam2gene_nr else -1
+                    hog_level_offsets_num
                 )
             )
 
@@ -620,11 +633,11 @@ class DatabaseFromOMA(Database):
     """
     Used to parse the OMA browser database file
     """
-    def __init__(self, filename, root_taxon, min_fam_size=6, min_completeness=0, include_younger_fams=True, mode='r'):
+    def __init__(self, filename, root_taxon, min_fam_size=6, min_fam_completeness=0, include_younger_fams=True, mode='r'):
         super().__init__(filename, root_taxon, mode=mode)
 
         self.min_fam_size = min_fam_size
-        self.min_completeness = min_completeness
+        self.min_fam_completeness = min_fam_completeness
         self.include_younger_fams = include_younger_fams
 
     ### main function ###
@@ -639,7 +652,7 @@ class DatabaseFromOMA(Database):
         h5file = tables.open_file(oma_h5_path, mode="r")
 
         LOG.debug("select and strip OMA HOGs")
-        fam2hogs, hog2oma_hog, hog2tax, fam2completeness, fam2gene_nr = self.select_and_strip_OMA_HOGs(h5file)
+        fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness = self.select_and_strip_OMA_HOGs(h5file)
 
         LOG.debug("fill sequence buffer, species table and initiate protein table")
         (
@@ -666,7 +679,7 @@ class DatabaseFromOMA(Database):
         hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
 
         LOG.debug("fill family and HOG tables")
-        self.update_hog_and_fam_tabs(fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, fam2completeness, fam2gene_nr)
+        self.update_hog_and_fam_tabs(fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, hog2gene_nr, hog2completeness)
 
         # add family and hog offsets
         LOG.debug("complete protein table")
@@ -680,42 +693,44 @@ class DatabaseFromOMA(Database):
 
     ### functions to parse OMA database ###
     def select_and_strip_OMA_HOGs(self, h5file):
+        
         def _process_oma_hog(
             tax2level,
             curr_oma_taxa,
             curr_oma_hog,
             curr_oma_roothog,
+            curr_oma_roothog_ok,
             fam,
             fam2hogs,
             hog2oma_hog,
             hog2tax,
+            hog2gene_nr,
+            hog2completeness,
             roottax,
             include_younger_fams,
-            hog_gene_nr,
+            curr_oma_sizes,
             min_fam_size,
-            hog_completeness,
-            min_completeness,
-            fam2completeness,
-            fam2gene_nr
+            curr_oma_comps,
+            min_fam_completeness
         ):
             """
-			- decide whether an OMA HOG should be stored based on current root-HOG and HOG taxa
-			- update root-HOG if necessary and keep track of HOG taxa
-			"""
+            - decide whether an OMA HOG should be stored based on current root-HOG and HOG taxa
+            - update root-HOG if necessary and keep track of HOG taxa
+            """
 
             def _is_descendant(hog1, hog2):
                 """
-			    True if hog1 descendant of hog2
-			    """
+                True if hog1 descendant of hog2
+                """
                 return hog2 in self.parse_hogs(hog1)
 
             def _store(
-                fam, curr_oma_hog, curr_oma_roothog, fam2hogs, hog2oma_hog, hog2tax, tax
-            ):
+                fam, curr_oma_hog, curr_oma_roothog, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness,
+                tax, hog_size, hog_comp):
                 """
-			    - compute SPhog HOG id
-			    - fill containers
-			    """
+                - compute SPhog HOG id
+                - fill containers
+                """
                 hog = b".".join(
                     [
                         str(fam).encode("ascii"),
@@ -726,70 +741,90 @@ class DatabaseFromOMA(Database):
                 fam2hogs[fam].add(hog)
                 hog2oma_hog[hog] = curr_oma_hog
                 hog2tax[hog] = tax
+                hog2gene_nr[hog] = hog_size
+                hog2completeness[hog] = hog_comp
 
             # compute most ancestral taxon; when absent, flag it with 1000000
             tax_levels = list(map(lambda x: tax2level.get(x, 1000000), curr_oma_taxa))
             min_level = min(tax_levels)
-            
+
             # if none of the HOG taxa within the taxonomic scope defined by the root-taxon, skip the HOG
             if min_level == 1000000:
-                return fam, curr_oma_roothog
+                pass
+            
             else:
                 # the HOG taxon is the older taxon within the taxonimic scope defined by the root-taxon
-                tax = curr_oma_taxa[tax_levels.index(min_level)]  
+                idx = tax_levels.index(min_level)
+                hog_tax = curr_oma_taxa[idx]  
+                hog_size = curr_oma_sizes[idx]
+                hog_comp = curr_oma_comps[idx]
                 
                 # if the HOG is descendant of current OMA root-HOG, new sub-HOG
                 if _is_descendant(curr_oma_hog, curr_oma_roothog):
+                    
+                    # but store only if root-HOG passed quality thresholds
+                    if curr_oma_roothog_ok:
+                        
+                        _store(
+                            fam,
+                            curr_oma_hog,
+                            curr_oma_roothog,
+                            fam2hogs,
+                            hog2oma_hog,
+                            hog2tax,
+                            hog2gene_nr,
+                            hog2completeness,
+                            tax,
+                            hog_size,
+                            hog_comp
+                        )
 
-                    _store(
-                        fam,
-                        curr_oma_hog,
-                        curr_oma_roothog,
-                        fam2hogs,
-                        hog2oma_hog,
-                        hog2tax,
-                        tax,
-                    )
-                
-                # else, create a new family (include only family at root-taxon if include_younger_fams==False)
+                # else, new root-HOG (include only root-HOG at root-taxon if include_younger_fams==False)
                 elif (not include_younger_fams and tax == roottax) or include_younger_fams:
-
-                    # filter by CompletenessScore and NrMemberGenes
-                    if hog_gene_nr < min_fam_size or hog_completeness < min_completeness:
-                        return fam, curr_oma_roothog
-
-                    fam += 1
+                    
                     curr_oma_roothog = curr_oma_hog
+                        
+                    # but store it only if passes quality thresholds
+                    if hog_size >= min_fam_size and hog_comp >= min_fam_completeness:
+                        
+                        fam += 1
+                        curr_oma_roothog_ok = True
+                        
+                        # store after updating fam
+                        _store(
+                            fam,
+                            curr_oma_hog,
+                            curr_oma_roothog,
+                            fam2hogs,
+                            hog2oma_hog,
+                            hog2tax,
+                            hog2gene_nr,
+                            hog2completeness,
+                            tax,
+                            hog_size,
+                            hog_comp
+                        )
+                        
+                    else:
+                        curr_oma_roothog_ok = False
 
-                    # store after updating fam
-                    _store(
-                        fam,
-                        curr_oma_hog,
-                        curr_oma_roothog,
-                        fam2hogs,
-                        hog2oma_hog,
-                        hog2tax,
-                        tax,
-                    )
+            return fam, curr_oma_roothog, curr_oma_roothog_ok
 
-                    # store quality measures
-                    fam2completeness[fam] = hog_completeness
-                    fam2gene_nr[fam] = hog_gene_nr
-
-            return fam, curr_oma_roothog
-            
         def _process_oma_fam(
-            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, roottax, include_younger_fams, min_fam_size, min_completeness, fam2completeness, fam2gene_nr
-        ):
+            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness, 
+            roottax, include_younger_fams, min_fam_size, min_fam_completeness):
             """
-			apply _process_oma_hog to one OMA family
-			 - fam_tab_sort: slice of the HogLevel table for one family sorted by HOG ids
-			 - tax2level: mapper between taxa and their distance from roottax
-			"""
+            apply _process_oma_hog to one OMA family
+             - fam_tab_sort: slice of the HogLevel table for one family sorted by HOG ids
+             - tax2level: mapper between taxa and their distance from roottax
+            """
             # bookeepers for HOGs
             curr_oma_hog = fam_tab_sort[0]["ID"]
             curr_oma_roothog = None
+            curr_oma_roothog_ok = False
             curr_oma_taxa = []
+            curr_oma_comps = []
+            curr_oma_sizes = []
 
             for r in fam_tab_sort:
                 oma_hog, oma_tax, hog_completeness, hog_gene_nr = r[1], r[2], r[3], r[5]
@@ -797,50 +832,56 @@ class DatabaseFromOMA(Database):
                 # evaluation at new oma HOG
                 if oma_hog != curr_oma_hog:
 
-                    fam, curr_oma_roothog = _process_oma_hog(
+                    fam, curr_oma_roothog, curr_oma_roothog_ok = _process_oma_hog(
                         tax2level,
                         curr_oma_taxa,
                         curr_oma_hog,
                         curr_oma_roothog,
+                        curr_oma_roothog_ok,
                         fam,
                         fam2hogs,
                         hog2oma_hog,
                         hog2tax,
+                        hog2gene_nr,
+                        hog2completeness,
                         roottax,
                         include_younger_fams,
-                        hog_gene_nr,
+                        curr_oma_sizes,
                         min_fam_size,
-                        hog_completeness,
-                        min_completeness,
-                        fam2completeness,
-                        fam2gene_nr
+                        curr_oma_comps,
+                        min_fam_completeness 
                     )
 
                     # reset for new HOG
                     curr_oma_taxa = []
+                    curr_oma_sizes = []
+                    curr_oma_comps = []
                     curr_oma_hog = oma_hog
 
-                # track taxa of current oma HOG
+                # track taxa, completeness and size of current oma HOG
                 curr_oma_taxa.append(oma_tax)
+                curr_oma_comps.append(hog_completeness)
+                curr_oma_sizes.append(hog_gene_nr)
 
             # end
-            fam, curr_oma_roothog = _process_oma_hog(
+            fam, curr_oma_roothog, curr_oma_roothog_ok = _process_oma_hog(
                 tax2level,
                 curr_oma_taxa,
                 curr_oma_hog,
                 curr_oma_roothog,
+                curr_oma_roothog_ok,
                 fam,
                 fam2hogs,
                 hog2oma_hog,
                 hog2tax,
+                hog2gene_nr,
+                hog2completeness,
                 roottax,
                 include_younger_fams,
-                hog_gene_nr,
+                curr_oma_sizes,
                 min_fam_size,
-                hog_completeness,
-                min_completeness,
-                fam2completeness,
-                fam2gene_nr
+                curr_oma_comps,
+                min_fam_completeness
             )
 
             return fam
@@ -849,43 +890,42 @@ class DatabaseFromOMA(Database):
         tax2level = dict(zip(self._tax_tab[:]["ID"], self._tax_tab[:]["Level"]))
         hog_tab = h5file.root.HogLevel
 
-        # load families in memory
-        families = hog_tab.col("Fam")
-
         # containers
         fam2hogs = collections.defaultdict(set)
         hog2oma_hog = dict()
         hog2tax = dict()
-        fam2completeness = dict()
-        fam2gene_nr = dict()
+        hog2gene_nr = dict()
+        hog2completeness = dict()
 
         # bookeepers for families
         fam = 0
-        curr_fam = families[0]
+        curr_fam = hog_tab[0]['Fam']
         i = 0
         j = 0
 
-        for oma_fam in tqdm(families, disable=is_progress_disabled()):
+        for hog_ent in tqdm(hog_tab, disable=is_progress_disabled()):
+            oma_fam = hog_ent['Fam']
+
             if oma_fam != curr_fam:
 
                 # load fam table and sort by HOG ids
                 fam_tab = hog_tab[i:j]
-                fam_tab = np.sort(fam_tab, order="ID")
+                fam_tab_sort = np.sort(fam_tab, order="ID")
 
                 # select and strip HOGs of one family
                 fam = _process_oma_fam(
-                    fam_tab,
+                    fam_tab_sort,
                     tax2level,
                     fam,
                     fam2hogs,
                     hog2oma_hog,
                     hog2tax,
+                    hog2gene_nr,
+                    hog2completeness,    
                     self.root_taxon.encode("ascii"),
                     self.include_younger_fams,
-                    self.min_fam_size, 
-                    self.min_completeness,
-                    fam2completeness,
-                    fam2gene_nr
+                    self.min_fam_size,
+                    self.min_fam_completeness
                 )
 
                 # move pointer and update current family
@@ -903,17 +943,17 @@ class DatabaseFromOMA(Database):
             fam2hogs,
             hog2oma_hog,
             hog2tax,
+            hog2gene_nr,
+            hog2completeness,    
             self.root_taxon.encode("ascii"),
             self.include_younger_fams,
-            self.min_fam_size, 
-            self.min_completeness,
-            fam2completeness,
-            fam2gene_nr
+            self.min_fam_size,
+            self.min_fam_completeness
         )
 
-        del hog_tab, families
+        del hog_tab
 
-        return fam2hogs, hog2oma_hog, hog2tax, fam2completeness, fam2gene_nr
+        return fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness
 
     def select_and_filter_OMA_proteins(
         self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_fam_size

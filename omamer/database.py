@@ -61,8 +61,8 @@ class Database(object):
         ChildrenProtNum = tables.Int64Col(pos=8)
         OmaID = tables.StringCol(255, pos=9, dflt=b"")
         LCAtaxOff = tables.UInt64Col(pos=10)
-        CompletenessScore = tables.Float64Col(pos=11)
-        NrMemberGenes = tables.Int64Col(pos=12)
+        NrMemberGenes = tables.Int64Col(pos=11)
+        CompletenessScore = tables.Float64Col(pos=12)
 
     class FamilyTableFormat(tables.IsDescription):
         ID = tables.UInt64Col(pos=1)

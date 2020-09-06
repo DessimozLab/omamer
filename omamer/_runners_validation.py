@@ -150,10 +150,10 @@ def search_validate(
     chunksize = sbuff.prot_nr
 
     # setup search and validation steps
-    se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_{}_{}_top{}fams_{}_{}_{}_{}fbn_{}hbn.h5'.format(
+    se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_query_{}_{}_{}_top{}fams_{}_{}_{}_{}fbn_{}hbn.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]),
-        score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
+        '_'.join(query_sp.split()), score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
 
     if not is_complete(se_va_fn, db_path) or overwrite:
         if os.path.exists(se_va_fn):

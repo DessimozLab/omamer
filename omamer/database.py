@@ -774,13 +774,13 @@ class DatabaseFromOMA(Database):
                             hog2tax,
                             hog2gene_nr,
                             hog2completeness,
-                            tax,
+                            hog_tax,
                             hog_size,
                             hog_comp
                         )
 
                 # else, new root-HOG (include only root-HOG at root-taxon if include_younger_fams==False)
-                elif (not include_younger_fams and tax == roottax) or include_younger_fams:
+                elif (not include_younger_fams and hog_tax == roottax) or include_younger_fams:
                     
                     curr_oma_roothog = curr_oma_hog
                         
@@ -800,7 +800,7 @@ class DatabaseFromOMA(Database):
                             hog2tax,
                             hog2gene_nr,
                             hog2completeness,
-                            tax,
+                            hog_tax,
                             hog_size,
                             hog_comp
                         )

@@ -178,7 +178,7 @@ def search_validate(
             if len(ids) == chunksize:
                 # search and validate the chunk
                 ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
-                va.validate(ms, pvalue_score=pvalue_score)     
+                va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score)     
 
                 pbar.update(len(ids))
                 ids = []
@@ -187,7 +187,7 @@ def search_validate(
         # search and validate last chunk
         if len(ids) > 0:
             ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
-            va.validate(ms, pvalue_score=pvalue_score)
+            va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score)
             pbar.update(len(ids))
 
         # close stuff

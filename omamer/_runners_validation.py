@@ -242,24 +242,26 @@ if __name__ == "__main__":
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
         hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
         k = int(sys.argv[10])
-        thresholds = np.arange(*(float(x) for x in sys.argv[11].split(',')))  # e.g. "0,1.01,0.01"
-        oma_path = sys.argv[12]
+        # thresholds = np.arange(*(float(x) for x in sys.argv[11].split(',')))  # e.g. "0,1.01,0.01"
+        oma_path = sys.argv[11]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
-        score = sys.argv[13]
-        cum_mode = sys.argv[14]
-        top_m_fams = int(sys.argv[15])
-        val_mode = sys.argv[16]
-        neg_root_taxon = sys.argv[17]
-        focal_taxon = sys.argv[18]
-        fam_bin_num = int(sys.argv[19])
-        hog_bin_num = int(sys.argv[20])
-        query_sp = ' '.join(sys.argv[21].split('_'))
-        overwrite = True if (sys.argv[22] == 'True') else False
+        score = sys.argv[12]
+        cum_mode = sys.argv[13]
+        top_m_fams = int(sys.argv[14])
+        val_mode = sys.argv[15]
+        neg_root_taxon = sys.argv[16]
+        focal_taxon = sys.argv[17]
+        fam_bin_num = int(sys.argv[18])
+        hog_bin_num = int(sys.argv[19])
+        query_sp = ' '.join(sys.argv[20].split('_'))
+        overwrite = True if (sys.argv[21] == 'True') else False
 
-        if score in {'mash_pvalue', 'kmerfreq_pvalue', 'kmerfreqmin_pvalue'}:
+        if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
+            thresholds = np.concatenate((np.arange(-1000, -9, 10), np.arange(-10, -0.9, 1), np.arange(-1, -0.09, 0.1), np.arange(-0.1, -0.009, 0.01)))
             pvalue_score = True
         else:
+            thresholds = np.arange(0, 1.01, 0.01)
             pvalue_score = False
 
         search_validate(

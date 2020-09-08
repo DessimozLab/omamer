@@ -71,7 +71,7 @@ def _sum(x, y):
 def cumulate_counts_1fam(
     hog_cum_counts, fam_level_offsets, hog2parent, cum_fun, prop_fun):
 
-    current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint16)
+    current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint64)
 
     # iterate over level offsets backward
     for i in range(fam_level_offsets.size - 2):
@@ -83,14 +83,14 @@ def cumulate_counts_1fam(
         )
 
         # update current_best_child_count of the parents of the current hogs
-        for i in range(x[0], x[1]):
-            parent_off = hog2parent[i]
+        for j in range(x[0], x[1]):
+            parent_off = hog2parent[j]
 
             # only if parent exists
             if parent_off != -1:
-                c = current_best_child_count[hog2parent[i]]
-                current_best_child_count[hog2parent[i]] = prop_fun(
-                    c, hog_cum_counts[i]
+                c = current_best_child_count[hog2parent[j]]
+                current_best_child_count[hog2parent[j]] = prop_fun(
+                    c, hog_cum_counts[j]
                 )
 
 @numba.njit(parallel=True, nogil=True)
@@ -778,8 +778,12 @@ class MergeSearch(object):
                         # replace summed counts by maxed counts (from highest scoring root-to-leaf path)
                         top_fam_counts[fam_rank] = fam_hog_cumcounts[0]
 
-                # naive normalization procedures            
-                if score == 'querysize':
+                # tmp to develop non-parametric score
+                if score == 'dev':
+                    top_fam_scores = top_fam_counts
+                
+                # naive normalization procedures
+                elif score == 'querysize':
                     top_fam_scores = norm_fam_querysize(
                         top_fam_counts, r1.size)
                     
@@ -843,8 +847,13 @@ class MergeSearch(object):
                         cumulate_counts_1fam(
                             fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _sum)
                     
+                    # tmp to develop non-parametric score
+                    if score == 'dev':
+                        fam_hog_scores = fam_hog_counts
+                        fam_bestpath = np.full(fam_hog_counts.shape, False)
+
                     # naive normalization procedures
-                    if score == 'querysize':
+                    elif score == 'querysize':
                         fam_hog_scores, fam_bestpath = norm_hog_querysize(
                             fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts)
 

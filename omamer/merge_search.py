@@ -570,7 +570,7 @@ class MergeSearch(object):
     		self.low_mem = True
     		lookup_fun = self._lookup_pvalue
     	else:
-    		self.low_mem = False
+    		self.low_mem = True
     		lookup_fun = self._lookup
 
     	queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(

@@ -129,7 +129,7 @@ def build_kmer_table(
 def search_validate(
     db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
     thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-    pvalue_score, query_sp, overwrite=False):
+    pvalue_score, query_sp, overwrite, perm_nr, w_size):
     
     alphabet_n = 21 if not reduced_alphabet else 13
     
@@ -150,10 +150,11 @@ def search_validate(
     chunksize = sbuff.prot_nr
 
     # setup search and validation steps
-    se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_query_{}_{}_{}_top{}fams_{}_{}_{}_{}fbn_{}hbn.h5'.format(
+    se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_query_{}_{}_{}_top{}fams{}_{}_{}_{}_{}fbn_{}hbn.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]),
-        '_'.join(query_sp.split()), score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
+        '_'.join(query_sp.split()), score, cum_mode, top_m_fams, '_{}perms_w{}'.format(perm_nr, w_size) if (score == 'nonparam_pvalue') or (score == 'nonparam_naive') else: '', 
+        val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
 
     if not is_complete(se_va_fn, db_path) or overwrite:
         if os.path.exists(se_va_fn):
@@ -177,8 +178,9 @@ def search_validate(
             seqs.append(sbuff[i])
             if len(ids) == chunksize:
                 # search and validate the chunk
-                ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
-                va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score)     
+                ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size) 
+                va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, 
+                    perm_nr=perm_nr, w_size=w_size)     
 
                 pbar.update(len(ids))
                 ids = []
@@ -186,8 +188,8 @@ def search_validate(
 
         # search and validate last chunk
         if len(ids) > 0:
-            ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams)
-            va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score)
+            ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size) 
+            va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, perm_nr=perm_nr, w_size=w_size) 
             pbar.update(len(ids))
 
         # close stuff
@@ -256,8 +258,10 @@ if __name__ == "__main__":
         hog_bin_num = int(sys.argv[19])
         query_sp = ' '.join(sys.argv[20].split('_'))
         overwrite = True if (sys.argv[21] == 'True') else False
+        perm_nr = int(sys.argv[22])
+        w_size = int(sys.argv[23])
 
-        if score in {'mash_pvalue', 'kmerfreq_pvalue'}:
+        if score in {'mash_pvalue', 'kmerfreq_pvalue', 'nonparam_pvalue'}:
             thresholds = np.concatenate((np.arange(-1000, -9, 10), np.arange(-10, -0.9, 1), np.arange(-1, -0.09, 0.1), np.arange(-0.1, -0.009, 0.01)))
             pvalue_score = True
         else:
@@ -267,7 +271,7 @@ if __name__ == "__main__":
         search_validate(
             db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
             thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
-            pvalue_score, query_sp, overwrite)
+            pvalue_score, query_sp, overwrite, perm_nr, w_size)
     else:
         print('unknown step')
 

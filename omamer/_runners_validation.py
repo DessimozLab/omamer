@@ -153,7 +153,7 @@ def search_validate(
     se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_query_{}_{}_{}_top{}fams{}_{}_{}_{}_{}fbn_{}hbn.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
         'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]),
-        '_'.join(query_sp.split()), score, cum_mode, top_m_fams, '_{}perms_w{}'.format(perm_nr, w_size) if (score == 'nonparam_pvalue') or (score == 'nonparam_naive') else: '', 
+        '_'.join(query_sp.split()), score, cum_mode, top_m_fams, '_{}perms_w{}'.format(perm_nr, w_size) if (score == 'nonparam_pvalue') or (score == 'nonparam_naive') else '', 
         val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num)
 
     if not is_complete(se_va_fn, db_path) or overwrite:
@@ -197,6 +197,136 @@ def search_validate(
         va.va.close()
 
         set_complete(se_va_fn, db_path)
+
+def write_axiom_script(step, name, mem, hour_nr, oe_path):
+    '''
+    --> move to runners_validation?
+    '''
+    if step == 'db':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name=val_omamer
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+oma_path=$7
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{oma_path}}""".format(
+    mem, hour_nr, oe_path, oe_path))
+
+    elif step == 'sa':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name=val_omamer
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+reduced_alphabet=$7
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}}""".format(
+    mem, hour_nr, oe_path, oe_path))
+
+    elif step == 'ki':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name=val_omamer
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+reduced_alphabet=$7
+hidden_taxa=$8
+k=$9
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}}""".format(
+    mem, hour_nr, oe_path, oe_path))
+
+    elif step == 'se_va':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name=val_omamer
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+reduced_alphabet=$7
+hidden_taxa=$8
+k=$9
+oma_path=${{10}}
+score=${{11}}
+cum_mode=${{12}}
+top_m_fams=${{13}}
+val_mode=${{14}}
+neg_root_taxon=${{15}}
+focal_taxon=${{16}}
+fam_bin_num=${{17}}
+hog_bin_num=${{18}}
+query_sp=${{19}}
+overwrite=${{20}}
+perm_nr=${{21}}
+w_size=${{22}}
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}omamer/_runners_validation.py ${{omamer_path}} se_va ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}} ${{oma_path}} ${{score}} ${{cum_mode}} ${{top_m_fams}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{query_sp}} ${{overwrite}} ${{perm_nr}} ${{w_size}}""".format(
+    mem, hour_nr, oe_path, oe_path))
+
 
 if __name__ == "__main__":
     

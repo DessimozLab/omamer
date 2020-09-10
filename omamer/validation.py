@@ -190,7 +190,7 @@ class Validation():
 		'''
 		validate both family and subfamily leves
 		'''
-		self.validate_family(se, score, cum_mode, top_m_fams, perm_nr, w_size, pvalue_score)
+		self.validate_family(se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size)
 		self.validate_subfamily(se, hog2bin, pvalue_score)
 
 	####################################################################################################################################

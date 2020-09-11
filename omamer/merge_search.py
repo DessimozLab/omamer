@@ -747,7 +747,8 @@ def poisson_mle(perm_counts):
     '''
     MLE of lambda for Poisson is the sample mean
     '''
-    return np.sum(perm_counts) + 1 / perm_counts.size 
+    # I use a pseudo counts to not have probability of zero maybe some other ways are better...
+    return (np.sum(perm_counts) + 1) / perm_counts.size
 
 def compute_hog_nonparametric_pvalue(
     fam_hog_cumcounts, query_counts, fam_ref_hog_counts, fam_hog_perm_counts, 

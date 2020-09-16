@@ -733,10 +733,7 @@ def compute_fam_nonparametric_pvalue(fam_counts, query_counts, ref_fam_counts, f
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in range(fam_counts.size): 
         fc = fam_counts[i]
-        try:
-            fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
-        except:
-            print(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
+        fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
         
     return fam_scores
 
@@ -1327,8 +1324,11 @@ class MergeSearch(object):
                         top_fam_counts, top_fam_perm_counts, r1.size)
                 
                 elif score == 'nonparam_pvalue':
-                    top_fam_scores = compute_fam_nonparametric_pvalue(
-                        top_fam_counts, r1.size, ref_fam_counts[top_fam], top_fam_perm_counts)
+                    try:
+                        top_fam_scores = compute_fam_nonparametric_pvalue(
+                            top_fam_counts, r1.size, ref_fam_counts[top_fam], top_fam_perm_counts)
+                    except:
+                        print(zz)
 
                 # to enable parallel loop, pick one score and such else-continue statement (or understand what is going on)
                 else: 

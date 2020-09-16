@@ -711,11 +711,11 @@ def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
         else:
             # use theoretical sd if sum of permuted count equal 0 or less than two different count values (e.g. 3, 3 --> sd of 0...)
             # dubious?
-            if np.sum(perm_counts[:, i]) == 0 or np.unique(perm_counts[:, i]).size == 1:
+            if np.sum(perm_counts) == 0 or np.unique(perm_counts).size == 1:
                 mean = lamb
                 sd = sqrt(lamb * (1-p))
             else:
-                params = stats.norm.fit(perm_counts[:, i])
+                params = stats.norm.fit(perm_counts)
                 mean = params[-2]
                 sd = params[-1]
 

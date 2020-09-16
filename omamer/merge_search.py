@@ -26,7 +26,8 @@ import tables
 import os
 import pandas as pd
 import sys
-from scipy import special
+from scipy import special, stats
+from math import sqrt
 
 from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
@@ -432,6 +433,9 @@ def compute_log_poisson_pvalue(max_count, hog_cum_counts, lamb):
     # sum of these tail probabilities
     return special.logsumexp(tail_log_probs)
 
+def compute_log_normal_pvalue(max_count, hog_cum_counts, mean, sd):
+    return np.lib.scimath.log(np.sum(stats.norm.pdf(np.arange(hog_cum_counts, max_count + 1), loc=mean, scale=sd)))
+
 def compute_fam_mash_pvalue(alphabet_n, k, ref_fam_counts, query_counts, fam_counts):
     
     # probability to draw a k-mer in family k-mer set
@@ -681,17 +685,50 @@ def norm_fam_nonparametric(fam_counts, fam_perm_counts, query_counts):
             fam_scores[i] = (fc - mean_fpc) / query_counts
     return fam_scores
 
+def poisson_mle(perm_counts):
+    '''
+    MLE of lambda for Poisson is the sample mean
+    '''
+    # I use a pseudo counts to not have probability of zero maybe some other ways are better...
+    return (np.sum(perm_counts) + 1) / perm_counts.size
+  
+def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
+    '''
+    adaptively fit Poisson or normal distribution to permuted counts
+    and choose theoretical standard deviation if less than two x values
+    '''
+    if counts > 0:
+        max_count = np.int64(min(query_counts, ref_counts))
+        lamb = poisson_mle(perm_counts)
+
+        # derive p from sample mean (i.e. lambda = np)
+        p = lamb / max_count
+
+        # criteria from Decker and Fitzgibbon (1991) 
+        if (max_count * 0.31 * p) < 0.47:
+            return compute_log_poisson_pvalue(max_count, counts, lamb)
+
+        else:
+            # use theoretical sd if sum of permuted count equal 0 or less than two different count values (e.g. 3, 3 --> sd of 0...)
+            # dubious?
+            if np.sum(perm_counts[:, i]) == 0 or np.unique(perm_counts[:, i]).size == 1:
+                mean = lamb
+                sd = sqrt(lamb * (1-p))
+            else:
+                params = stats.norm.fit(perm_counts[:, i])
+                mean = params[-2]
+                sd = params[-1]
+
+            return compute_log_normal_pvalue(max_count, counts, mean, sd)
+    else:
+        return 0.0
+
 def compute_fam_nonparametric_pvalue(fam_counts, query_counts, ref_fam_counts, fam_perm_counts):
     
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in range(fam_counts.size): 
         fc = fam_counts[i]
-        if fc > 0:
-            max_count = np.int64(min(query_counts, ref_fam_counts[i]))
-            lamb = poisson_mle(fam_perm_counts[:, i])        
-            fam_scores[i] = compute_log_poisson_pvalue(max_count, fc, lamb)
-        else:
-            fam_scores[i] = 0.0
+        fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
         
     return fam_scores
 
@@ -743,13 +780,6 @@ def norm_hog_nonparametric(
 
     return fam_hog_scores, fam_bestpath
 
-def poisson_mle(perm_counts):
-    '''
-    MLE of lambda for Poisson is the sample mean
-    '''
-    # I use a pseudo counts to not have probability of zero maybe some other ways are better...
-    return (np.sum(perm_counts) + 1) / perm_counts.size
-
 def compute_hog_nonparametric_pvalue(
     fam_hog_cumcounts, query_counts, fam_ref_hog_counts, fam_hog_perm_counts, 
     fam_level_offsets, hog2parent, fam_hog_counts):
@@ -760,12 +790,14 @@ def compute_hog_nonparametric_pvalue(
 
     # compute and store root-HOG score
     hc = fam_hog_cumcounts[0]
-    if hc > 0:
-        max_count = np.int64(min(query_counts, fam_ref_hog_counts[0]))
-        lamb = poisson_mle(fam_hog_perm_counts[:, 0])    
-        fam_hog_scores[0] = compute_log_poisson_pvalue(max_count, hc, lamb)
-    else:
-        fam_hog_scores[0] = 0.0
+    fam_hog_scores[0] = compute_nonparametric_pvalue(hc, query_counts, fam_ref_hog_counts[0], fam_hog_perm_counts[:, 0])
+
+    # if hc > 0:
+    #     max_count = np.int64(min(query_counts, fam_ref_hog_counts[0]))
+    #     lamb = poisson_mle(fam_hog_perm_counts[:, 0])    
+    #     fam_hog_scores[0] = compute_log_poisson_pvalue(max_count, hc, lamb)
+    # else:
+    #     fam_hog_scores[0] = 0.0
 
     # set the root-HOG as best path
     fam_bestpath[0] = True
@@ -786,12 +818,14 @@ def compute_hog_nonparametric_pvalue(
         for j in range(hog_offsets.size):
             ho = hog_offsets[j]
             hc = fam_hog_cumcounts[ho]
-            if hc > 0:
-                max_count = np.int64(min(qh_count[j], fam_ref_hog_counts[ho]))
-                lamb = poisson_mle(fam_hog_perm_counts[:, ho])    
-                fam_hog_scores[ho] = compute_log_poisson_pvalue(max_count, hc, lamb)
-            else:
-                fam_hog_scores[ho] = 0.0
+            fam_hog_scores[ho] = compute_nonparametric_pvalue(hc, qh_count[j], fam_ref_hog_counts[ho], fam_hog_perm_counts[:, ho])
+
+            # if hc > 0:
+            #     max_count = np.int64(min(qh_count[j], fam_ref_hog_counts[ho]))
+            #     lamb = poisson_mle(fam_hog_perm_counts[:, ho])    
+            #     fam_hog_scores[ho] = compute_log_poisson_pvalue(max_count, hc, lamb)
+            # else:
+            #     fam_hog_scores[ho] = 0.0
 
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)

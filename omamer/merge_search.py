@@ -424,17 +424,17 @@ def norm_hog_querysize_hogsize_kmerfreq(
 def poisson_log_pmf(k, lda):
     return k * np.lib.scimath.log(lda) - lda - special.gammaln(k + 1)
 
-def compute_log_poisson_pvalue(max_count, hog_cum_counts, lamb):
+def compute_log_poisson_pvalue(n, hog_cum_counts, lamb):
         
     # probabilities for tail x values
-    tail_size = max_count - hog_cum_counts 
-    tail_log_probs = poisson_log_pmf(np.arange(hog_cum_counts, max_count + 1), np.full(tail_size + 1, lamb))
+    tail_size = n - hog_cum_counts 
+    tail_log_probs = poisson_log_pmf(np.arange(hog_cum_counts, n + 1), np.full(tail_size + 1, lamb))
 
     # sum of these tail probabilities
     return special.logsumexp(tail_log_probs)
 
-def compute_log_normal_pvalue(max_count, hog_cum_counts, mean, sd):
-    return np.lib.scimath.log(np.sum(stats.norm.pdf(np.arange(hog_cum_counts, max_count + 1), loc=mean, scale=sd)))
+def compute_log_normal_pvalue(n, hog_cum_counts, mean, sd):
+    return np.lib.scimath.log(np.sum(stats.norm.pdf(np.arange(hog_cum_counts, n + 1), loc=mean, scale=sd)))
 
 def compute_fam_mash_pvalue(alphabet_n, k, ref_fam_counts, query_counts, fam_counts):
     
@@ -688,25 +688,30 @@ def norm_fam_nonparametric(fam_counts, fam_perm_counts, query_counts):
 def poisson_mle(perm_counts):
     '''
     MLE of lambda for Poisson is the sample mean
+    in absence of any permuted count, return almost 0
     '''
-    # I use a pseudo counts to not have probability of zero maybe some other ways are better...
-    return (np.sum(perm_counts) + 1) / perm_counts.size
+    s = np.sum(perm_counts)
+    return (s / perm_counts.size) if s > 0 else (0.1 / perm_counts.size) 
   
 def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
     '''
     adaptively fit Poisson or normal distribution to permuted counts
     and choose theoretical standard deviation if less than two x values
     '''
-    if counts > 0:
-        max_count = np.int64(min(query_counts, ref_counts))
+    n = np.int64(min(query_counts, ref_counts))
+
+    # requires at least once shared k-mer and n > 0
+    if counts > 0 and n > 0:
+
+        # sample mean
         lamb = poisson_mle(perm_counts)
 
         # derive p from sample mean (i.e. lambda = np)
-        p = lamb / max_count
+        p = lamb / n
 
         # criteria from Decker and Fitzgibbon (1991) 
-        if (max_count * 0.31 * p) < 0.47:
-            return compute_log_poisson_pvalue(max_count, counts, lamb)
+        if (n * 0.31 * p) < 0.47:
+            return compute_log_poisson_pvalue(n, counts, lamb)
 
         else:
             # use theoretical sd if sum of permuted count equal 0 or less than two different count values (e.g. 3, 3 --> sd of 0...)
@@ -719,7 +724,7 @@ def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
                 mean = params[-2]
                 sd = params[-1]
 
-            return compute_log_normal_pvalue(max_count, counts, mean, sd)
+            return compute_log_normal_pvalue(n, counts, mean, sd)
     else:
         return 0.0
 
@@ -728,7 +733,10 @@ def compute_fam_nonparametric_pvalue(fam_counts, query_counts, ref_fam_counts, f
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in range(fam_counts.size): 
         fc = fam_counts[i]
-        fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
+        try:
+            fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
+        except:
+            print(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
         
     return fam_scores
 

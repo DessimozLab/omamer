@@ -186,11 +186,11 @@ class Validation():
 	    return self._get_node_fam('FP_pos_neg')
 
 	####################################################################################################################################
-	def validate(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, hog2bin=True):
+	def validate(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, comp_t, size_t, hog2bin=True):
 		'''
-		validate both family and subfamily leves
+		validate both family and subfamily levels
 		'''
-		self.validate_family(se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size)
+		self.validate_family(se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, comp_t, size_t)
 		self.validate_subfamily(se, hog2bin, pvalue_score)
 
 	####################################################################################################################################
@@ -520,7 +520,7 @@ class Validation():
 	def clade_specific_negatives(self):
 		return self.get_clade_specific_negatives(self.nwk_fn, self.oma_db_fn, self.neg_root_taxon, self.db.min_prot_nr, self.max_query_nr)
 
-	def validate_family(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size):
+	def validate_family(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, comp_t, size_t):
 
 		# get the negative queries
 		if self.neg_root_taxon != 'random':
@@ -540,7 +540,8 @@ class Validation():
 
 		# search negatives
 		neg_ms = MergeSearch(ki=self.ki, nthreads=self.nthreads)
-		neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size)
+		neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, 
+			comp_t=comp_t, size_t=size_t)
 
 		# validate negatives
 		tn_query2tresh, fp_neg_query2tresh = self._validate_negative(

@@ -119,13 +119,24 @@ def search_seq_kmers(
 
 @numba.njit
 def get_top_m_fams(
-    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr):
+    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter):
     '''
     1. get the top m families from summed k-mer counts
     2. recalculate best root-to-leaf counts if cum_mode==max
+    option to filter some families for validation
     '''
+    # # get top m families from summed k-mer counts
+    # top_fam = np.argsort(fam_counts)[::-1][:top_m_fams]
+    # top_fam_counts = fam_counts[top_fam]
+
+    # filter families
+    if fam_filter.size > 0:
+        fam_offsets = np.arange(fam_counts.size)[fam_filter]
+    else:
+        fam_offsets = np.arange(fam_counts.size)
+
     # get top m families from summed k-mer counts
-    top_fam = np.argsort(fam_counts)[::-1][:top_m_fams]
+    top_fam = fam_offsets[np.argsort(fam_counts[fam_filter])[::-1][:top_m_fams]]
     top_fam_counts = fam_counts[top_fam]
 
     # cumulated queryHOG counts for the top m families
@@ -900,10 +911,14 @@ class MergeSearch(object):
 
     @lazy_property
     def ref_fam_counts_max(self):
-    	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]		
+    	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]
+
+    @lazy_property
+    def fam_filter(self, comp_t, size_t):
+        return ~((self.hog_tab[self.fam_tab['HOGoff']]['CompletenessScore'] < comp_t) + (self.hog_tab[self.fam_tab['HOGoff']]['NrMemberGenes'] < size_t))		
 
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10, 
-        top_n_fams=1, perm_nr=10, w_size=6):
+        top_n_fams=1, perm_nr=10, w_size=6, comp_t=None, size_t=None):
         
         # load query sequences
         if seqs:
@@ -926,6 +941,12 @@ class MergeSearch(object):
         	self.low_mem = False
         	lookup_fun = self._lookup
 
+        # family filter
+        if comp_t and size_t:
+            fam_filter = self.fam_filter(comp_t, size_t)
+        else:
+            fam_filter = np.array([])
+
         queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
             sbuff.buff,
             sbuff.idx,
@@ -939,6 +960,7 @@ class MergeSearch(object):
             self.hog_tab,
             self.level_arr,
             self.max_hog_nr,
+            fam_filter,
             top_n_fams = top_n_fams,
             top_m_fams = top_m_fams,
             cum_mode = cum_mode, 
@@ -1019,6 +1041,7 @@ class MergeSearch(object):
             hog_tab,
             level_arr,
             max_hog_nr,
+            fam_filter,
             top_n_fams, 
             top_m_fams,
             cum_mode,
@@ -1076,7 +1099,7 @@ class MergeSearch(object):
 
                 ## get the raw top m families from summed k-mer counts
                 top_fam, top_fam_counts = get_top_m_fams(
-                    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr)
+                    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter)
                 
                 ## search permuted sequences if non-parametric score
                 if (score == 'nonparam_naive') or (score == 'nonparam_pvalue'):
@@ -1228,6 +1251,7 @@ class MergeSearch(object):
             hog_tab,
             level_arr,
             max_hog_nr,
+            fam_filter,
             top_n_fams, 
             top_m_fams,
             cum_mode,
@@ -1285,7 +1309,7 @@ class MergeSearch(object):
 
                 ## get the raw top m families from summed k-mer counts
                 top_fam, top_fam_counts = get_top_m_fams(
-                    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr)
+                    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter)
                 
                 ## search permuted sequences if non-parametric score
                 if (score == 'nonparam_naive') or (score == 'nonparam_pvalue'):

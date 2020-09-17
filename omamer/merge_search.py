@@ -707,7 +707,7 @@ def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
         lamb = poisson_mle(perm_counts)
 
         # derive p from sample mean (i.e. lambda = np)
-        p = np.int64(min(lamb / n, 1))
+        p = np.float64(min(lamb / n, 1))
 
         # criteria from Decker and Fitzgibbon (1991) 
         if (n * 0.31 * p) < 0.47:

@@ -469,7 +469,7 @@ def compute_cdist_pvalue(cdist, perm_counts, hog_cum_counts):
     loc = params[-2]
     scale = params[-1]
 
-    return stats.cdist.logsf(hog_cum_counts, loc=loc, scale=scale, *arg)
+    return cdist.logsf(hog_cum_counts, loc=loc, scale=scale, *arg)
 
 def compute_fam_mash_pvalue(alphabet_n, k, ref_fam_counts, query_counts, fam_counts):
     

@@ -454,8 +454,22 @@ def compute_log_poisson_pvalue(n, hog_cum_counts, lamb):
     # sum of these tail probabilities
     return special.logsumexp(tail_log_probs)
 
-def compute_log_normal_pvalue(n, hog_cum_counts, mean, sd):
-    return np.lib.scimath.log(np.sum(stats.norm.pdf(np.arange(hog_cum_counts, n + 1), loc=mean, scale=sd)))
+def compute_log_normal_pvalue(hog_cum_counts, mean, sd):
+    # actually more stable to use to use the log survival function
+    return stats.norm.logsf(hog_cum_counts, loc=mean, scale=sd)
+
+    #return np.lib.scimath.log(np.sum(stats.norm.pdf(np.arange(hog_cum_counts, n + 1), loc=mean, scale=sd)))
+
+def compute_cdist_pvalue(cdist, perm_counts, hog_cum_counts):
+    '''
+    should work for any continuous function
+    '''
+    params = cdist.fit(perm_counts)
+    arg = params[:-2]
+    loc = params[-2]
+    scale = params[-1]
+
+    return stats.cdist.logsf(hog_cum_counts, loc=loc, scale=scale, *arg)
 
 def compute_fam_mash_pvalue(alphabet_n, k, ref_fam_counts, query_counts, fam_counts):
     
@@ -713,8 +727,9 @@ def poisson_mle(perm_counts):
     '''
     s = np.sum(perm_counts)
     return (s / perm_counts.size) if s > 0 else (0.1 / perm_counts.size) 
-  
-def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
+
+# various distribution to fit
+def compute_nonparametric_poinorm_pvalue(counts, query_counts, ref_counts, perm_counts):
     '''
     adaptively fit Poisson or normal distribution to permuted counts
     and choose theoretical standard deviation if less than two x values
@@ -745,16 +760,83 @@ def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts):
                 mean = params[-2]
                 sd = params[-1]
 
-            return compute_log_normal_pvalue(n, counts, mean, sd)
+            return compute_log_normal_pvalue(counts, mean, sd)
     else:
         return 0.0
 
-def compute_fam_nonparametric_pvalue(fam_counts, query_counts, ref_fam_counts, fam_perm_counts):
+def compute_nonparametric_poisson_pvalue(counts, query_counts, ref_counts, perm_counts):
+    n = np.int64(min(query_counts, ref_counts))
+
+    # requires at least once shared k-mer and n > 0
+    if counts > 0 and n > 0:
+
+        # sample mean
+        lamb = poisson_mle(perm_counts)
+
+        return compute_log_poisson_pvalue(n, counts, lamb)
+
+    else:
+        return 0.0
+
+def compute_nonparametric_norm_pvalue(counts, query_counts, ref_counts, perm_counts):
+    n = np.int64(min(query_counts, ref_counts))
+
+    # requires at least once shared k-mer and n > 0
+    if counts > 0 and n > 0:
+
+        # sample mean
+        lamb = poisson_mle(perm_counts)
+
+        # derive p from sample mean (i.e. lambda = np)
+        p = np.float64(min(lamb / n, 1))
+
+        # use theoretical sd if sum of permuted count equal 0 or less than two different count values (e.g. 3, 3 --> sd of 0...)
+        # dubious?
+        if np.sum(perm_counts) == 0 or np.unique(perm_counts).size == 1:
+            mean = lamb
+            sd = sqrt(lamb * (1-p))
+        else:
+            params = stats.norm.fit(perm_counts)
+            mean = params[-2]
+            sd = params[-1]
+
+        return compute_log_normal_pvalue(counts, mean, sd)
+
+    else:
+        return 0.0
+
+def compute_nonparametric_gamma_pvalue(counts, query_counts, ref_counts, perm_counts):
+    
+    n = np.int64(min(query_counts, ref_counts))
+
+    # requires at least once shared k-mer and n > 0
+    if counts > 0 and n > 0:
+
+        return compute_cdist_pvalue(stats.gamma, perm_counts, counts)
+    
+    else:
+        return 0.0
+
+def compute_nonparametric_pvalue(counts, query_counts, ref_counts, perm_counts, dist):
+
+    if dist == 'poisson':
+        return compute_nonparametric_poisson_pvalue(counts, query_counts, ref_counts, perm_counts)
+
+    elif dist == 'normal':
+        return compute_nonparametric_norm_pvalue(counts, query_counts, ref_counts, perm_counts)
+
+    elif dist == 'poinorm':
+        return compute_nonparametric_poinorm_pvalue(counts, query_counts, ref_counts, perm_counts)
+
+    elif dist == 'gamma':
+        return compute_nonparametric_gamma_pvalue(counts, query_counts, ref_counts, perm_counts)
+
+def compute_fam_nonparametric_pvalue(fam_counts, query_counts, ref_fam_counts, fam_perm_counts, dist):
     
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in range(fam_counts.size): 
         fc = fam_counts[i]
-        fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i])
+        fam_scores[i] = compute_nonparametric_pvalue(fc, query_counts, ref_fam_counts[i], fam_perm_counts[:, i], dist)
         
     return fam_scores
 
@@ -808,7 +890,7 @@ def norm_hog_nonparametric(
 
 def compute_hog_nonparametric_pvalue(
     fam_hog_cumcounts, query_counts, fam_ref_hog_counts, fam_hog_perm_counts, 
-    fam_level_offsets, hog2parent, fam_hog_counts):
+    fam_level_offsets, hog2parent, fam_hog_counts, dist):
     
     fam_hog_scores = np.zeros(fam_hog_cumcounts.shape, dtype=np.float64)
     fam_bestpath = np.full(fam_hog_cumcounts.shape, False)
@@ -816,7 +898,7 @@ def compute_hog_nonparametric_pvalue(
 
     # compute and store root-HOG score
     hc = fam_hog_cumcounts[0]
-    fam_hog_scores[0] = compute_nonparametric_pvalue(hc, query_counts, fam_ref_hog_counts[0], fam_hog_perm_counts[:, 0])
+    fam_hog_scores[0] = compute_nonparametric_pvalue(hc, query_counts, fam_ref_hog_counts[0], fam_hog_perm_counts[:, 0], dist)
 
     # if hc > 0:
     #     max_count = np.int64(min(query_counts, fam_ref_hog_counts[0]))
@@ -844,7 +926,7 @@ def compute_hog_nonparametric_pvalue(
         for j in range(hog_offsets.size):
             ho = hog_offsets[j]
             hc = fam_hog_cumcounts[ho]
-            fam_hog_scores[ho] = compute_nonparametric_pvalue(hc, qh_count[j], fam_ref_hog_counts[ho], fam_hog_perm_counts[:, ho])
+            fam_hog_scores[ho] = compute_nonparametric_pvalue(hc, qh_count[j], fam_ref_hog_counts[ho], fam_hog_perm_counts[:, ho], dist)
 
             # if hc > 0:
             #     max_count = np.int64(min(qh_count[j], fam_ref_hog_counts[ho]))
@@ -924,7 +1006,7 @@ class MergeSearch(object):
     	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]
 
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10, 
-        top_n_fams=1, perm_nr=10, w_size=6, comp_t=0, size_t=0):
+        top_n_fams=1, perm_nr=10, w_size=6, dist='poinorm', comp_t=0, size_t=0):
         
         # load query sequences
         if seqs:
@@ -974,7 +1056,8 @@ class MergeSearch(object):
             ref_fam_counts = ref_fam_counts,
             ref_hog_counts = ref_hog_counts,
             perm_nr = perm_nr,
-            w_size = w_size)
+            w_size = w_size,
+            dist = dist)
 
         self._queryFam_ranked = queryFam_ranked
         self._queryFam_scores = queryFam_scores
@@ -1058,7 +1141,8 @@ class MergeSearch(object):
             ref_fam_counts,
             ref_hog_counts,
             perm_nr,
-            w_size
+            w_size,
+            dist
         ):   
             '''
             top_n_fams: number of family for which HOG scores are computed
@@ -1268,7 +1352,8 @@ class MergeSearch(object):
             ref_fam_counts,
             ref_hog_counts,
             perm_nr,
-            w_size
+            w_size,
+            dist
         ):   
             '''
             top_n_fams: number of family for which HOG scores are computed
@@ -1357,11 +1442,8 @@ class MergeSearch(object):
                         top_fam_counts, top_fam_perm_counts, r1.size)
                 
                 elif score == 'nonparam_pvalue':
-                    try:
-                        top_fam_scores = compute_fam_nonparametric_pvalue(
-                            top_fam_counts, r1.size, ref_fam_counts[top_fam], top_fam_perm_counts)
-                    except:
-                        print(zz)
+                    top_fam_scores = compute_fam_nonparametric_pvalue(
+                        top_fam_counts, r1.size, ref_fam_counts[top_fam], top_fam_perm_counts, dist)
 
                 # to enable parallel loop, pick one score and such else-continue statement (or understand what is going on)
                 else: 
@@ -1440,7 +1522,7 @@ class MergeSearch(object):
                     elif score == 'nonparam_pvalue':
                         fam_hog_scores, fam_bestpath = compute_hog_nonparametric_pvalue(
                             fam_hog_cumcounts, r1.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr], 
-                            top_fam_hog_perm_counts[:, fam_rank], fam_level_offsets, fam_hog2parent, fam_hog_counts)
+                            top_fam_hog_perm_counts[:, fam_rank], fam_level_offsets, fam_hog2parent, fam_hog_counts, dist)
                         
                     # to enable parallel loop, pick one score and such else-continue statement
                     else: 

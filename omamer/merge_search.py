@@ -129,15 +129,49 @@ def get_top_m_fams(
     # top_fam = np.argsort(fam_counts)[::-1][:top_m_fams]
     # top_fam_counts = fam_counts[top_fam]
 
+@numba.njit
+def get_top_m_fams(
+    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter):
+    '''
+    1. get the top m families from summed k-mer counts
+    2. recalculate best root-to-leaf counts if cum_mode==max
+    option to filter some families for validation
+    '''
     # filter families
     if fam_filter.size > 0:
         fam_offsets = np.arange(fam_counts.size)[fam_filter]
+        
+        # get top m families from summed k-mer counts
+        top_fam = fam_offsets[np.argsort(fam_counts[fam_filter])[::-1][:top_m_fams]]        
+    
     else:
-        fam_offsets = np.arange(fam_counts.size)
+        top_fam = np.argsort(fam_counts)[::-1][:top_m_fams]
 
-    # get top m families from summed k-mer counts
-    top_fam = fam_offsets[np.argsort(fam_counts[fam_filter])[::-1][:top_m_fams]]
     top_fam_counts = fam_counts[top_fam]
+
+    # cumulated queryHOG counts for the top m families
+    # small optimization: remember the fam_hog_cumcounts for the top n families for next step
+    if cum_mode == 'max':
+
+        # iterate over top n families
+        for fam_rank in numba.prange(top_m_fams):
+            fam_off = top_fam[fam_rank]
+            fam_ent = fam_tab[fam_off]
+            fam_hog_off = fam_ent['HOGoff']
+            fam_hog_nr = fam_ent['HOGnum']
+
+            # compute the cumulated HOG counts for that family
+            fam_hog_cumcounts = hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr].copy()
+
+            fam_hog2parent = get_fam_hog2parent(fam_ent, hog_tab)
+            fam_level_offsets = get_fam_level_offsets(fam_ent, level_arr)
+
+            cumulate_counts_1fam(fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
+
+            # replace summed counts by maxed counts (from highest scoring root-to-leaf path)
+            top_fam_counts[fam_rank] = fam_hog_cumcounts[0]
+    
+    return top_fam, top_fam_counts    top_fam_counts = fam_counts[top_fam]
 
     # cumulated queryHOG counts for the top m families
     # small optimization: remember the fam_hog_cumcounts for the top n families for next step
@@ -913,12 +947,8 @@ class MergeSearch(object):
     def ref_fam_counts_max(self):
     	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]
 
-    @lazy_property
-    def fam_filter(self, comp_t, size_t):
-        return ~((self.hog_tab[self.fam_tab['HOGoff']]['CompletenessScore'] < comp_t) + (self.hog_tab[self.fam_tab['HOGoff']]['NrMemberGenes'] < size_t))		
-
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10, 
-        top_n_fams=1, perm_nr=10, w_size=6, comp_t=None, size_t=None):
+        top_n_fams=1, perm_nr=10, w_size=6, comp_t=0, size_t=0):
         
         # load query sequences
         if seqs:
@@ -942,10 +972,10 @@ class MergeSearch(object):
         	lookup_fun = self._lookup
 
         # family filter
-        if comp_t and size_t:
-            fam_filter = self.fam_filter(comp_t, size_t)
+        if comp_t or size_t:
+            fam_filter = self.get_fam_filter(comp_t, size_t)
         else:
-            fam_filter = np.array([])
+            fam_filter = np.array([], dtype=np.int64)
 
         queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
             sbuff.buff,
@@ -977,6 +1007,9 @@ class MergeSearch(object):
 
         # store ids of sbuff
         self._query_ids = sbuff.ids.flatten()
+
+    def get_fam_filter(self, comp_t, size_t):
+        return ~((self.hog_tab[self.fam_tab['HOGoff']]['CompletenessScore'] < comp_t) + (self.hog_tab[self.fam_tab['HOGoff']]['NrMemberGenes'] < size_t))       
 
     def output_results(self, threshold=0.1):
 

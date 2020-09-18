@@ -812,7 +812,14 @@ def compute_nonparametric_gamma_pvalue(counts, query_counts, ref_counts, perm_co
     # requires at least once shared k-mer and n > 0
     if counts > 0 and n > 0:
 
-        return compute_cdist_pvalue(stats.gamma, perm_counts, counts)
+        # need at least 2 datapoints
+        if np.sum(perm_counts) > 0 and np.unique(perm_counts).size > 1:
+
+            return compute_cdist_pvalue(stats.gamma, perm_counts, counts)
+
+        # else fall back to a poisson or normal 
+        else:
+            return compute_nonparametric_poinorm_pvalue(counts, query_counts, ref_counts, perm_counts)
     
     else:
         return 0.0

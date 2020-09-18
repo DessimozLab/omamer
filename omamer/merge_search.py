@@ -171,30 +171,6 @@ def get_top_m_fams(
             # replace summed counts by maxed counts (from highest scoring root-to-leaf path)
             top_fam_counts[fam_rank] = fam_hog_cumcounts[0]
     
-    return top_fam, top_fam_counts    top_fam_counts = fam_counts[top_fam]
-
-    # cumulated queryHOG counts for the top m families
-    # small optimization: remember the fam_hog_cumcounts for the top n families for next step
-    if cum_mode == 'max':
-
-        # iterate over top n families
-        for fam_rank in numba.prange(top_m_fams):
-            fam_off = top_fam[fam_rank]
-            fam_ent = fam_tab[fam_off]
-            fam_hog_off = fam_ent['HOGoff']
-            fam_hog_nr = fam_ent['HOGnum']
-
-            # compute the cumulated HOG counts for that family
-            fam_hog_cumcounts = hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr].copy()
-
-            fam_hog2parent = get_fam_hog2parent(fam_ent, hog_tab)
-            fam_level_offsets = get_fam_level_offsets(fam_ent, level_arr)
-
-            cumulate_counts_1fam(fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
-
-            # replace summed counts by maxed counts (from highest scoring root-to-leaf path)
-            top_fam_counts[fam_rank] = fam_hog_cumcounts[0]
-    
     return top_fam, top_fam_counts
 
 

@@ -397,7 +397,7 @@ if __name__ == "__main__":
         overwrite = True if (sys.argv[21] == 'True') else False
         perm_nr = int(sys.argv[22])
         w_size = int(sys.argv[23])
-        dist = int(sys.argv[24])
+        dist = sys.argv[24]
         comp_t = float(sys.argv[25])
         size_t = int(sys.argv[26])
 

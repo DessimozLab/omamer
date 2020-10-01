@@ -31,7 +31,7 @@ def mkdb_oma(args):
     LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
-        args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_fam_size=args.min_fam_size, min_fam_completeness=0, include_younger_fams=True, mode='w'
+        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, min_fam_completeness=0, include_younger_fams=True, mode='w'
     )
 
     oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
@@ -49,7 +49,6 @@ def mkdb_oma(args):
     db.close()
     LOG.info('Done')
 
-# new search using merge_search.py
 def search(args):
     from Bio import SeqIO
     from tqdm import tqdm
@@ -60,10 +59,12 @@ def search(args):
     from .merge_search import MergeSearch
 
     # reload
-    db = Database(args.db, nthreads=args.nthreads)
+    db = Database(
+        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, min_fam_completeness=0, include_younger_fams=True, mode='r'
+    )
 
     # setup search
-    ms = MergeSearch(ki=db.ki, nthreads=args.nthreads, include_extant_genes=args.include_extant_genes)
+    ms = MergeSearch(ki=db.ki, nthreads=args.nthreads, low_mem=False, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output 
     print_header = (args.out.name != sys.stdout.name)

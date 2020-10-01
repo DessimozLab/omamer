@@ -59,12 +59,15 @@ def search(args):
     from .merge_search import MergeSearch
 
     # reload
-    db = Database(
-        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, min_fam_completeness=0, include_younger_fams=True, mode='r'
-    )
+    db = Database(args.db)
 
     # setup search
     ms = MergeSearch(ki=db.ki, nthreads=args.nthreads, low_mem=False, include_extant_genes=args.include_extant_genes)
+
+    if args.score == 'default':
+        score = 'querysize_hogsize_kmerfreq'
+    elif args.score == 'sensitive':
+        score = 'nonparam_naive'
 
     # only print header for file output 
     print_header = (args.out.name != sys.stdout.name)
@@ -79,7 +82,9 @@ def search(args):
         ids.append(rec.id)
         seqs.append(str(rec.seq))
         if len(ids) == args.chunksize:
-            ms.merge_search(seqs=seqs, ids=ids)
+            ms.merge_search(
+                seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', comp_t=0, size_t=0
+            ) 
             pbar.update(len(ids))
             df = ms.output_results(threshold=args.threshold)
             if df.size >0:
@@ -90,7 +95,9 @@ def search(args):
 
     # final search
     if len(ids) > 0:
-        ms.merge_search(ids=ids, seqs=seqs)
+        ms.merge_search(
+            seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', comp_t=0, size_t=0
+        ) 
         df = ms.output_results(threshold=args.threshold)
         pbar.update(len(ids))
         if df.size >0:

@@ -136,10 +136,15 @@ search_parser.add_argument(
     "--query", required=True, help="FASTA formatted sequences", type=FileType("r")
 )
 
-# score : naive one should probably be k-me
+search_parser.add_argument(
+    "--score", 
+    default="default", 
+    choices=["default", "sensitive"], 
+    help="family and subfamily score"
+)
 
 search_parser.add_argument(
-    "--threshold", default=0.05, type=float, help="threshold used to vary placement specificity"
+    "--threshold", default=0.1, type=float, help="score threshold used to vary placement specificity"
 )
 search_parser.add_argument(
     "--out",
@@ -151,12 +156,19 @@ search_parser.add_argument('--include_extant_genes', action='store_true', help='
 search_parser.add_argument(
     "--chunksize", default=5000, type=int, help="Number of queries to process at once (default 5000)"
 )
+# search_parser.add_argument(
+#     "--nthreads",
+#     default=get_thread_count(),
+#     type=int,
+#     help="Number of threads to use (default {}).".format(get_thread_count()),
+# )
 search_parser.add_argument(
     "--nthreads",
-    default=get_thread_count(),
+    default=1,
     type=int,
-    help="Number of threads to use (default {}).".format(get_thread_count()),
+    help="Number of threads to use (default 1)"
 )
+
 search_parser.add_argument(
     "--log_level",
     default="info",

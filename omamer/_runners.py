@@ -31,7 +31,7 @@ def mkdb_oma(args):
     LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
-        args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_fam_size=args.min_fam_size, mode='w'
+        args.db, root_taxon=args.root_taxon, include_younger_fams=True, min_fam_size=args.min_fam_size, min_fam_completeness=0, include_younger_fams=True, mode='w'
     )
 
     oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
@@ -43,10 +43,7 @@ def mkdb_oma(args):
 
     # build index
     LOG.info('Building index')
-    ki = Index(db, k=args.k, reduced_alphabet=False)
-    hidden_taxa = args.hidden_taxa.split(',')
-    if hidden_taxa[0]:
-        ki.hide_taxa(hidden_taxa, nwk_fn)
+    ki = Index(db, k=args.k, reduced_alphabet=False, nthreads=1, hidden_taxa=[])
     ki.build_kmer_table()
 
     db.close()
@@ -100,54 +97,3 @@ def search(args):
 
     pbar.close()
     db.close()
-
-# def search(args):
-#     from Bio import SeqIO
-#     from tqdm import tqdm
-#     import sys
-
-#     from .database import Database
-#     from .index import Index
-#     from .flat_search import FlatSearch
-#     from .search import Search
-
-#     # reload
-#     db = Database(args.db, nthreads=args.nthreads)
-
-#     # setup search
-#     fs = FlatSearch(db.ki, nthreads=args.nthreads)
-#     se = Search(fs, include_extant_genes=args.include_extant_genes)
-
-#     # only print header for file output 
-#     print_header = (args.out.name != sys.stdout.name)
-
-#     # initialise query
-#     ids = []
-#     seqs = []
-    
-#     pbar = tqdm(desc='Searching')
-#     for rec in filter(lambda x: len(x.seq) >= db.ki.k,
-#                       SeqIO.parse(args.query, 'fasta')):
-#         ids.append(rec.id)
-#         seqs.append(str(rec.seq))
-#         if len(ids) == args.chunksize:
-#             fs.flat_search(ids=ids, seqs=seqs)
-#             df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
-#             pbar.update(len(ids))
-#             df.to_csv(args.out, sep='\t', index=False, header=print_header)
-
-
-#             ids = []
-#             seqs = []
-#             print_header = False
-
-
-#     # final search
-#     fs.flat_search(ids=ids, seqs=seqs)
-#     df = se.search(se.norm_fam_query_size, 1, se._max, se.norm_hog_query_size, args.threshold)
-#     if len(ids) > 0:
-#         pbar.update(len(ids))
-#     df.to_csv(args.out, sep='\t', index=False, header=print_header)
-
-#     pbar.close()
-#     db.close()

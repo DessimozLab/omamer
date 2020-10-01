@@ -104,9 +104,9 @@ mkdb_parser.add_argument(
 mkdb_parser.add_argument(
     "--k", default=6, help="Word size (k-mer) to use to build the indexes.", type=int
 )
-mkdb_parser.add_argument(
-    "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo sapiens\")", type=str
-)
+# mkdb_parser.add_argument(
+#     "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo sapiens\")", type=str
+# )
 mkdb_parser.add_argument(
     "--min_fam_size", default=6, help="Minimum root-HOG size used to build database.", type=int
 )
@@ -135,6 +135,9 @@ search_parser.add_argument(
 search_parser.add_argument(
     "--query", required=True, help="FASTA formatted sequences", type=FileType("r")
 )
+
+# score : naive one should probably be k-me
+
 search_parser.add_argument(
     "--threshold", default=0.05, type=float, help="threshold used to vary placement specificity"
 )

@@ -160,7 +160,9 @@ def search_validate(
     if not is_complete(se_va_fn, db_path) or overwrite:
         if os.path.exists(se_va_fn):
             os.remove(se_va_fn)
-            os.remove('{}.fa'.format(se_va_fn.split('.h5')[0]))
+        fasta = '{}.fa'.format(se_va_fn.split('.h5')[0])
+        if os.path.exists(fasta)
+            os.remove(fasta)
 
         ms = MergeSearch(ki=db.ki, nthreads=1)
         va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 

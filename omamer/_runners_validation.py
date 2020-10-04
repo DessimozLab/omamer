@@ -161,7 +161,7 @@ def search_validate(
         if os.path.exists(se_va_fn):
             os.remove(se_va_fn)
         fasta = '{}.fa'.format(se_va_fn.split('.h5')[0])
-        if os.path.exists(fasta)
+        if os.path.exists(fasta):
             os.remove(fasta)
 
         ms = MergeSearch(ki=db.ki, nthreads=1)

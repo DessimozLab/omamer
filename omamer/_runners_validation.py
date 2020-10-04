@@ -299,7 +299,7 @@ python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_
 #SBATCH --cpus-per-task=1
 #SBATCH --mem={}G
 #SBATCH --time={}:00:00
-#SBATCH --job-name=val_omamer
+#SBATCH --job-name={}
 #SBATCH --partition=axiom
 #SBATCH --output={}%x_%j.out
 #SBATCH --error={}%x_%j.err

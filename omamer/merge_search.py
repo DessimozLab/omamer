@@ -707,7 +707,7 @@ def search_one_seq_perms(
 @numba.njit
 def norm_fam_nonparametric(fam_counts, fam_perm_counts, query_counts):
     '''
-    remove the max non-parametric counts from permuted queries
+    remove the mean non-parametric counts from permuted queries
     '''
     fam_scores = np.zeros(fam_counts.size, np.float64)
     for i in numba.prange(fam_counts.size):

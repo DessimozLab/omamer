@@ -203,7 +203,7 @@ def search_validate(
 
         set_complete(se_va_fn, db_path)
 
-def write_axiom_script(step, name, mem, hour_nr, oe_path):
+def write_axiom_script(step, name, mem, hour_nr, job_name, oe_path):
     '''
     --> move to runners_validation?
     '''
@@ -216,7 +216,7 @@ def write_axiom_script(step, name, mem, hour_nr, oe_path):
 #SBATCH --cpus-per-task=1
 #SBATCH --mem={}G
 #SBATCH --time={}:00:00
-#SBATCH --job-name=val_omamer
+#SBATCH --job-name={}
 #SBATCH --partition=axiom
 #SBATCH --output={}%x_%j.out
 #SBATCH --error={}%x_%j.err
@@ -232,7 +232,7 @@ oma_path=$7
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
 python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{oma_path}}""".format(
-    mem, hour_nr, oe_path, oe_path))
+    mem, hour_nr, job_name, oe_path, oe_path))
 
     elif step == 'sa':
         with open(name, 'w') as inf:
@@ -243,7 +243,7 @@ python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_
 #SBATCH --cpus-per-task=1
 #SBATCH --mem={}G
 #SBATCH --time={}:00:00
-#SBATCH --job-name=val_omamer
+#SBATCH --job-name={}
 #SBATCH --partition=axiom
 #SBATCH --output={}%x_%j.out
 #SBATCH --error={}%x_%j.err
@@ -259,7 +259,7 @@ reduced_alphabet=$7
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
 python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}}""".format(
-    mem, hour_nr, oe_path, oe_path))
+    mem, hour_nr, job_name, oe_path, oe_path))
 
     elif step == 'ki':
         with open(name, 'w') as inf:
@@ -270,7 +270,7 @@ python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_
 #SBATCH --cpus-per-task=1
 #SBATCH --mem={}G
 #SBATCH --time={}:00:00
-#SBATCH --job-name=val_omamer
+#SBATCH --job-name={}
 #SBATCH --partition=axiom
 #SBATCH --output={}%x_%j.out
 #SBATCH --error={}%x_%j.err
@@ -333,7 +333,7 @@ size_t=${{25}}
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
 python ${{omamer_path}}omamer/_runners_validation.py ${{omamer_path}} se_va ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}} ${{oma_path}} ${{score}} ${{cum_mode}} ${{top_m_fams}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{query_sp}} ${{overwrite}} ${{perm_nr}} ${{w_size}} ${{dist}} ${{comp_t}} ${{size_t}}""".format(
-    mem, hour_nr, oe_path, oe_path))
+    mem, hour_nr, job_name, oe_path, oe_path))
 
 
 if __name__ == "__main__":

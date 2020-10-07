@@ -145,10 +145,6 @@ def search_validate(
         filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness,
         include_younger_fams=include_younger_fams, mode='r')
 
-    # load query sequences
-    sbuff = QuerySequenceBuffer(db, query_sp)
-    chunksize = sbuff.prot_nr
-
     # setup search and validation steps
     se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_query_{}_{}_{}_top{}fams{}{}_{}_{}_{}_{}fbn_{}hbn_MinFamComp0{}_MinFamSize{}.h5'.format(
         db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
@@ -168,11 +164,17 @@ def search_validate(
         va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 
                         neg_query_file='{}.fa'.format(se_va_fn.split('.')[0]), nthreads=1, query_sp=query_sp, 
                         max_query_nr=sbuff.prot_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
-                        fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num)
+                        fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num, comp_t=comp_t, size_t=size_t)
 
         assert va.mode == 'w'
+
+        # load query sequences (keep the ones from filtered families)
+        fam_filter = va.fam_filter
+        sbuff = QuerySequenceBuffer(db, query_sp, fam_filter=fam_filter)
         
         # search and validate
+        chunksize = 10000
+
         ids = []
         seqs = []
 
@@ -183,9 +185,9 @@ def search_validate(
             if len(ids) == chunksize:
                 # search and validate the chunk
                 ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
-                    comp_t=comp_t, size_t=size_t) 
+                    fam_filter=fam_filter) 
                 va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, 
-                    perm_nr=perm_nr, w_size=w_size, dist=dist, comp_t=comp_t, size_t=size_t)     
+                    perm_nr=perm_nr, w_size=w_size, dist=dist)     
 
                 pbar.update(len(ids))
                 ids = []
@@ -194,9 +196,8 @@ def search_validate(
         # search and validate last chunk
         if len(ids) > 0:
             ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
-                comp_t=comp_t, size_t=size_t) 
-            va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, perm_nr=perm_nr, w_size=w_size, dist=dist,
-                comp_t=comp_t, size_t=size_t) 
+                fam_filter=fam_filter) 
+            va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, perm_nr=perm_nr, w_size=w_size, dist=dist) 
             pbar.update(len(ids))
 
         # close stuff
@@ -206,9 +207,7 @@ def search_validate(
         set_complete(se_va_fn, db_path)
 
 def write_axiom_script(step, name, mem, hour_nr, job_name, oe_path):
-    '''
-    --> move to runners_validation?
-    '''
+
     if step == 'db':
         with open(name, 'w') as inf:
             inf.write(
@@ -290,7 +289,7 @@ k=$9
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
 python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}}""".format(
-    mem, hour_nr, oe_path, oe_path))
+    mem, hour_nr, job_name, oe_path, oe_path))
 
     elif step == 'se_va':
         with open(name, 'w') as inf:

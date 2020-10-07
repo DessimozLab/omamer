@@ -436,13 +436,20 @@ class QuerySequenceBuffer(SequenceBufferDB):
     '''
     mimic old QuerySequenceBuffer
     '''
-    def __init__(self, db, query_sp, alphabet_n=21):
+    def __init__(self, db, query_sp, alphabet_n=21, fam_filter=np.array([])):
         self.query_sp = query_sp if isinstance(query_sp, bytes) else query_sp.encode('ascii')
+        prot_offsets = self.get_query_offsets(db, query_sp, fam_filter)
+        super().__init__(prot_offsets, db, alphabet_n)
+        
+    def get_query_offsets(self, db, query_sp, fam_filter):
+        # select all proteins from species
         sp_off = np.searchsorted(db._sp_tab.col('ID'), self.query_sp)
         sp_ent = db._sp_tab[sp_off]
         prot_off = sp_ent['ProtOff']
         prot_offsets = np.arange(prot_off, prot_off + sp_ent['ProtNum'], dtype=int)
-        super().__init__(prot_offsets, db, alphabet_n)
+        # filter queries by family
+        query_fam_offsets = db._prot_tab.col('FamOff')[prot_offsets]
+        return prot_offsets[fam_filter[query_fam_offsets]]
 
 class SequenceBufferOMA(SequenceBuffer):
     pass

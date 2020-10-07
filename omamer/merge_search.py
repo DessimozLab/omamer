@@ -1013,7 +1013,7 @@ class MergeSearch(object):
     	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]
 
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10, 
-        top_n_fams=1, perm_nr=10, w_size=6, dist='poinorm', comp_t=0, size_t=0):
+        top_n_fams=1, perm_nr=10, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
         
         # load query sequences
         if seqs:
@@ -1036,11 +1036,11 @@ class MergeSearch(object):
         	self.low_mem = False
         	lookup_fun = self._lookup
 
-        # family filter
-        if comp_t or size_t:
-            fam_filter = self.get_fam_filter(comp_t, size_t)
-        else:
-            fam_filter = np.array([], dtype=np.int64)
+        # # family filter
+        # if comp_t or size_t:
+        #     fam_filter = self.get_fam_filter(comp_t, size_t)
+        # else:
+        #     fam_filter = np.array([], dtype=np.int64)
 
         queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
             sbuff.buff,
@@ -1073,9 +1073,6 @@ class MergeSearch(object):
 
         # store ids of sbuff
         self._query_ids = sbuff.ids.flatten()
-
-    def get_fam_filter(self, comp_t, size_t):
-        return ~((self.hog_tab[self.fam_tab['HOGoff']]['CompletenessScore'] < comp_t) + (self.hog_tab[self.fam_tab['HOGoff']]['NrMemberGenes'] < size_t))       
 
     def output_results(self, threshold=0.1):
 

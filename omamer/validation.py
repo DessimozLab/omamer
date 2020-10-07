@@ -38,7 +38,7 @@ from .index import Index
 class Validation():
 
 	def __init__(self, db, filename, thresholds, oma_db_fn=None, nwk_fn=None, neg_query_file=None, nthreads=1, query_sp=None, max_query_nr=None, 
-		val_mode='golike', neg_root_taxon='random', focal_taxon=None, fam_bin_num=1, hog_bin_num=1):
+		val_mode='golike', neg_root_taxon='random', focal_taxon=None, fam_bin_num=1, hog_bin_num=1, comp_t=0, size_t=0):
 
 		self.db = db
 		self.ki = db.ki
@@ -66,6 +66,8 @@ class Validation():
 		self.focal_taxon = focal_taxon if focal_taxon else self.db.root_taxon
 		self.fam_bin_num = fam_bin_num
 		self.hog_bin_num = hog_bin_num
+		self.comp_t = comp_t
+		self.size_t = size_t
 
 		# to pick negative queries
 		random.seed(123)
@@ -114,6 +116,10 @@ class Validation():
 	@cached_property
 	def hog_filter_lca(self):
 		return self.ki.tax_filter[self.db._hog_tab.col('LCAtaxOff')]
+
+	@cached_property
+	def fam_filter(self):
+		return ~((self.db._hog_tab.col('CompletenessScore')[self.db._fam_tab.col('HOGoff')] < self.comp_t) + (self.db._hog_tab.col('NrMemberGenes')[self.db._fam_tab.col('HOGoff')] < self.size_t))
 
 	### same as in database class; easy access to data ###
 	@property
@@ -186,11 +192,11 @@ class Validation():
 	    return self._get_node_fam('FP_pos_neg')
 
 	####################################################################################################################################
-	def validate(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist, comp_t, size_t, hog2bin=True):
+	def validate(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist, hog2bin=True):
 		'''
 		validate both family and subfamily levels
 		'''
-		self.validate_family(se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist, comp_t, size_t)
+		self.validate_family(se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist)
 		self.validate_subfamily(se, hog2bin, pvalue_score)
 
 	####################################################################################################################################
@@ -520,7 +526,7 @@ class Validation():
 	def clade_specific_negatives(self):
 		return self.get_clade_specific_negatives(self.nwk_fn, self.oma_db_fn, self.neg_root_taxon, self.db.min_prot_nr, self.max_query_nr)
 
-	def validate_family(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist, comp_t, size_t):
+	def validate_family(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist):
 
 		# get the negative queries
 		if self.neg_root_taxon != 'random':
@@ -541,7 +547,7 @@ class Validation():
 		# search negatives
 		neg_ms = MergeSearch(ki=self.ki, nthreads=self.nthreads)
 		neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
-			comp_t=comp_t, size_t=size_t)
+			fam_filter=self.fam_filter)
 
 		# validate negatives
 		tn_query2tresh, fp_neg_query2tresh = self._validate_negative(

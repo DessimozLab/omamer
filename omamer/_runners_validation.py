@@ -161,9 +161,14 @@ def search_validate(
             os.remove(fasta)
 
         ms = MergeSearch(ki=db.ki, nthreads=1)
+
+        # maximum number of queries (used for clade-specific negatives) is the proteome size
+        sp_off = np.searchsorted(db._sp_tab.col('ID'), query_sp)
+        max_query_nr = db._sp_tab[sp_off]['ProtNum']
+
         va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 
                         neg_query_file='{}.fa'.format(se_va_fn.split('.')[0]), nthreads=1, query_sp=query_sp, 
-                        max_query_nr=sbuff.prot_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
+                        max_query_nr=max_query_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
                         fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num, comp_t=comp_t, size_t=size_t)
 
         assert va.mode == 'w'

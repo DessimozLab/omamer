@@ -73,6 +73,9 @@ class Validation():
 		random.seed(123)
 		np.random.seed(123)
 
+		# initiate once MergeSearch for negatives
+		self.neg_ms = MergeSearch(ki=self.ki, nthreads=self.nthreads)
+
 	def close(self):
 	    self.va.close()
 
@@ -545,13 +548,13 @@ class Validation():
 		        ff.write(">{}\n{}\n".format(neg_ids[i], s))
 
 		# search negatives
-		neg_ms = MergeSearch(ki=self.ki, nthreads=self.nthreads)
-		neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
+		# neg_ms = MergeSearch(ki=self.ki, nthreads=self.nthreads)
+		self.neg_ms.merge_search(seqs=neg_seqs, ids=neg_ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
 			fam_filter=self.fam_filter)
 
 		# validate negatives
 		tn_query2tresh, fp_neg_query2tresh = self._validate_negative(
-			self._thresholds[:], neg_ms._queryFam_ranked, neg_ms._queryFam_scores, pvalue_score)
+			self._thresholds[:], self.neg_ms._queryFam_ranked, self.neg_ms._queryFam_scores, pvalue_score)
 
 		# validate positives
 		tp_query2tresh, fn_query2tresh, fp_pos_query2tresh = self._validate_positive(

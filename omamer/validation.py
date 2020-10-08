@@ -124,6 +124,11 @@ class Validation():
 	def fam_filter(self):
 		return ~((self.db._hog_tab.col('CompletenessScore')[self.db._fam_tab.col('HOGoff')] < self.comp_t) + (self.db._hog_tab.col('NrMemberGenes')[self.db._fam_tab.col('HOGoff')] < self.size_t))
 
+	# avoid reloading protein table for each chunk
+	@cached_property
+	def prot_tab(self):
+		return self.db._prot_tab[:]
+
 	### same as in database class; easy access to data ###
 	@property
 	def _thresholds(self):
@@ -540,7 +545,7 @@ class Validation():
 			neg_seqs = all_neg_seqs[query_i: query_j]
 			neg_ids = all_neg_ids[query_i: query_j]
 		else:
-			neg_seqs, neg_ids = self.get_random_negatives(self.db._prot_tab.col('SeqLen')[se._query_ids[:]])
+			neg_seqs, neg_ids = self.get_random_negatives(self.prot_tab['SeqLen'][se._query_ids[:]])
 
 		# store negatives in fasta file
 		with open(self.neg_query_file, 'a') as ff:

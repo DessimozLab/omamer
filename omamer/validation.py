@@ -839,10 +839,11 @@ class Validation():
 		        neg_part2fp_nr[p, t] = neg_fp_nr
 		        part2fp_nr[p, t] = fp_nr
 
-		# compute number of queries
+		# query number (union of positive fp, fn and tp)
 		part2query_nr = np.zeros((part_num), dtype=np.uint64)
 		for p in range(part_num):
-		    part2query_nr[p] = part2tp_nr[p, 0] + part2fn_nr[p, 0] + pos_part2fp_nr[p, 0]
+		    part = partitions[p]
+		    part2query_nr[p] = np.sum(np.array(fp_pos_query2tresh[:, 0][part], dtype=np.bool) + np.array(fn_query2tresh[:, 0][part], dtype=np.bool) + np.array(tp_query2tresh[:, 0][part], dtype=np.bool))
 
 		return part2pre, part2rec, part2spe, part2query_nr
 

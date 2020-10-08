@@ -1012,8 +1012,8 @@ class MergeSearch(object):
     def ref_fam_counts_max(self):
     	return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]
 
-    def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize', cum_mode='max', top_m_fams=10, 
-        top_n_fams=1, perm_nr=10, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
+    def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize_hogsize_kmerfreq', cum_mode='max', top_m_fams=100, 
+        top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
         
         # load query sequences
         if seqs:
@@ -1021,26 +1021,31 @@ class MergeSearch(object):
         elif fasta_file:
             sbuff = SequenceBuffer(fasta_file=fasta_file)
 
-        if cum_mode == 'sum':
-        	ref_fam_counts = self.ref_fam_counts_sum
-        	ref_hog_counts = self.ref_hog_counts_sum
-        elif cum_mode == 'max':
-        	ref_fam_counts = self.ref_fam_counts_max
-        	ref_hog_counts = self.ref_hog_counts_max
-
-        # set to low mem if probabilistic score !
-        if score in {'mash_pvalue', 'kmerfreq_pvalue', 'nonparam_pvalue'}:
-        	self.low_mem = True
-        	lookup_fun = self._lookup_pvalue
+        # for parametric scores that normalize for family and subfamily size, compute cumulated counts of reference HOGs 
+        if score in {'querysize_hogsize', 'querysize_hogsize_kmerfreq', 'mash_pvalue', 'kmerfreq_pvalue'}:
+            if cum_mode == 'sum':
+            	ref_fam_counts = self.ref_fam_counts_sum
+            	ref_hog_counts = self.ref_hog_counts_sum
+            elif cum_mode == 'max':
+            	ref_fam_counts = self.ref_fam_counts_max
+            	ref_hog_counts = self.ref_hog_counts_max
         else:
-        	self.low_mem = False
-        	lookup_fun = self._lookup
+            ref_fam_counts = np.array([], dtype=np.int64)
+            ref_hog_counts = np.array([], dtype=np.int64)
 
-        # # family filter
-        # if comp_t or size_t:
-        #     fam_filter = self.get_fam_filter(comp_t, size_t)
-        # else:
-        #     fam_filter = np.array([], dtype=np.int64)
+        # pick lookup function
+        if score == 'querysize_hogsize_kmerfreq':
+            lookup_fun = self._lookup_querysize_hogsize_kmerfreq
+
+        elif score == 'nonparam_naive':
+            lookup_fun = self._lookup_nonparam_naive
+
+        elif score in {'mash_pvalue', 'kmerfreq_pvalue', 'nonparam_pvalue'}:
+            # disable numba vectorisation for scipy
+            self.low_mem = True
+            lookup_fun = self._lookup_pvalue
+        else:
+            lookup_fun = self._lookup_naive
 
         queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
             sbuff.buff,
@@ -1123,7 +1128,272 @@ class MergeSearch(object):
     		return pd.DataFrame()
 
     @lazy_property
-    def _lookup(self):
+    def _lookup_querysize_hogsize_kmerfreq(self):
+        def func(
+            seqs,
+            seqs_idx,
+            trans,
+            table_idx,
+            table_buff,
+            k,
+            alphabet_n,
+            DIGITS_AA_LOOKUP,
+            fam_tab,
+            hog_tab,
+            level_arr,
+            max_hog_nr,
+            fam_filter,
+            top_n_fams, 
+            top_m_fams,
+            cum_mode,
+            score,
+            ref_fam_counts,
+            ref_hog_counts,
+            perm_nr,
+            w_size,
+            dist
+        ):   
+            '''
+            top_n_fams: number of family for which HOG scores are computed
+            top_m_fams: number of family for which family scores are computed before resorting
+            '''
+            # highest scoring families per query sorted by counts 
+            queryFam_ranked = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.uint32)
+            # corresponding k-mer counts
+            queryFam_scores = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
+            # scores and bestpath mask for HOGs of top_n_fam
+            queryRankHog_scores = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.float64)
+            queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)    
+            # OPTION: store only HOGs on the bestpath
+
+            # to ignore k-mers with X (88 == b'X')
+            x_char = DIGITS_AA_LOOKUP[88]
+            # get a flag for k-mer with any X (= last k-mer + 1)
+            x_flag = table_idx.size - 1
+
+            # iterate of sequences
+            for zz in numba.prange(len(seqs_idx) - 1):
+
+                ## get the query sequence
+                s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
+                n_kmers = s.shape[0] - (k - 1)
+
+                # double check we don't have short peptides (of len < k)
+                # note: written in this order to provide loop-optimisation hint (?)
+                if n_kmers > 0:
+                    pass
+                else:
+                    continue
+
+                ## get the sequence unique k-mers
+                r1 = parse_seq(
+                    s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
+
+                # skip if one k-mer with X
+                if len(r1) > 1:
+                    pass
+                elif r1[0] == x_flag:
+                    continue
+
+                ## search sequence
+                hog_counts, fam_counts, query_occ, hog_occurs = search_seq_kmers(
+                    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+
+                ## get the raw top m families from summed k-mer counts
+                top_fam, top_fam_counts = get_top_m_fams(
+                    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter)
+                
+                ## normalize family counts
+                top_fam_scores = norm_fam_querysize_hogsize_kmerfreq(
+                    top_fam_counts, query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam])     
+
+                # resort by score
+                idx = (-top_fam_scores).argsort()
+                top_fam = top_fam[idx]
+                top_fam_scores = top_fam_scores[idx]
+
+                # store them with corresponding scores
+                queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
+                queryFam_scores[zz, :top_n_fams] = top_fam_scores[:top_n_fams]
+
+                ### Compute HOG scores and bestpath for top n families
+                # iterate over top n families
+                for fam_rank in numba.prange(top_n_fams):
+                    fam_off = top_fam[fam_rank]
+                    fam_ent = fam_tab[fam_off]
+                    fam_hog_off = np.int64(fam_ent['HOGoff'])  # slicing with int (vs. uint) enabled parallel=True
+                    fam_hog_nr = np.int64(fam_ent['HOGnum'])
+
+                    # compute the cumulated HOG counts for that family
+                    fam_hog_counts = hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr].copy()
+
+                    fam_hog2parent = get_fam_hog2parent(fam_ent, hog_tab)
+                    fam_level_offsets = get_fam_level_offsets(fam_ent, level_arr)
+
+                    fam_hog_cumcounts = fam_hog_counts.copy()
+
+                    if cum_mode == 'max':
+                        cumulate_counts_1fam(
+                            fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
+
+                    elif cum_mode == 'sum':
+                        cumulate_counts_1fam(
+                            fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _sum)
+
+                    # querysize_kmerfreq
+                    fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
+                        fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
+                        fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])  
+
+                    queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
+                    queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
+
+            return queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores
+
+        if not self.low_mem:
+            # Set nthreads, note: this only works before numba called first time!
+            numba.set_num_threads(self.nthreads)
+            return numba.jit(func, parallel=(True if self.nthreads > 1 else False), nopython=True, nogil=True)
+        else:
+            return func
+    
+    @lazy_property
+    def _lookup_nonparam_naive(self):
+        def func(
+            seqs,
+            seqs_idx,
+            trans,
+            table_idx,
+            table_buff,
+            k,
+            alphabet_n,
+            DIGITS_AA_LOOKUP,
+            fam_tab,
+            hog_tab,
+            level_arr,
+            max_hog_nr,
+            fam_filter,
+            top_n_fams, 
+            top_m_fams,
+            cum_mode,
+            score,
+            ref_fam_counts,
+            ref_hog_counts,
+            perm_nr,
+            w_size,
+            dist
+        ):   
+            '''
+            top_n_fams: number of family for which HOG scores are computed
+            top_m_fams: number of family for which family scores are computed before resorting
+            '''
+            # highest scoring families per query sorted by counts 
+            queryFam_ranked = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.uint32)
+            # corresponding k-mer counts
+            queryFam_scores = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
+            # scores and bestpath mask for HOGs of top_n_fam
+            queryRankHog_scores = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.float64)
+            queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)    
+            # OPTION: store only HOGs on the bestpath
+
+            # to ignore k-mers with X (88 == b'X')
+            x_char = DIGITS_AA_LOOKUP[88]
+            # get a flag for k-mer with any X (= last k-mer + 1)
+            x_flag = table_idx.size - 1
+
+            # iterate of sequences
+            for zz in numba.prange(len(seqs_idx) - 1):
+
+                ## get the query sequence
+                s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
+                n_kmers = s.shape[0] - (k - 1)
+
+                # double check we don't have short peptides (of len < k)
+                # note: written in this order to provide loop-optimisation hint (?)
+                if n_kmers > 0:
+                    pass
+                else:
+                    continue
+
+                ## get the sequence unique k-mers
+                r1 = parse_seq(
+                    s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
+
+                # skip if one k-mer with X
+                if len(r1) > 1:
+                    pass
+                elif r1[0] == x_flag:
+                    continue
+
+                ## search sequence
+                hog_counts, fam_counts, query_occ, hog_occurs = search_seq_kmers(
+                    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+
+                ## get the raw top m families from summed k-mer counts
+                top_fam, top_fam_counts = get_top_m_fams(
+                    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter)
+                
+                ## search permuted sequences if non-parametric score
+                top_fam_perm_counts, top_fam_hog_perm_counts = search_one_seq_perms(
+                    s, n_kmers, x_char, x_flag, perm_nr, top_m_fams, max_hog_nr, w_size, 
+                    trans, table_idx, table_buff, k, alphabet_n, DIGITS_AA_LOOKUP, 
+                    fam_tab, hog_tab, level_arr, top_fam, cum_mode)
+                
+                ## normalize family counts
+                top_fam_scores = norm_fam_nonparametric(
+                    top_fam_counts, top_fam_perm_counts, r1.size)
+                
+                # resort by score
+                idx = (-top_fam_scores).argsort()
+                top_fam = top_fam[idx]
+                top_fam_scores = top_fam_scores[idx]
+
+                # store them with corresponding scores
+                queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
+                queryFam_scores[zz, :top_n_fams] = top_fam_scores[:top_n_fams]
+
+                ### Compute HOG scores and bestpath for top n families
+                # iterate over top n families
+                for fam_rank in numba.prange(top_n_fams):
+                    fam_off = top_fam[fam_rank]
+                    fam_ent = fam_tab[fam_off]
+                    fam_hog_off = np.int64(fam_ent['HOGoff'])  # slicing with int (vs. uint) enabled parallel=True
+                    fam_hog_nr = np.int64(fam_ent['HOGnum'])
+
+                    # compute the cumulated HOG counts for that family
+                    fam_hog_counts = hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr].copy()
+
+                    fam_hog2parent = get_fam_hog2parent(fam_ent, hog_tab)
+                    fam_level_offsets = get_fam_level_offsets(fam_ent, level_arr)
+
+                    fam_hog_cumcounts = fam_hog_counts.copy()
+
+                    if cum_mode == 'max':
+                        cumulate_counts_1fam(
+                            fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
+
+                    elif cum_mode == 'sum':
+                        cumulate_counts_1fam(
+                            fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _sum)
+
+                    fam_hog_scores, fam_bestpath = norm_hog_nonparametric(
+                        fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts, 
+                        top_fam_hog_perm_counts[:, fam_rank])   
+
+                    queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
+                    queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
+
+            return queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores
+
+        if not self.low_mem:
+            # Set nthreads, note: this only works before numba called first time!
+            numba.set_num_threads(self.nthreads)
+            return numba.jit(func, parallel=(True if self.nthreads > 1 else False), nopython=True, nogil=True)
+        else:
+            return func
+
+    @lazy_property
+    def _lookup_naive(self):
         def func(
             seqs,
             seqs_idx,
@@ -1220,24 +1490,11 @@ class MergeSearch(object):
                     top_fam_scores = norm_fam_querysize_hogsize_kmerfreq(
                         top_fam_counts, query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam])
 
-                # # probabilistic schemes: not supported by numba yet
-                # elif score == 'mash_pvalue':
-                #     top_fam_scores = compute_fam_mash_pvalue(
-                #         alphabet_n, k, ref_fam_counts[top_fam], r1.size, top_fam_counts)
-
-                # elif score == 'kmerfreq_pvalue':
-                #     top_fam_scores = compute_fam_kmerfreq_pvalue(
-                #         query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam], top_fam_counts)
-
                 # non-parametric normalization procedures
                 elif score == 'nonparam_naive':    
                     top_fam_scores = norm_fam_nonparametric(
                         top_fam_counts, top_fam_perm_counts, r1.size)
                 
-                # elif score == 'nonparam_pvalue':
-                #     top_fam_scores = compute_fam_nonparametric_pvalue(
-                #         top_fam_counts, r1.size, ref_fam_counts[top_fam], top_fam_perm_counts)
-
                 # to enable parallel loop, pick one score and such else-continue statement (or understand what is going on)
                 else: 
                     continue     
@@ -1294,29 +1551,13 @@ class MergeSearch(object):
                         fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
                             fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
                             fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
-
-                    # # probabilistic schemes: not supported by numba yet
-                    # elif score == 'mash_pvalue':
-                    #     fam_hog_scores, fam_bestpath = compute_hog_mash_pvalue(
-                    #         fam_hog_cumcounts,  r1.size, alphabet_n, k, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr], 
-                    #         fam_level_offsets, fam_hog2parent, fam_hog_counts)
-
-                    # elif score == 'kmerfreq_pvalue':
-                    #     fam_hog_scores, fam_bestpath = compute_hog_kmerfreq_pvalue(
-                    #         fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
-                    #         fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
                     
                     # non-parametric normalization procedures
                     elif score == 'nonparam_naive':
                         fam_hog_scores, fam_bestpath = norm_hog_nonparametric(
                             fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts, 
                             top_fam_hog_perm_counts[:, fam_rank])
-                    
-                    # elif score == 'nonparam_pvalue':
-                    #     fam_hog_scores, fam_bestpath = compute_hog_nonparametric_pvalue(
-                    #         fam_hog_cumcounts, r1.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr], 
-                    #         top_fam_hog_perm_counts[:, fam_rank], fam_level_offsets, fam_hog2parent, fam_hog_counts)
-                        
+                                            
                     # to enable parallel loop, pick one score and such else-continue statement
                     else: 
                         continue    

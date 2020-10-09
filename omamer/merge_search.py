@@ -1022,7 +1022,8 @@ class MergeSearch(object):
             sbuff = SequenceBuffer(fasta_file=fasta_file)
 
         # for parametric scores that normalize for family and subfamily size, compute cumulated counts of reference HOGs 
-        if score in {'querysize_hogsize', 'querysize_hogsize_kmerfreq', 'mash_pvalue', 'kmerfreq_pvalue'}:
+        # actually these are also required to compute have the n parameter in the binomial as min(|Q|, |H|))
+        if score in {'querysize_hogsize', 'querysize_hogsize_kmerfreq', 'mash_pvalue', 'kmerfreq_pvalue', 'nonparam_pvalue'}:
             if cum_mode == 'sum':
             	ref_fam_counts = self.ref_fam_counts_sum
             	ref_hog_counts = self.ref_hog_counts_sum

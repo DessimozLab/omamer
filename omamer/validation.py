@@ -438,7 +438,7 @@ class Validation():
 		# last one
 		part = np.full(query_values.size, False)
 		part[query_values > curr_thresh] = True
-		partitions.append(np.arange(query_values.size, dtype=np.int64)part)
+		partitions.append(np.arange(query_values.size, dtype=np.int64)[part])
 		part_names.append('{} < {} <= {}'.format(curr_thresh if curr_thresh != -1 else 0, parameter_name, 1))
 
 		return np.array(partitions), part_names

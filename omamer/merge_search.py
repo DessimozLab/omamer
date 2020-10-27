@@ -1379,7 +1379,7 @@ class MergeSearch(object):
 
                     fam_hog_scores, fam_bestpath = norm_hog_nonparametric(
                         fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts, 
-                        top_fam_hog_perm_counts[:, fam_rank])   
+                        top_fam_hog_perm_counts[:, fam_rank]) 
 
                     queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores

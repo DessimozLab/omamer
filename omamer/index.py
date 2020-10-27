@@ -448,8 +448,11 @@ class QuerySequenceBuffer(SequenceBufferDB):
         prot_off = sp_ent['ProtOff']
         prot_offsets = np.arange(prot_off, prot_off + sp_ent['ProtNum'], dtype=int)
         # filter queries by family
-        query_fam_offsets = db._prot_tab.col('FamOff')[prot_offsets]
-        return prot_offsets[fam_filter[query_fam_offsets]]
+        if fam_filter.size > 0:
+            query_fam_offsets = db._prot_tab.col('FamOff')[prot_offsets]
+            return prot_offsets[fam_filter[query_fam_offsets]]
+        else:
+            return prot_offsets
 
 class SequenceBufferOMA(SequenceBuffer):
     pass

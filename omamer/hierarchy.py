@@ -86,34 +86,31 @@ def is_ancestor(hog1, hog2, hog2parent):
 
 
 # Taxonomy
-
-
 def _children_tax(tax_off, tax_tab, ctax_buff):
     """
-	collect direct children of a taxon
-	"""
+    collect direct children of a taxon
+    """
     tax_ent = tax_tab[tax_off]
     ctax_off = tax_ent["ChildrenOff"]
     return ctax_buff[ctax_off : ctax_off + tax_ent["ChildrenNum"]]
 
-
-def get_lca_tax(tax_off, tax2parent, hidden_taxa):
+def get_lca_taxon(tax_off, tax2parent, hidden_taxa):
     """
     get taxon from which tax_off has diverged
     """
     root_leaf = get_root_leaf_hog_offsets(tax_off, tax2parent)
-    for x in root_leaf[::-1]:
+    for x in root_leaf[::-1][1:]:
         if x not in hidden_taxa:
             return x
-
-
+        
 def get_sister_taxa(tax_off, tax2parent, hidden_taxa, tax_tab, ctax_buff):
 
-    lca_tax = get_lca_tax(tax_off, tax2parent, hidden_taxa)
-    children = _children_tax(lca_tax, tax_tab, ctax_buff)
-
-    return np.setdiff1d(children, tax_off)
-
+    lca_tax = get_lca_taxon(tax_off, tax2parent, hidden_taxa)
+    if lca_tax != None:
+        children = _children_tax(lca_tax, tax_tab, ctax_buff)
+        return np.setdiff1d(children, tax_off)
+    else:
+        return np.array([], dtype=np.int64)
 
 def leaf_traverse(tax_off, tax_tab, ctax_buff, acc, leaf_fun):
     """

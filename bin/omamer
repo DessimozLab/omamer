@@ -104,9 +104,9 @@ mkdb_parser.add_argument(
 mkdb_parser.add_argument(
     "--k", default=6, help="Word size (k-mer) to use to build the indexes.", type=int
 )
-# mkdb_parser.add_argument(
-#     "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo sapiens\")", type=str
-# )
+mkdb_parser.add_argument(
+    "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo_sapiens\")", type=str
+)
 mkdb_parser.add_argument(
     "--min_fam_size", default=6, help="Minimum root-HOG size used to build database.", type=int
 )

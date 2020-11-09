@@ -1080,6 +1080,26 @@ class MergeSearch(object):
         # store ids of sbuff
         self._query_ids = sbuff.ids.flatten()
 
+    def store_results(self, filename):
+        compr = tables.Filters(complevel=6, complib="blosc", fletcher32=True)
+        h5 = tables.open_file(filename, 'w', filters=compr)
+        h5.create_carray('/', 'query_ids', obj=self._query_ids, filters=compr)
+        h5.create_carray('/', 'queryFam_ranked', obj=self._queryFam_ranked, filters=compr)
+        h5.create_carray('/', 'queryFam_scores', obj=self._queryFam_scores, filters=compr)
+        h5.create_carray('/', 'queryRankHog_bestpath', obj=self._queryRankHog_bestpath, filters=compr)
+        h5.create_carray('/', 'queryRankHog_scores', obj=self._queryRankHog_scores, filters=compr)
+        h5.close()
+
+    def load_results(self, filename):
+        compr = tables.Filters(complevel=6, complib="blosc", fletcher32=True)
+        h5 = tables.open_file(filename, 'r', filters=compr)
+        self._query_ids = h5.root.query_ids[:]
+        self._queryFam_ranked = h5.root.queryFam_ranked[:]
+        self._queryFam_scores = h5.root.queryFam_scores[:]
+        self._queryRankHog_bestpath = h5.root.queryRankHog_bestpath[:]
+        self._queryRankHog_scores = h5.root.queryRankHog_scores[:]
+        h5.close()
+
     def output_results(self, threshold=0.1):
 
     	def get_prot_ids(h):

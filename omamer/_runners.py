@@ -43,7 +43,7 @@ def mkdb_oma(args):
 
     # build index
     LOG.info('Building index')
-    ki = Index(db, k=args.k, reduced_alphabet=False, nthreads=1, hidden_taxa=[])
+    ki = Index(db, k=args.k, reduced_alphabet=False, nthreads=1, hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')])
     ki.build_kmer_table()
 
     db.close()

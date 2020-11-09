@@ -30,7 +30,7 @@ import random
 import tables
 import os
 
-from .hierarchy import get_root_leaf_hog_offsets, get_lca_tax
+from .hierarchy import get_root_leaf_hog_offsets, get_lca_taxon
 from .merge_search import MergeSearch
 from .index import Index
 

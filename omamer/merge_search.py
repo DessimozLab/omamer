@@ -64,10 +64,26 @@ def get_fam_level_offsets(fam_ent, level_arr):
 
 ## search functions
 @numba.njit
+def custom_unique1d(ar):
+    """
+    adapted from np._unique1d for numba
+    """
+    perm = ar.argsort(kind='mergesort')# if return_index else 'quicksort')
+    aux = ar[perm]
+
+    mask = np.empty(aux.shape, dtype=np.bool_)
+    mask[:1] = True
+    mask[1:] = aux[1:] != aux[:-1]
+    
+    idx = np.concatenate((np.nonzero(mask)[0], np.array([mask.size])))
+
+    return aux[mask], perm[mask], np.diff(idx)
+
+@numba.njit
 def parse_seq(
     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag):
     '''
-    get the sequence unique k-mers
+    get the sequence unique k-mers and non ambiguous locations (when truly unique)
     '''
     s_norm = DIGITS_AA_LOOKUP[s]
     r = np.zeros(n_kmers, dtype=np.uint32)  # max kmer 7
@@ -79,12 +95,37 @@ def parse_seq(
         x_seen = np.any(s_norm[i:i+k] == x_char)
         # if yes, replace it by the x_flag
         r[i] = r[i] if not x_seen else x_flag
-    r1 = np.unique(r)
-    return r1
+    r1, idx, counts = custom_unique1d(r)
+    
+    # get locations of truly unique k-mers
+    p1 = np.full(r1.size, -1, dtype=np.int32)
+    idx_c1 = np.argwhere(counts == 1).flatten()
+    p1[idx_c1] = idx[idx_c1]
+
+    return r1, p1
+
+# @numba.njit
+# def parse_seq(
+#     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag):
+#     '''
+#     get the sequence unique k-mers
+#     '''
+#     s_norm = DIGITS_AA_LOOKUP[s]
+#     r = np.zeros(n_kmers, dtype=np.uint32)  # max kmer 7
+#     for i in numba.prange(n_kmers):
+#         # numba can't do np.dot with non-float
+#         for j in numba.prange(k):
+#             r[i] += trans[j] * s_norm[i + j]
+#         # does k-mer contain any X?
+#         x_seen = np.any(s_norm[i:i+k] == x_char)
+#         # if yes, replace it by the x_flag
+#         r[i] = r[i] if not x_seen else x_flag
+#     r1 = np.unique(r)
+#     return r1
 
 @numba.njit
 def search_seq_kmers(
-    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
+    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
     
     ## search k-mer table
     hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
@@ -96,9 +137,14 @@ def search_seq_kmers(
     # store total occurence of query-hog k-mers
     hog_occurs = np.zeros(hog_tab.size, dtype=np.uint32)
 
+    # store lowest and higher k-mer locations
+    fam_lowloc = np.full(fam_tab.size, -1, dtype=np.int32)
+    fam_highloc = np.full(fam_tab.size, -1, dtype=np.int32)
+
     # iterate unique k-mers
     for m in numba.prange(r1.shape[0]):
         kmer = r1[m]
+        loc = p1[m]
 
         # to ignore k-mers with X
         if kmer == x_flag:
@@ -114,20 +160,57 @@ def search_seq_kmers(
         fam_counts[fams] += np.uint16(1)
         query_occ += np.uint32(hogs.size)
         hog_occurs[hogs] += np.uint32(hogs.size)
-    
-    return hog_counts, fam_counts, query_occ, hog_occurs
 
-@numba.njit
-def get_top_m_fams(
-    fam_counts, top_m_fams, cum_mode, fam_tab, hog_counts, hog_tab, level_arr, fam_filter):
-    '''
-    1. get the top m families from summed k-mer counts
-    2. recalculate best root-to-leaf counts if cum_mode==max
-    option to filter some families for validation
-    '''
-    # # get top m families from summed k-mer counts
-    # top_fam = np.argsort(fam_counts)[::-1][:top_m_fams]
-    # top_fam_counts = fam_counts[top_fam]
+        # store lowest and highest locations
+        for fam_off in fams:
+
+            # initiate first location
+            if fam_lowloc[fam_off] == -1:
+                fam_lowloc[fam_off] = loc
+                fam_highloc[fam_off] = loc
+
+            # update either lower or higher boundary
+            elif loc < fam_lowloc[fam_off]:
+                fam_lowloc[fam_off] = loc
+            elif loc > fam_highloc[fam_off]:
+                fam_highloc[fam_off] = loc
+
+    return hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc
+
+# @numba.njit
+# def search_seq_kmers(
+#     r1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
+    
+#     ## search k-mer table
+#     hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
+#     fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
+
+#     # store total occurences of query k-mers
+#     query_occ = np.uint32(0)
+
+#     # store total occurence of query-hog k-mers
+#     hog_occurs = np.zeros(hog_tab.size, dtype=np.uint32)
+
+#     # iterate unique k-mers
+#     for m in numba.prange(r1.shape[0]):
+#         kmer = r1[m]
+
+#         # to ignore k-mers with X
+#         if kmer == x_flag:
+#             continue
+#         else:
+#             pass
+
+#         # get mapping to HOGs
+#         x = table_idx[kmer : kmer + 2]
+#         hogs = table_buff[x[0] : x[1]]
+#         fams = hog_tab['FamOff'][hogs]
+#         hog_counts[hogs] += np.uint16(1)
+#         fam_counts[fams] += np.uint16(1)
+#         query_occ += np.uint32(hogs.size)
+#         hog_occurs[hogs] += np.uint32(hogs.size)
+    
+#     return hog_counts, fam_counts, query_occ, hog_occurs
 
 @numba.njit
 def get_top_m_fams(
@@ -666,17 +749,19 @@ def search_one_seq_perms(
 
     for p in numba.prange(perm_nr):
 
-        p1 = parse_seq(
+        # TO DO: skip computation of k-mer locations
+        r1, p1 = parse_seq(
             permute_seq_buff(seq_buff, w_size), DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
 
         # skip if one k-mer with X
-        if len(p1) > 1:
+        if len(r1) > 1:
             pass
-        elif p1[0] == x_flag:
+        elif r1[0] == x_flag:
             continue
 
-        perm_hog_counts, perm_fam_counts, perm_query_occ, perm_hog_occurs = search_seq_kmers(
-            p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+        # TO DO: skip computation of k-mer locations
+        perm_hog_counts, perm_fam_counts, perm_query_occ, perm_hog_occurs, fam_lowloc, fam_highloc = search_seq_kmers(
+            r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
 
         # cumulate family and store cumulated HOG counts
         for r in numba.prange(top_m_fams):
@@ -947,6 +1032,17 @@ def compute_hog_nonparametric_pvalue(
 
     return fam_hog_scores, fam_bestpath
 
+## sequence overlap
+@numba.njit
+def compute_overlap(fam_highloc, fam_lowloc, k, query_len):
+    overlap = np.zeros(fam_highloc.shape, dtype=np.float64)
+    for i in numba.prange(fam_highloc.size):
+        if fam_highloc[i] == -1:
+            continue
+        else:
+            overlap[i] = (fam_highloc[i] - fam_lowloc[i] + k) / query_len
+    return overlap
+
 class MergeSearch(object):
     def __init__(self, ki, nthreads=None, low_mem=False, include_extant_genes=False):
     	assert ki.db.mode == "r", "Database must be opened in read mode."
@@ -1048,7 +1144,7 @@ class MergeSearch(object):
         else:
             lookup_fun = self._lookup_naive
 
-        queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
+        queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
             sbuff.buff,
             sbuff.idx,
             self.trans,
@@ -1074,6 +1170,7 @@ class MergeSearch(object):
 
         self._queryFam_ranked = queryFam_ranked
         self._queryFam_scores = queryFam_scores
+        self._queryFam_overlaps = queryFam_overlaps
         self._queryRankHog_bestpath = queryRankHog_bestpath
         self._queryRankHog_scores = queryRankHog_scores
 
@@ -1086,6 +1183,7 @@ class MergeSearch(object):
         h5.create_carray('/', 'query_ids', obj=self._query_ids, filters=compr)
         h5.create_carray('/', 'queryFam_ranked', obj=self._queryFam_ranked, filters=compr)
         h5.create_carray('/', 'queryFam_scores', obj=self._queryFam_scores, filters=compr)
+        h5.create_carray('/', 'queryFam_overlaps', obj=self._queryFam_overlaps, filters=compr)
         h5.create_carray('/', 'queryRankHog_bestpath', obj=self._queryRankHog_bestpath, filters=compr)
         h5.create_carray('/', 'queryRankHog_scores', obj=self._queryRankHog_scores, filters=compr)
         h5.close()
@@ -1096,6 +1194,7 @@ class MergeSearch(object):
         self._query_ids = h5.root.query_ids[:]
         self._queryFam_ranked = h5.root.queryFam_ranked[:]
         self._queryFam_scores = h5.root.queryFam_scores[:]
+        self._queryFam_overlaps = h5.root.queryFam_overlaps[:]
         self._queryRankHog_bestpath = h5.root.queryRankHog_bestpath[:]
         self._queryRankHog_scores = h5.root.queryRankHog_scores[:]
         h5.close()
@@ -1316,6 +1415,9 @@ class MergeSearch(object):
             queryRankHog_scores = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.float64)
             queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)    
             # OPTION: store only HOGs on the bestpath
+            
+            # query sequence overlaps with families
+            queryFam_overlaps = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
 
             # to ignore k-mers with X (88 == b'X')
             x_char = DIGITS_AA_LOOKUP[88]
@@ -1327,7 +1429,8 @@ class MergeSearch(object):
 
                 ## get the query sequence
                 s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
-                n_kmers = s.shape[0] - (k - 1)
+                query_len = s.shape[0]
+                n_kmers = query_len - (k - 1)
 
                 # double check we don't have short peptides (of len < k)
                 # note: written in this order to provide loop-optimisation hint (?)
@@ -1336,8 +1439,8 @@ class MergeSearch(object):
                 else:
                     continue
 
-                ## get the sequence unique k-mers
-                r1 = parse_seq(
+                ## get the sequence unique k-mers and non-ambiguous locations
+                r1, p1 = parse_seq(
                     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
 
                 # skip if one k-mer with X
@@ -1347,8 +1450,8 @@ class MergeSearch(object):
                     continue
 
                 ## search sequence
-                hog_counts, fam_counts, query_occ, hog_occurs = search_seq_kmers(
-                    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+                hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc = search_seq_kmers(
+                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
 
                 ## get the raw top m families from summed k-mer counts
                 top_fam, top_fam_counts = get_top_m_fams(
@@ -1369,9 +1472,10 @@ class MergeSearch(object):
                 top_fam = top_fam[idx]
                 top_fam_scores = top_fam_scores[idx]
 
-                # store them with corresponding scores
+                # store them with corresponding scores and overlaps
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
                 queryFam_scores[zz, :top_n_fams] = top_fam_scores[:top_n_fams]
+                queryFam_overlaps[zz, :top_n_fams] = compute_overlap(fam_highloc[top_fam[:top_n_fams]], fam_lowloc[top_fam[:top_n_fams]], k, query_len)
 
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
@@ -1404,7 +1508,7 @@ class MergeSearch(object):
                     queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
 
-            return queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores
+            return queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores
 
         if not self.low_mem:
             # Set nthreads, note: this only works before numba called first time!

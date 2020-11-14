@@ -1286,6 +1286,9 @@ class MergeSearch(object):
             queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)    
             # OPTION: store only HOGs on the bestpath
 
+            # query sequence overlaps with families
+            queryFam_overlaps = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
+
             # to ignore k-mers with X (88 == b'X')
             x_char = DIGITS_AA_LOOKUP[88]
             # get a flag for k-mer with any X (= last k-mer + 1)
@@ -1296,7 +1299,8 @@ class MergeSearch(object):
 
                 ## get the query sequence
                 s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
-                n_kmers = s.shape[0] - (k - 1)
+                query_len = s.shape[0]
+                n_kmers = query_len - (k - 1)
 
                 # double check we don't have short peptides (of len < k)
                 # note: written in this order to provide loop-optimisation hint (?)
@@ -1304,9 +1308,9 @@ class MergeSearch(object):
                     pass
                 else:
                     continue
-
-                ## get the sequence unique k-mers
-                r1 = parse_seq(
+                
+                ## get the sequence unique k-mers and non-ambiguous locations
+                r1, p1 = parse_seq(
                     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
 
                 # skip if one k-mer with X
@@ -1316,8 +1320,8 @@ class MergeSearch(object):
                     continue
 
                 ## search sequence
-                hog_counts, fam_counts, query_occ, hog_occurs = search_seq_kmers(
-                    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+                hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc = search_seq_kmers(
+                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
 
                 ## get the raw top m families from summed k-mer counts
                 top_fam, top_fam_counts = get_top_m_fams(
@@ -1335,6 +1339,7 @@ class MergeSearch(object):
                 # store them with corresponding scores
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
                 queryFam_scores[zz, :top_n_fams] = top_fam_scores[:top_n_fams]
+                queryFam_overlaps[zz, :top_n_fams] = compute_overlap(fam_highloc[top_fam[:top_n_fams]], fam_lowloc[top_fam[:top_n_fams]], k, query_len)
 
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
@@ -1368,7 +1373,7 @@ class MergeSearch(object):
                     queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
 
-            return queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores
+            return queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores
 
         if not self.low_mem:
             # Set nthreads, note: this only works before numba called first time!
@@ -1556,6 +1561,9 @@ class MergeSearch(object):
             queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)    
             # OPTION: store only HOGs on the bestpath
 
+            # query sequence overlaps with families
+            queryFam_overlaps = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
+
             # to ignore k-mers with X (88 == b'X')
             x_char = DIGITS_AA_LOOKUP[88]
             # get a flag for k-mer with any X (= last k-mer + 1)
@@ -1566,7 +1574,8 @@ class MergeSearch(object):
 
                 ## get the query sequence
                 s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
-                n_kmers = s.shape[0] - (k - 1)
+                query_len = s.shape[0]
+                n_kmers = query_len - (k - 1)
 
                 # double check we don't have short peptides (of len < k)
                 # note: written in this order to provide loop-optimisation hint (?)
@@ -1575,8 +1584,8 @@ class MergeSearch(object):
                 else:
                     continue
 
-                ## get the sequence unique k-mers
-                r1 = parse_seq(
+                ## get the sequence unique k-mers and non-ambiguous locations
+                r1, p1 = parse_seq(
                     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
 
                 # skip if one k-mer with X
@@ -1586,8 +1595,8 @@ class MergeSearch(object):
                     continue
 
                 ## search sequence
-                hog_counts, fam_counts, query_occ, hog_occurs = search_seq_kmers(
-                    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+                hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc = search_seq_kmers(
+                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
 
                 ## get the raw top m families from summed k-mer counts
                 top_fam, top_fam_counts = get_top_m_fams(
@@ -1636,6 +1645,7 @@ class MergeSearch(object):
                 # store them with corresponding scores
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
                 queryFam_scores[zz, :top_n_fams] = top_fam_scores[:top_n_fams]
+                queryFam_overlaps[zz, :top_n_fams] = compute_overlap(fam_highloc[top_fam[:top_n_fams]], fam_lowloc[top_fam[:top_n_fams]], k, query_len)
 
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
@@ -1690,7 +1700,7 @@ class MergeSearch(object):
                     queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
 
-            return queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores
+            return queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores
 
         if not self.low_mem:
             # Set nthreads, note: this only works before numba called first time!
@@ -1738,6 +1748,9 @@ class MergeSearch(object):
             queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)    
             # OPTION: store only HOGs on the bestpath
 
+            # query sequence overlaps with families
+            queryFam_overlaps = np.zeros((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
+
             # to ignore k-mers with X (88 == b'X')
             x_char = DIGITS_AA_LOOKUP[88]
             # get a flag for k-mer with any X (= last k-mer + 1)
@@ -1748,7 +1761,8 @@ class MergeSearch(object):
 
                 ## get the query sequence
                 s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
-                n_kmers = s.shape[0] - (k - 1)
+                query_len = s.shape[0]
+                n_kmers = query_len - (k - 1)
 
                 # double check we don't have short peptides (of len < k)
                 # note: written in this order to provide loop-optimisation hint (?)
@@ -1757,8 +1771,8 @@ class MergeSearch(object):
                 else:
                     continue
 
-                ## get the sequence unique k-mers
-                r1 = parse_seq(
+                ## get the sequence unique k-mers and non-ambiguous locations
+                r1, p1 = parse_seq(
                     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag)
 
                 # skip if one k-mer with X
@@ -1768,8 +1782,8 @@ class MergeSearch(object):
                     continue
 
                 ## search sequence
-                hog_counts, fam_counts, query_occ, hog_occurs = search_seq_kmers(
-                    r1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
+                hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc = search_seq_kmers(
+                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
 
                 ## get the raw top m families from summed k-mer counts
                 top_fam, top_fam_counts = get_top_m_fams(
@@ -1831,6 +1845,7 @@ class MergeSearch(object):
                 # store them with corresponding scores
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
                 queryFam_scores[zz, :top_n_fams] = top_fam_scores[:top_n_fams]
+                queryFam_overlaps[zz, :top_n_fams] = compute_overlap(fam_highloc[top_fam[:top_n_fams]], fam_lowloc[top_fam[:top_n_fams]], k, query_len)
 
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
@@ -1901,7 +1916,7 @@ class MergeSearch(object):
                     queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
 
-            return queryFam_ranked, queryFam_scores, queryRankHog_bestpath, queryRankHog_scores
+            return queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores
 
         if not self.low_mem:
             # Set nthreads, note: this only works before numba called first time!

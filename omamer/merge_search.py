@@ -1508,7 +1508,7 @@ class MergeSearch(object):
 
                     fam_hog_scores, fam_bestpath = norm_hog_nonparametric(
                         fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts, 
-                        top_fam_hog_perm_counts[:, fam_rank]) 
+                        top_fam_hog_perm_counts[:, idx[fam_rank]])  # permuted HOG counts must be sorted by family-score too!
 
                     queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
@@ -1691,7 +1691,7 @@ class MergeSearch(object):
                     elif score == 'nonparam_naive':
                         fam_hog_scores, fam_bestpath = norm_hog_nonparametric(
                             fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts, 
-                            top_fam_hog_perm_counts[:, fam_rank])
+                            top_fam_hog_perm_counts[:, idx[fam_rank]])
                                             
                     # to enable parallel loop, pick one score and such else-continue statement
                     else: 
@@ -1902,7 +1902,7 @@ class MergeSearch(object):
                     elif score == 'nonparam_naive':
                         fam_hog_scores, fam_bestpath = norm_hog_nonparametric(
                             fam_hog_cumcounts, r1.size, fam_level_offsets, fam_hog2parent, fam_hog_counts, 
-                            top_fam_hog_perm_counts[:, fam_rank])
+                            top_fam_hog_perm_counts[:, idx[fam_rank]])
                     
                     elif score == 'nonparam_pvalue':
                         fam_hog_scores, fam_bestpath = compute_hog_nonparametric_pvalue(

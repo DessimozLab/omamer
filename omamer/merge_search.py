@@ -1191,7 +1191,7 @@ class MergeSearch(object):
         
         t5 = int(time())
         ts =  t5 - t4
-        print('{} second for the actual search (~ {} query/second)'.format(sbuff.prot_nr // ts))
+        print('{} second for the actual search (~ {} query/second)'.format(ts, sbuff.prot_nr // ts))
 
         self._queryFam_ranked = queryFam_ranked
         self._queryFam_scores = queryFam_scores

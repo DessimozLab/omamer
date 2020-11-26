@@ -208,7 +208,7 @@ python ${{omamer_path}}/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_p
 if __name__ == "__main__":
 
     step = sys.argv[2]
-    elif step == 'omamer_search':
+    if step == 'omamer_search':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
         min_fam_size = int(sys.argv[5])

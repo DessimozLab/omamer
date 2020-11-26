@@ -28,6 +28,7 @@ import pandas as pd
 import sys
 from scipy import special, stats
 from math import sqrt
+from time import time
 
 from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
@@ -1112,10 +1113,14 @@ class MergeSearch(object):
         top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
         
         # load query sequences
+        t1 = int(time())
         if seqs:
             sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         elif fasta_file:
             sbuff = SequenceBuffer(fasta_file=fasta_file)
+
+        t2 = int(time())
+        print('{} second to load query sequences'.format(t2 - t1))
 
         # for parametric scores that normalize for family and subfamily size, compute cumulated counts of reference HOGs 
         # actually these are also required to compute have the n parameter in the binomial as min(|Q|, |H|))
@@ -1129,7 +1134,22 @@ class MergeSearch(object):
         else:
             ref_fam_counts = np.array([], dtype=np.int64)
             ref_hog_counts = np.array([], dtype=np.int64)
+        
+        t3 = int(time())
+        print('{} second to cumulate counts of reference HOGs'.format(t3 - t2))
 
+        # load OMAmer database and table in memory       
+        trans = self.trans
+        table_idx = self.table_idx
+        table_buff = self.table_buff
+        fam_tab = self.fam_tab
+        hog_tab = self.hog_tab
+        level_arr = self.level_arr
+        max_hog_nr = self.max_hog_nr
+
+        t4 = int(time())
+        print('{} second to load the k-mer table'.format(t4 - t3))
+        
         # pick lookup function
         if score == 'querysize_hogsize_kmerfreq':
             lookup_fun = self._lookup_querysize_hogsize_kmerfreq
@@ -1144,19 +1164,20 @@ class MergeSearch(object):
         else:
             lookup_fun = self._lookup_naive
 
+        # actual OMAmer search
         queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
             sbuff.buff,
             sbuff.idx,
-            self.trans,
-            self.table_idx[:],
-            self.table_buff[:],
+            trans,
+            table_idx,
+            table_buff,
             self.ki.k,
             self.ki.alphabet.n,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
-            self.fam_tab,
-            self.hog_tab,
-            self.level_arr,
-            self.max_hog_nr,
+            fam_tab,
+            hog_tab,
+            level_arr,
+            max_hog_nr,
             fam_filter,
             top_n_fams = top_n_fams,
             top_m_fams = top_m_fams,
@@ -1167,6 +1188,10 @@ class MergeSearch(object):
             perm_nr = perm_nr,
             w_size = w_size,
             dist = dist)
+        
+        t5 = int(time())
+        ts =  t5 - t4
+        print('{} second for the actual search (~ {} query/second)'.format(sbuff.prot_nr // ts))
 
         self._queryFam_ranked = queryFam_ranked
         self._queryFam_scores = queryFam_scores

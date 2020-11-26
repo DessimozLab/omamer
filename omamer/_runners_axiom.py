@@ -174,10 +174,10 @@ def search(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, ov
         ms.store_results(ms_fn)
         set_complete(ms_fn, db_path)
 
-def write_axiom_script(step, tmp_path, mem, hour_nr, oe_path):
+def write_axiom_script(step, name, tmp_path, mem, hour_nr, oe_path):
 
     if step == 'omamer_search':
-        with open('{}run_{}.sh'.format(tmp_path, step), 'w') as inf:
+        with open('{}run_{}.sh'.format(tmp_path, name), 'w') as inf:
             inf.write(
 """#!/bin/bash
 #SBATCH --nodes=1
@@ -203,7 +203,7 @@ source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activ
 
 python ${{omamer_path}}/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{query_sp}} ${{overwrite}} ${{proteome_fn}}
 
-sacct -j %j --format=jobname,maxrss,elapsed""".format(mem, hour_nr, step, oe_path, oe_path))
+sacct -j %j --format=jobname,maxrss,elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
 if __name__ == "__main__":
 

@@ -35,7 +35,7 @@ import tables
 
 from ._utils import LOG
 from .alphabets import Alphabet
-from .hierarchy import get_lca_hog_off, get_descendant_species, get_descendant_taxa
+from .hierarchy import get_lca_off, get_descendant_species, get_descendant_taxa
 
 
 @numba.njit
@@ -190,13 +190,13 @@ class Index(object):
                 if fam == curr_fam:
                     curr_hogs.append(hog_offsets[i])
                 else:
-                    lca_hogs[lca_off] = get_lca_hog_off(curr_hogs, hog_parents)
+                    lca_hogs[lca_off] = get_lca_off(curr_hogs, hog_parents)
                     curr_hogs = list(hog_offsets[i : i + 1])
                     curr_fam = fam
                     lca_off += 1
 
             # last family
-            lca_hogs[lca_off] = get_lca_hog_off(curr_hogs, hog_parents)
+            lca_hogs[lca_off] = get_lca_off(curr_hogs, hog_parents)
             return lca_hogs
 
         @numba.njit

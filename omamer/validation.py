@@ -30,7 +30,7 @@ import random
 import tables
 import os
 
-from .hierarchy import get_root_leaf_hog_offsets, get_lca_taxon
+from .hierarchy import get_root_leaf_offsets, get_lca_taxon
 from .merge_search import MergeSearch
 from .index import Index
 
@@ -214,7 +214,7 @@ class Validation():
 
 		tp_pre_query2x2tresh, tp_rec_query2x2tresh, fn_query2x2tresh, fp_query2x2tresh = self._validate_subfamily(
 			self._thresholds[:], se._queryFam_ranked, se._query_ids, se._queryRankHog_bestpath, se._queryRankHog_scores, 
-			self.db._prot_tab[:], self.db._fam_tab[:], self.db._hog_tab.col('ParentOff'), get_root_leaf_hog_offsets, pvalue_score, 
+			self.db._prot_tab[:], self.db._fam_tab[:], self.db._hog_tab.col('ParentOff'), get_root_leaf_offsets, pvalue_score, 
 			self.hog_off2taxbin if hog2bin else np.array([]), self.fam_filter_lca, self.hog_filter_lca, self.val_mode)
 
 		# store results
@@ -395,7 +395,7 @@ class Validation():
 	    tax2taxbin = _bin_taxa(bin_num, tax2root_dist, lca_tax, focal_bin, merge_post_lca_taxa)
 	    
 	    # get taxa ancestor of focal taxon
-	    older_taxa = tax_off2tax[get_root_leaf_hog_offsets(
+	    older_taxa = tax_off2tax[get_root_leaf_offsets(
 	        tax2tax_off[focal_taxon.encode('ascii')], tax_tab['ParentOff'])][:-1]
 	    
 	    tax_off2taxbin = {}

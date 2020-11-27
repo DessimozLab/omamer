@@ -33,8 +33,7 @@ import tables
 from ._utils import LOG, is_progress_disabled
 
 from .hierarchy import (
-    get_root_leaf_hog_offsets,
-    get_lca_hog_off,
+    get_lca_off,
     get_descendant_species_taxoffs,
 )
 from .index import Index
@@ -601,7 +600,7 @@ class Database(object):
             species_tax_offs = get_descendant_species_taxoffs(
                 hog_off, hog_tab, chog_buff, cprot_buff, prot2speoff, speoff2taxoff
             )
-            lcatax_offsets[hog_off] = get_lca_hog_off(species_tax_offs, parent_arr)
+            lcatax_offsets[hog_off] = get_lca_off(species_tax_offs, parent_arr)
 
         self._hog_tab.modify_column(colname="LCAtaxOff", column=lcatax_offsets)
 

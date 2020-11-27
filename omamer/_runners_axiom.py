@@ -203,7 +203,8 @@ source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activ
 
 python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{query_sp}} ${{overwrite}} ${{proteome_fn}}
 
-sacct -j %j --format=jobname,maxrss,elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
+sstat -j ${SLURM_JOBID}.batch --format=MaxRSS
+sacct -j ${SLURM_JOBID}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
 if __name__ == "__main__":
 

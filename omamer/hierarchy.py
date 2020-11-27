@@ -24,13 +24,12 @@ import numpy as np
 import itertools
 import tables
 
-
-# generic functions for hierarchy
+## Generic functions for hierarchical tables (hog_tab and tax_tab)
 @numba.njit
-def get_root_leaf_hog_offsets(off, parent_arr):
-    """
-    leverages parent pointers to gather parents until root
-    """
+def get_root_leaf_offsets(off, parent_arr):
+    '''
+    Leverages parent pointers to gather parents until root.
+    '''
     leaf_root = [off]
     parent = parent_arr[off]
     while parent != -1:
@@ -40,13 +39,14 @@ def get_root_leaf_hog_offsets(off, parent_arr):
 
 
 @numba.njit
-def get_lca_hog_off(offsets, parent_arr):
-    """
-    compute the last common ancestor (lca) within a list of hog offsets from the same family
-    """
+def get_lca_off(offsets, parent_arr):
+    '''
+    Compute the last common ancestor (LCA) of an offset list.
+     - for HOGs, works if they all come from the same root-HOG
+    '''
     off_nr = len(offsets)
 
-    # lca of one hog is itself
+    # lca of one off is itself
     if off_nr == 1:
         return np.uint64(offsets[0])
 
@@ -60,32 +60,106 @@ def get_lca_hog_off(offsets, parent_arr):
             if len(root_leaf) < min_path:
                 min_path = len(root_leaf)
 
-        # if one hog is root, lca is root
+        # if one off is root, lca is root
         if min_path == 1:
             return np.uint64(root_leaf_paths[0][0])
 
         else:
-            # hogs from root to leaves and stop at min_path
+            # off from root to leaves and stop at min_path
             mat = np.zeros((off_nr, min_path), dtype=np.int64)
             for i in range(off_nr):
                 mat[i] = root_leaf_paths[i][:min_path]
             matT = mat.T
 
-            # the lca hog is the one before hogs start diverging
+            # the lca off is the one before they start diverging
             i = 0
             while i < min_path and np.unique(matT[i]).size == 1:
                 i += 1
             return np.uint64(matT[i - 1][0])
 
-
+# TO UPDATE
 def is_ancestor(hog1, hog2, hog2parent):
     """
     is hog1 ancestral to hog2
     """
-    return hog1 in get_root_leaf_hog_offsets(hog2, hog2parent)
+    return hog1 in get_root_leaf_offsets(hog2, hog2parent)
+
+## HOG specific functions
 
 
-# Taxonomy
+
+def get_descendant_hogs(hog_off, hog_tab, chog_buff):
+    def append_hog(hog_off, list):
+        list.append(hog_off)
+        return list
+
+    descendant_hogs = traverse(hog_off, hog_tab, chog_buff, [], append_hog, append_hog)
+    descendant_hogs.remove(hog_off)
+
+    return np.array(np.unique(descendant_hogs), dtype=np.uint64)
+
+
+def get_descendant_prots(descendant_hogs, hog_tab, cprot_buff):
+    descendant_prots = []
+    for x in descendant_hogs:
+        descendant_prots.extend(list(_children_prot(x, hog_tab, cprot_buff)))
+    return np.array(descendant_prots, dtype=np.uint64)
+
+
+
+# TO UPDATE
+def _children_prot(hog_off, hog_tab, cprot_buff):
+    """
+    simply collect the proteins of a HOG
+    """
+    hog_ent = hog_tab[hog_off]
+    cprot_off = hog_ent["ChildrenProtOff"]
+    return cprot_buff[cprot_off : cprot_off + hog_ent["ChildrenProtNum"]]
+
+
+def _children_hog(hog_off, hog_tab, chog_buff):
+    """
+    3 functions for children is silly
+    """
+    hog_ent = hog_tab[hog_off]
+    chog_off = hog_ent["ChildrenHOGoff"]
+    return chog_buff[chog_off : chog_off + hog_ent["ChildrenHOGnum"]]
+
+
+def traverse(hog_off, hog_tab, chog_buff, acc, leaf_fun, prefix_fun):
+
+    prefix_fun(hog_off, acc)
+
+    for chog in _children_hog(hog_off, hog_tab, chog_buff):
+
+        # stop when no children
+        if hog_tab[chog]["ChildrenHOGoff"] == -1:
+            leaf_fun(chog, acc)
+        else:
+            traverse(chog, hog_tab, chog_buff, acc, leaf_fun, prefix_fun)
+
+    return acc
+
+
+
+
+def get_descendant_species_taxoffs(
+    hog_off, hog_tab, chog_buff, cprot_buff, prot2speoff, speoff2taxoff
+):
+    """
+    traverse the HOG to collect all species 
+    """
+    prot_offs = get_descendant_prots(
+        np.append(get_descendant_hogs(hog_off, hog_tab, chog_buff), np.uint64(hog_off)),
+        hog_tab,
+        cprot_buff,
+    )
+    return speoff2taxoff[prot2speoff[prot_offs]]
+
+## Taxonomy specific functions
+
+# TO UPDATE
+
 def _children_tax(tax_off, tax_tab, ctax_buff):
     """
     collect direct children of a taxon
@@ -164,69 +238,7 @@ def get_descendant_taxa(tax_off, tax_tab, ctax_buff):
 # HOGs
 
 
-def _children_prot(hog_off, hog_tab, cprot_buff):
-    """
-    simply collect the proteins of a HOG
-    """
-    hog_ent = hog_tab[hog_off]
-    cprot_off = hog_ent["ChildrenProtOff"]
-    return cprot_buff[cprot_off : cprot_off + hog_ent["ChildrenProtNum"]]
 
-
-def _children_hog(hog_off, hog_tab, chog_buff):
-    """
-	3 functions for children is silly
-	"""
-    hog_ent = hog_tab[hog_off]
-    chog_off = hog_ent["ChildrenHOGoff"]
-    return chog_buff[chog_off : chog_off + hog_ent["ChildrenHOGnum"]]
-
-
-def traverse(hog_off, hog_tab, chog_buff, acc, leaf_fun, prefix_fun):
-
-    prefix_fun(hog_off, acc)
-
-    for chog in _children_hog(hog_off, hog_tab, chog_buff):
-
-        # stop when no children
-        if hog_tab[chog]["ChildrenHOGoff"] == -1:
-            leaf_fun(chog, acc)
-        else:
-            traverse(chog, hog_tab, chog_buff, acc, leaf_fun, prefix_fun)
-
-    return acc
-
-
-def get_descendant_hogs(hog_off, hog_tab, chog_buff):
-    def append_hog(hog_off, list):
-        list.append(hog_off)
-        return list
-
-    descendant_hogs = traverse(hog_off, hog_tab, chog_buff, [], append_hog, append_hog)
-    descendant_hogs.remove(hog_off)
-
-    return np.array(np.unique(descendant_hogs), dtype=np.uint64)
-
-
-def get_descendant_prots(descendant_hogs, hog_tab, cprot_buff):
-    descendant_prots = []
-    for x in descendant_hogs:
-        descendant_prots.extend(list(_children_prot(x, hog_tab, cprot_buff)))
-    return np.array(descendant_prots, dtype=np.uint64)
-
-
-def get_descendant_species_taxoffs(
-    hog_off, hog_tab, chog_buff, cprot_buff, prot2speoff, speoff2taxoff
-):
-    """
-	traverse the HOG to collect all species 
-	"""
-    prot_offs = get_descendant_prots(
-        np.append(get_descendant_hogs(hog_off, hog_tab, chog_buff), np.uint64(hog_off)),
-        hog_tab,
-        cprot_buff,
-    )
-    return speoff2taxoff[prot2speoff[prot_offs]]
 
 
 # inparalog coverage new

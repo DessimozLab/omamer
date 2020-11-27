@@ -206,7 +206,93 @@ def search(
 
 def write_axiom_script(step, name, tmp_path, mem, hour_nr, oe_path):
 
-    if step == 'omamer_search':
+    if step == 'parse_hogs':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name={}
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+oma_path=$7
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{oma_path}}
+
+sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
+sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
+
+    elif step == 'suffix_array':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name={}
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+reduced_alphabet=$7
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}}
+
+sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
+sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
+
+    elif step == 'kmer_table':
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name={}
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+reduced_alphabet=$7
+hidden_taxa=$8
+k=$9
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}}
+sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
+sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
+
+    elif step == 'omamer_search':
         with open('{}run_{}.sh'.format(tmp_path, name), 'w') as inf:
             inf.write(
 """#!/bin/bash
@@ -242,7 +328,41 @@ sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, o
 if __name__ == "__main__":
 
     step = sys.argv[2]
-    if step == 'omamer_search':
+    if step == 'parse_hogs':
+        db_path = sys.argv[3]
+        root_taxon = sys.argv[4]
+        min_fam_size = int(sys.argv[5])
+        min_fam_completeness = float(sys.argv[6])
+        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        oma_path = sys.argv[8]
+        oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
+        nwk_fn = os.path.join(oma_path, "speciestree.nwk")
+        build_database_from_oma(
+            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, oma_db_fn, nwk_fn)
+    
+    elif step == 'suffix_array':
+        db_path = sys.argv[3]
+        root_taxon = sys.argv[4]
+        min_fam_size = int(sys.argv[5])
+        min_fam_completeness = float(sys.argv[6])
+        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        build_suffix_array(
+            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet)
+
+    elif step == 'kmer_table':
+        db_path = sys.argv[3]
+        root_taxon = sys.argv[4]
+        min_fam_size = int(sys.argv[5])
+        min_fam_completeness = float(sys.argv[6])
+        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
+        k = int(sys.argv[10])
+        build_kmer_table(
+            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k)   
+
+    elif step == 'omamer_search':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
         min_fam_size = int(sys.argv[5])

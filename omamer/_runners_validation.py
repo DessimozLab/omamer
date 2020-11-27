@@ -20,6 +20,10 @@ import shutil
 import numpy as np
 from tqdm import tqdm
 
+'''
+TO DO:
+ - update write_axiom_script
+'''
 
 def search_validate(
     db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,

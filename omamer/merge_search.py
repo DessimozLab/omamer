@@ -1357,7 +1357,9 @@ class MergeSearch(object):
             q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, self.db._tax_tab[:], self.hog_tab)
         
         c = ['qseqid', 'hogid', 'taxcong', 'overlap', 'family-score', 'subfamily-score']
-        r = [map(lambda x: x.decode('ascii'), self._query_ids),
+        r = [
+            #map(lambda x: x.decode('ascii'), self._query_ids),
+            [x.decode('ascii') for x in list(self._query_ids)],
             map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off), 
             q2tax_cong,
             [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 

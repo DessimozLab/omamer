@@ -32,7 +32,7 @@ from time import time
 
 from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
-from .hierarchy import get_descendant_hogs, get_descendant_prots
+from .hierarchy import get_root_leaf_offsets #, get_descendant_hogs, get_descendant_prots
 
 # --> will be renamed Search
 # numba does not like nested methods 

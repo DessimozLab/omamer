@@ -1350,17 +1350,17 @@ class MergeSearch(object):
         # place queries
         query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
         q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
-            query_offsets, ms.fam_tab, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+            query_offsets, self.fam_tab, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
         
         # compute taxonomic congruences
         q2tax_cong = get_taxonomic_congruence(
-            q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, ms.db._tax_tab[:], ms.hog_tab)
+            q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, self.db._tax_tab[:], self.hog_tab)
         
         c = ['qseqid', 'hogid', 'taxcong', 'overlap', 'family-score', 'subfamily-score']
-        r = [map(lambda x: x.decode('ascii'), ms._query_ids[:]),
+        r = [map(lambda x: x.decode('ascii'), self._query_ids[:]),
             map(lambda x: hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off), 
             q2tax_cong,
-            [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(ms._queryFam_overlaps.flatten())], 
+            [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 
             map(lambda x: x if x != -1 else 'na', q2max_hog_score),
             map(lambda x: x if x != -1 else 'na', q2hog_score)]
 

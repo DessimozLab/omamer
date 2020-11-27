@@ -87,7 +87,6 @@ def is_ancestor(hog1, hog2, hog2parent):
 ## HOG specific functions
 
 
-
 def get_descendant_hogs(hog_off, hog_tab, chog_buff):
     def append_hog(hog_off, list):
         list.append(hog_off)

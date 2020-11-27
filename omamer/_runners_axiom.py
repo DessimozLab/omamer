@@ -22,8 +22,8 @@ from tqdm import tqdm
     General functions to run OMAmer on axiom (e.g. from notebook).
 '''
 
-def is_complete(fn, db_path):
-    cf = '{}COMPLETE.txt'.format(db_path)
+def is_complete(fn, path):
+    cf = '{}COMPLETE.txt'.format(path)
     if not os.path.exists(cf):
         with open(cf, 'w') as inf:
             pass
@@ -31,8 +31,8 @@ def is_complete(fn, db_path):
         complete_fns = set(map(lambda x: x.rstrip(), inf.readlines()))
     return fn in complete_fns
 
-def set_complete(fn, db_path):
-    with open('{}COMPLETE.txt'.format(db_path), 'a') as inf:
+def set_complete(fn, path):
+    with open('{}COMPLETE.txt'.format(path), 'a') as inf:
         inf.write('{}\n'.format(fn))
 
 def build_database_from_oma(db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, oma_db_fn, nwk_fn):
@@ -141,7 +141,8 @@ def is_in_oma(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp)
         filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
     return np.argwhere(db._sp_tab.col('ID') == query_sp.encode('ascii')).size > 0
 
-def search(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, overwrite, proteome_fn):
+def search(
+    db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, overwrite, proteome_fn, store_hdf5, out_path, ref_taxon):
 
     # if proteome in OMA, hide it
     hidden_taxa = [query_sp] if is_in_oma(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp) else []
@@ -156,23 +157,51 @@ def search(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, ov
         filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
 
     # search
-    ms_fn = '{}{}_MinFamSize{}_MinFamComp0{}{}_query_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
+    ms_fn = '{}_MinFamSize{}_MinFamComp0{}{}_query_{}'.format(
+        root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
         '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '', '_'.join(query_sp.split()))
     
-    if not is_complete(ms_fn, db_path) or overwrite:
-        if os.path.exists(ms_fn):
-            os.remove(ms_fn)
-        
+    tsv_fn = '{}{}.tsv'.format(out_path, ms_fn)
+    hdf5_fn = '{}{}.h5'.format(db_path, ms_fn)
+    if not is_complete(tsv_fn, out_path) or overwrite:
+        if os.path.exists(tsv_fn):
+            os.remove(tsv_fn)
+        if os.path.exists(hdf5_fn):
+            os.remove(hdf5_fn)
+
+        # search
         ms = MergeSearch(ki=db.ki, nthreads=1)
-        if hidden_taxa:
-            sbuff = QuerySequenceBuffer(db=db, query_sp=query_sp)
-        else:
-            sbuff = SequenceBufferFasta(proteome_fn)
+        # if hidden_taxa:
+        #     sbuff = QuerySequenceBuffer(db=db, query_sp=query_sp)
+        # else:
+        sbuff = SequenceBufferFasta(proteome_fn)
         ms.merge_search(seqs=[s for s in sbuff], ids=list(sbuff.ids), fasta_file=None, score='nonparam_naive', cum_mode='max', top_m_fams=100, 
             top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64))
-        ms.store_results(ms_fn)
-        set_complete(ms_fn, db_path)
+        
+        # load hog2implied_taxa
+        if ref_taxon:
+            ref_taxoff = np.searchsorted(db._tax_tab.col('ID'), ref_taxon.encode('ascii'))
+            hog2implied_taxa_fn = '{}{}_MinFamSize{}_MinFamComp0{}_hog2implied_taxa.pkl'.format(
+                db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1])
+            if os.path.exists(hog2implied_taxa_fn):
+                with open(hog2implied_taxa_fn, 'rb') as inf:
+                    d = pickle.load(inf)
+                    hog_taxa_idx = d['hog_taxa_idx']
+                    hog_taxa_buff = d['hog_taxa_buff']
+            else:
+                print('hog2implied_taxa missing')
+                return None
+        else:
+            ref_taxoff = None
+            hog_taxa_idx, hog_taxa_buff = None, None
+
+        # export results
+        df = ms.output_results(overlap=0, fst=0, sst=0, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+        if df.size >0:
+            df.to_csv(tsv_fn, sep='\t', index=False, header=False)
+            if store_hdf5:
+                ms.store_results(hdf5_fn)
+            set_complete(tsv_fn, out_path)
 
 def write_axiom_script(step, name, tmp_path, mem, hour_nr, oe_path):
 
@@ -198,10 +227,13 @@ min_completeness=$5
 query_sp=$6
 overwrite=$7
 proteome_fn=$8
+store_hdf5=$9
+out_path=${{10}}
+ref_taxon=${{11}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{query_sp}} ${{overwrite}} ${{proteome_fn}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{query_sp}} ${{overwrite}} ${{proteome_fn}} ${{store_hdf5}} ${{out_path}} ${{ref_taxon}}
 
 sstat -j ${SLURM_JOBID}.batch --format=MaxRSS
 sacct -j ${SLURM_JOBID}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -217,6 +249,9 @@ if __name__ == "__main__":
         query_sp = ' '.join(sys.argv[7].split('_'))
         overwrite = True if (sys.argv[8] == 'True') else False
         proteome_fn = sys.argv[9]
+        store_hdf5 = True if (sys.argv[10] == 'True') else False
+        out_path = sys.argv[11]
+        ref_taxon = sys.argv[12]
 
-        search(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, overwrite, proteome_fn)
+        search(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, overwrite, proteome_fn, store_hdf5, out_path, ref_taxon)
 

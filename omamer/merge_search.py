@@ -1044,6 +1044,105 @@ def compute_overlap(fam_highloc, fam_lowloc, k, query_len):
             overlap[i] = (fam_highloc[i] - fam_lowloc[i] + k) / query_len
     return overlap
 
+## function to place queries and output results
+@numba.njit
+def _place_queries(
+    query_offsets, q2fam_off, q2fam_score, q2fam_overlap, fam_tab, q2hog_bestpath, q2hog_scores, overlap, fst, sst,
+    true_tax_off, hog_taxa_idx, hog_taxa_buff):
+    '''
+    For each query:
+        Skip when low sequence overlap (overlap)
+        Traverse the best scoring root-to-leaf HOG path to:
+         1. keep track of the most specific HOG above the subfamily-score threshold (sst)
+         2. keep track of the highest HOG score to use as family score
+         3. option to stop placement at true taxon
+        Skip if family score below family-score threshold or all subfamily-score below subfamily-score threshold
+    Skipped queries are returned with a -1
+    '''
+    q2hog_off = np.full(q2fam_off.size, -1, dtype=np.int64)
+    q2hog_score = np.full(q2fam_off.size, -1, dtype=np.float64)
+    q2max_hog_score = np.full(q2fam_off.size, -1, dtype=np.float64)
+    
+    for i in numba.prange(query_offsets.size):
+        q = query_offsets[i]
+        
+        # if below overlap threshold, skip
+        o = q2fam_overlap[q]
+        if (o < overlap):
+            continue       
+
+        # find best scoring subfamily
+        fam_off = q2fam_off[q]
+        root_hog_off = fam_tab[fam_off]['HOGoff']
+        fam_hog_nr = fam_tab[fam_off]['HOGnum']
+        fam_bestpath = q2hog_bestpath[q, :fam_hog_nr]
+        fam_hog_scores = q2hog_scores[q, :fam_hog_nr]
+        best_j = None
+        best_s = 0
+        for j in np.argwhere(fam_bestpath).flatten():
+            
+            # update best subfamily (above threshold)
+            ss = fam_hog_scores[j]  
+            if ss >= sst:
+                best_j = j
+            
+            # update best score
+            if ss > best_s:
+                best_s = ss
+            
+            # stop if subfamily implies the true taxon
+            if true_tax_off is not None:
+                hog_off = np.int(root_hog_off + j)
+                x = hog_taxa_idx[hog_off: hog_off + 2]
+                hog_taxa = hog_taxa_buff[x[0]: x[1]]
+                if np.argwhere(hog_taxa == true_tax_off).size == 1:
+                    break
+                        
+        # skip if no subfamily-score > subfamily-score threshold or if best subfamily-score < family-score threshold
+        if (best_j is None) or (best_s < fst):
+            continue
+        
+        q2hog_off[i] = np.int(best_j + root_hog_off)
+        q2hog_score[i] = ss
+        q2max_hog_score[i] = best_s
+
+    return q2hog_off, q2hog_score, q2max_hog_score
+
+@numba.njit
+def get_taxonomic_congruence(q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, tax_tab, hog_tab):
+    '''
+    Evaluate congruence between each placement and the reference taxon.
+        - at_level: the predicted HOG implies the reference taxon
+        - under_specific: the predicted HOG implies an ancestor of the reference taxon
+        - wrong_path: the predicted HOG implies neither the reference taxon nor its ancestors
+        - not_placed: no predicted HOG
+    '''
+    ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])
+    res = np.zeros(q2hog_off.size, dtype=np.uint8)
+    for i, hog_off in enumerate(q2hog_off):
+        
+        # not placed
+        if hog_off == -1:
+            res[i] = 3
+            continue
+        
+        # placed at the right level
+        x = hog_taxa_idx[hog_off: hog_off + 2]
+        hog_taxa = hog_taxa_buff[x[0]: x[1]]
+        if np.argwhere(hog_taxa == ref_taxoff).size == 1:
+            continue
+        
+        # placed under-specifically
+        elif np.argwhere(ref_lineage == hog_tab['TaxOff'][hog_off]).size == 1:
+            res[i] = 1
+        
+        # placed wrongly
+        else:
+            res[i] = 2
+            
+    return res
+
+
 class MergeSearch(object):
     def __init__(self, ki, nthreads=None, low_mem=False, include_extant_genes=False):
     	assert ki.db.mode == "r", "Database must be opened in read mode."
@@ -1224,53 +1323,101 @@ class MergeSearch(object):
         self._queryRankHog_scores = h5.root.queryRankHog_scores[:]
         h5.close()
 
-    def output_results(self, threshold=0.1):
+    def place_queries(
+        self, query_offsets, overlap, fst, sst, ref_taxoff=None, hog_taxa_idx=np.array([]), hog_taxa_buff=np.array([])):
+        '''
+        For each query:
+            Skip when low sequence overlap (overlap)
+            Traverse the best scoring root-to-leaf HOG path to:
+             1. keep track of the most specific HOG above the subfamily-score threshold (sst)
+             2. keep track of the highest HOG score to use as family score
+             3. option to stop placement at true taxon
+            Skip if family score below family-score threshold or all subfamily-score below subfamily-score threshold
+        Skipped queries are returned with a -1
+        '''
+        return _place_queries(
+            query_offsets, self._queryFam_ranked[:, 0], self._queryFam_scores[:, 0], self._queryFam_overlaps[:, 0], self.fam_tab, 
+            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
 
-    	def get_prot_ids(h):
-    	    desc_hogs = list(get_descendant_hogs(h, self.db._hog_tab, self.db._chog_arr)) + [h]
-    	    prot_ii = get_descendant_prots(desc_hogs, self.db._hog_tab, self.db._cprot_arr)
-    	    return self.db._prot_tab.read_coordinates(prot_ii, 'ID')
+    def output_results(self, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff):
+        # not priority
+        # def get_prot_ids(ms, hog_off):
+        #     desc_hogs = list(get_descendant_hogs(hog_off, ms.db._hog_tab, ms.db._chog_arr)) + [hog_off]
+        #     prot_ii = get_descendant_prots(desc_hogs, ms.db._hog_tab, ms.db._cprot_arr)
+        #     return ms.db._prot_tab.read_coordinates(prot_ii, 'ID')
+        # [','.join(map(lambda x: x.decode('ascii'), get_prot_ids(ms, hog_off))) for hog_off in q2hog_off] 
 
-    	qseqid = self._query_ids
-    	family = self._queryFam_ranked[:, 0]
-    	family_score = self._queryFam_scores[:, 0]
+        # place queries
+        query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
+        q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
+            query_offsets, ms.fam_tab, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+        
+        # compute taxonomic congruences
+        q2tax_cong = get_taxonomic_congruence(
+            q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, ms.db._tax_tab[:], ms.hog_tab)
+        
+        c = ['qseqid', 'hogid', 'taxcong', 'overlap', 'family-score', 'subfamily-score']
+        r = [map(lambda x: x.decode('ascii'), ms._query_ids[:]),
+            map(lambda x: hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off), 
+            q2tax_cong,
+            [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(ms._queryFam_overlaps.flatten())], 
+            map(lambda x: x if x != -1 else 'na', q2max_hog_score),
+            map(lambda x: x if x != -1 else 'na', q2hog_score)]
 
-    	# generate the dataframe
-    	def generate_results(threshold):
-    	    for i in np.argwhere(~np.isnan(family_score)).flatten():
-    	        # find best scoring subfamily
-    	        fam_hog_nr = self.db._fam_tab[family[i]]['HOGnum']
-    	        fam_bestpath = self._queryRankHog_bestpath[0, i, :fam_hog_nr]
-    	        fam_hog_scores = self._queryRankHog_scores[0, i, :fam_hog_nr]
-    	        best_j = None
-    	        best_s = np.inf
-    	        for j in np.argwhere(fam_bestpath).flatten():
-    	            s = fam_hog_scores[j]
-    	            if s < best_s and s >= threshold:
-    	                best_j = j
-    	                best_s = s
-    	        if best_j is not None:
-    	            hog_off = self.db._fam_tab[family[i]]['HOGoff']
-    	            # update best_j to get the subfamily offset
-    	            best_j = int(best_j + hog_off)
-    	            z = {'qseqid': qseqid[i],
-    	                 'family': self.db._hog_tab[self.db._fam_tab[family[i]]['HOGoff']]['OmaID'].decode('ascii'),
-    	                 'family-score': family_score[i],
-    	                 'subfamily': self.db._hog_tab[best_j]['OmaID'].decode('ascii'),
-    	                 'subfamily-score': best_s}
-    	            if self.include_extant_genes:
-    	                z['subfamily-geneset'] = ','.join(map(lambda x: x.decode('ascii'), get_prot_ids(best_j)))
-    	            yield z
+        # TO DO: update hierarchy
+        #     if ms.include_extant_genes:
+        #         c.append('subfamily-geneset')
+        #         r.append([','.join(map(lambda x: x.decode('ascii'), get_prot_ids(ms, hog_off))) for hog_off in q2hog_off])
 
-    	h = ['qseqid', 'family', 'family-score', 'subfamily', 'subfamily-score']
-    	if self.include_extant_genes:
-    	    h.append('subfamily-geneset')
+        return pd.DataFrame(zip(*r), columns=c)
+
+    # def output_results(self, threshold=0.1):
+
+    # 	def get_prot_ids(h):
+    # 	    desc_hogs = list(get_descendant_hogs(h, self.db._hog_tab, self.db._chog_arr)) + [h]
+    # 	    prot_ii = get_descendant_prots(desc_hogs, self.db._hog_tab, self.db._cprot_arr)
+    # 	    return self.db._prot_tab.read_coordinates(prot_ii, 'ID')
+
+    # 	qseqid = self._query_ids
+    # 	family = self._queryFam_ranked[:, 0]
+    # 	family_score = self._queryFam_scores[:, 0]
+
+    # 	# generate the dataframe
+    # 	def generate_results(threshold):
+    # 	    for i in np.argwhere(~np.isnan(family_score)).flatten():
+    # 	        # find best scoring subfamily
+    # 	        fam_hog_nr = self.db._fam_tab[family[i]]['HOGnum']
+    # 	        fam_bestpath = self._queryRankHog_bestpath[0, i, :fam_hog_nr]
+    # 	        fam_hog_scores = self._queryRankHog_scores[0, i, :fam_hog_nr]
+    # 	        best_j = None
+    # 	        best_s = np.inf
+    # 	        for j in np.argwhere(fam_bestpath).flatten():
+    # 	            s = fam_hog_scores[j]
+    # 	            if s < best_s and s >= threshold:
+    # 	                best_j = j
+    # 	                best_s = s
+    # 	        if best_j is not None:
+    # 	            hog_off = self.db._fam_tab[family[i]]['HOGoff']
+    # 	            # update best_j to get the subfamily offset
+    # 	            best_j = int(best_j + hog_off)
+    # 	            z = {'qseqid': qseqid[i],
+    # 	                 'family': self.db._hog_tab[self.db._fam_tab[family[i]]['HOGoff']]['OmaID'].decode('ascii'),
+    # 	                 'family-score': family_score[i],
+    # 	                 'subfamily': self.db._hog_tab[best_j]['OmaID'].decode('ascii'),
+    # 	                 'subfamily-score': best_s}
+    # 	            if self.include_extant_genes:
+    # 	                z['subfamily-geneset'] = ','.join(map(lambda x: x.decode('ascii'), get_prot_ids(best_j)))
+    # 	            yield z
+
+    # 	h = ['qseqid', 'family', 'family-score', 'subfamily', 'subfamily-score']
+    # 	if self.include_extant_genes:
+    # 	    h.append('subfamily-geneset')
     	
-    	# if >0 family hit
-    	if np.max(family_score) >= threshold:
-    		return pd.DataFrame(generate_results(threshold))[h]
-    	else:
-    		return pd.DataFrame()
+    # 	# if >0 family hit
+    # 	if np.max(family_score) >= threshold:
+    # 		return pd.DataFrame(generate_results(threshold))[h]
+    # 	else:
+    # 		return pd.DataFrame()
 
     @lazy_property
     def _lookup_querysize_hogsize_kmerfreq(self):

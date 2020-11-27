@@ -13,6 +13,7 @@ from omamer.merge_search import MergeSearch
 from omamer.validation import Validation
 
 import os
+import pickle
 import tables
 import shutil
 import numpy as np

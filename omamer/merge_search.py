@@ -1350,7 +1350,7 @@ class MergeSearch(object):
         # place queries
         query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
         q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
-            query_offsets, self.fam_tab, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+            query_offsets, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
         
         # compute taxonomic congruences
         q2tax_cong = get_taxonomic_congruence(

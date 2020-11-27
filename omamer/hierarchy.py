@@ -85,8 +85,36 @@ def is_ancestor(hog1, hog2, hog2parent):
     return hog1 in get_root_leaf_offsets(hog2, hog2parent)
 
 ## HOG specific functions
+def get_hog_implied_taxa(hog_off, hog_tab, tax_tab, ctax_buff, chog_buff):
+    '''
+    Collect the HOG implied taxa (i.e. any taxon descending from the HOG root-taxon and before child HOGs root-taxa).
+    (implied because include taxa having lost their copy)
+    '''
+    tax_off = hog_tab[hog_off]['TaxOff']
+    hog_taxa = set(get_descendant_taxa(tax_off, tax_tab, ctax_buff))
+    hog_taxa.add(tax_off)
+    chogs_taxa = set()
+    for chog_off in _children_hog(hog_off, hog_tab, chog_buff):
+        ctax_off = hog_tab[chog_off]['TaxOff']
+        chogs_taxa.add(ctax_off)
+        chogs_taxa.update(get_descendant_taxa(ctax_off, tax_tab, ctax_buff))
+    return hog_taxa.difference(chogs_taxa)
 
+def get_hog2implied_taxa(hog_tab, tax_tab, ctax_buff, chog_buff):
+    '''
+    Precompute compact hog2implied_taxa
+    '''
+    buff_off = 0
+    hog_taxa_idx = [buff_off]
+    hog_taxa_buff = []
+    for hog_off in tqdm(range(hog_tab.size)):
+        taxa = get_hog_implied_taxa(hog_off, hog_tab, tax_tab, ctax_buff, chog_buff)
+        buff_off += len(taxa)
+        hog_taxa_idx.append(buff_off)
+        hog_taxa_buff.extend(taxa)
+    return np.array(hog_taxa_idx, dtype=np.int16), np.array(hog_taxa_buff, dtype=np.int16)
 
+# TO UPDATE
 def get_descendant_hogs(hog_off, hog_tab, chog_buff):
     def append_hog(hog_off, list):
         list.append(hog_off)
@@ -97,16 +125,12 @@ def get_descendant_hogs(hog_off, hog_tab, chog_buff):
 
     return np.array(np.unique(descendant_hogs), dtype=np.uint64)
 
-
 def get_descendant_prots(descendant_hogs, hog_tab, cprot_buff):
     descendant_prots = []
     for x in descendant_hogs:
         descendant_prots.extend(list(_children_prot(x, hog_tab, cprot_buff)))
     return np.array(descendant_prots, dtype=np.uint64)
 
-
-
-# TO UPDATE
 def _children_prot(hog_off, hog_tab, cprot_buff):
     """
     simply collect the proteins of a HOG

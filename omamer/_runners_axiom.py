@@ -196,7 +196,7 @@ def search(
             hog_taxa_idx, hog_taxa_buff = None, None
 
         # export results
-        df = ms.output_results(overlap=0, fst=0, sst=0, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+        df = ms.output_results(overlap=0, fst=0, sst=0, ref_taxoff=ref_taxoff, hog_taxa_idx=hog_taxa_idx, hog_taxa_buff=hog_taxa_buff)
         if df.size >0:
             df.to_csv(tsv_fn, sep='\t', index=False, header=False)
             if store_hdf5:

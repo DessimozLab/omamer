@@ -1109,38 +1109,82 @@ def _place_queries(
     return q2hog_off, q2hog_score, q2max_hog_score
 
 @numba.njit
-def get_taxonomic_congruence(q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, tax_tab, hog_tab):
+def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_taxa_idx, hog_taxa_buff, hog_tab):
     '''
-    Evaluate congruence between each placement and the reference taxon.
-        - at_level: the predicted HOG implies the reference taxon
-        - under_specific: the predicted HOG implies an ancestor of the reference taxon
-        - wrong_path: the predicted HOG implies neither the reference taxon nor its ancestors
-        - not_placed: no predicted HOG
+    Based on the predicted HOG root and descendant taxa, we find the closest taxon from reference taxon.
+     - if root-taxon is one of its descendants, we report the HOG root-taxon (older child) (should be root-HOGs when using such stopping criterion)
+     - if root-taxon is one of its ancestors, we report the first ancestor that is defined within the HOG (based on real hog2taxa)
+       (basically the speciation before the duplication or loss delimiting the HOG from the reference taxon)
+     - otherwise, we simply report the HOG root-taxon (still the closer from the reference taxon since on wrong lineage)
+     - na if not placed    
     '''
-    ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])
-    res = np.zeros(q2hog_off.size, dtype=np.uint8)
+    q2closest_taxon = np.zeros(q2hog_off.size, dtype=np.uint64)
+    ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])[::-1][1:]
+
     for i, hog_off in enumerate(q2hog_off):
-        
+
         # not placed
         if hog_off == -1:
-            res[i] = 3
+            q2closest_taxon[i] == -1
             continue
-        
-        # placed at the right level
+
+        # get the HOG taxa and the HOG root-taxon
         x = hog_taxa_idx[hog_off: hog_off + 2]
         hog_taxa = hog_taxa_buff[x[0]: x[1]]
+        root_tax_off = hog_tab['TaxOff'][hog_off]    
+
+        # reference taxon in HOG taxa (at level)
         if np.argwhere(hog_taxa == ref_taxoff).size == 1:
-            continue
-        
-        # placed under-specifically
-        elif np.argwhere(ref_lineage == hog_tab['TaxOff'][hog_off]).size == 1:
-            res[i] = 1
-        
-        # placed wrongly
+            q2closest_taxon[i] = ref_taxoff
+
+        # root-taxon in taxon lineage (more general)
+        elif np.argwhere(ref_lineage == root_tax_off).size == 1:
+
+            # get the closer ancestral taxon in HOG
+            j = 0
+            while np.argwhere(hog_taxa == ref_lineage[j]).size == 0:
+                j += 1
+            q2closest_taxon[i] = ref_lineage[j]
+
+        # root-taxon either in child taxa (more specific) or in a different clade
         else:
-            res[i] = 2
+            q2closest_taxon[i] = hog_tab['TaxOff'][hog_off]
+    
+    return q2closest_taxon
+
+# @numba.njit
+# def get_taxonomic_congruence(q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, tax_tab, hog_tab):
+#     '''
+#     Evaluate congruence between each placement and the reference taxon.
+#         - at_level: the predicted HOG implies the reference taxon
+#         - under_specific: the predicted HOG implies an ancestor of the reference taxon
+#         - wrong_path: the predicted HOG implies neither the reference taxon nor its ancestors
+#         - not_placed: no predicted HOG
+#     '''
+#     ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])
+#     res = np.zeros(q2hog_off.size, dtype=np.uint8)
+#     for i, hog_off in enumerate(q2hog_off):
+        
+#         # not placed
+#         if hog_off == -1:
+#             res[i] = 3
+#             continue
+        
+#         # placed at the right level
+#         x = hog_taxa_idx[hog_off: hog_off + 2]
+#         hog_taxa = hog_taxa_buff[x[0]: x[1]]
+#         if np.argwhere(hog_taxa == ref_taxoff).size == 1:
+#             continue
+        
+#         # placed under-specifically
+#         elif np.argwhere(ref_lineage == hog_tab['TaxOff'][hog_off]).size == 1:
+#             res[i] = 1
+        
+#         # placed wrongly
+#         else:
+#             res[i] = 2
             
-    return res
+#     return res
 
 
 class MergeSearch(object):
@@ -1353,14 +1397,15 @@ class MergeSearch(object):
             query_offsets, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
         
         # compute taxonomic congruences
-        q2tax_cong = get_taxonomic_congruence(
-            q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, self.db._tax_tab[:], self.hog_tab)
+        tax_tab = self.db._tax_tab[:]
+        q2closest_taxon = get_closest_taxa_from_ref(
+            q2hog_off, ref_taxoff, tax_tab, hog_taxa_idx, hog_taxa_buff, self.hog_tab)
         
-        c = ['qseqid', 'hogid', 'taxcong', 'overlap', 'family-score', 'subfamily-score']
+        c = ['qseqid', 'hogid', 'closetax', 'overlap', 'family-score', 'subfamily-score']
         r = [
             self._query_ids,
             map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off), 
-            q2tax_cong,
+            map(lambda x: tax_tab['ID'][x].decode('ascii') if x != -1 else 'na', q2closest_taxon),
             [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 
             map(lambda x: x if x != -1 else 'na', q2max_hog_score),
             map(lambda x: x if x != -1 else 'na', q2hog_score)]

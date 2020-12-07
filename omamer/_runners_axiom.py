@@ -179,18 +179,18 @@ def search(
         ms.merge_search(seqs=[s for s in sbuff], ids=list(sbuff.ids), fasta_file=None, score='nonparam_naive', cum_mode='max', top_m_fams=100, 
             top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64))
         
-        # load hog2implied_taxa
+        # load hog2taxa
         if ref_taxon:
             ref_taxoff = np.searchsorted(db._tax_tab.col('ID'), ref_taxon.encode('ascii'))
-            hog2implied_taxa_fn = '{}{}_MinFamSize{}_MinFamComp0{}_hog2implied_taxa.pkl'.format(
+            hog2taxa_fn = '{}{}_MinFamSize{}_MinFamComp0{}_hog2taxa.pkl'.format(
                 db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1])
-            if os.path.exists(hog2implied_taxa_fn):
-                with open(hog2implied_taxa_fn, 'rb') as inf:
+            if os.path.exists(hog2taxa_fn):
+                with open(hog2taxa_fn, 'rb') as inf:
                     d = pickle.load(inf)
                     hog_taxa_idx = d['hog_taxa_idx']
                     hog_taxa_buff = d['hog_taxa_buff']
             else:
-                print('hog2implied_taxa missing')
+                print('{} missing'.format(hog2taxa_fn))
                 return None
         else:
             ref_taxoff = None

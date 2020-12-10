@@ -32,7 +32,7 @@ from time import time
 
 from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
-from .hierarchy import get_root_leaf_offsets #, get_descendant_hogs, get_descendant_prots
+from .hierarchy import get_root_leaf_offsets, get_hog_taxon_levels
 
 # --> will be renamed Search
 # numba does not like nested methods 
@@ -1048,7 +1048,7 @@ def compute_overlap(fam_highloc, fam_lowloc, k, query_len):
 @numba.njit
 def _place_queries(
     query_offsets, q2fam_off, q2fam_score, q2fam_overlap, fam_tab, q2hog_bestpath, q2hog_scores, overlap, fst, sst,
-    true_tax_off, hog_taxa_idx, hog_taxa_buff):
+    true_tax_off, hog_tab, hog_taxa_buff):
     '''
     For each query:
         Skip when low sequence overlap (overlap)
@@ -1093,8 +1093,7 @@ def _place_queries(
             # stop if subfamily implies the true taxon
             if true_tax_off is not None:
                 hog_off = np.int(root_hog_off + j)
-                x = hog_taxa_idx[hog_off: hog_off + 2]
-                hog_taxa = hog_taxa_buff[x[0]: x[1]]
+                hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
                 if np.argwhere(hog_taxa == true_tax_off).size == 1:
                     break
                         
@@ -1109,7 +1108,7 @@ def _place_queries(
     return q2hog_off, q2hog_score, q2max_hog_score
 
 @numba.njit
-def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_taxa_idx, hog_taxa_buff, hog_tab):
+def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, hog_taxa_buff):
     '''
     Based on the predicted HOG root and descendant taxa, we find the closest taxon from reference taxon.
      - if root-taxon is one of its descendants, we report the HOG root-taxon (older child) (should be root-HOGs when using such stopping criterion)
@@ -1129,8 +1128,7 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_taxa_idx, hog_
             continue
 
         # get the HOG taxa and the HOG root-taxon
-        x = hog_taxa_idx[hog_off: hog_off + 2]
-        hog_taxa = hog_taxa_buff[x[0]: x[1]]
+        hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
         root_tax_off = hog_tab['TaxOff'][hog_off]    
 
         # reference taxon in HOG taxa (at level)
@@ -1368,7 +1366,7 @@ class MergeSearch(object):
         h5.close()
 
     def place_queries(
-        self, query_offsets, overlap, fst, sst, ref_taxoff=None, hog_taxa_idx=np.array([]), hog_taxa_buff=np.array([])):
+        self, query_offsets, overlap, fst, sst, ref_taxoff=None):
         '''
         For each query:
             Skip when low sequence overlap (overlap)
@@ -1381,25 +1379,29 @@ class MergeSearch(object):
         '''
         return _place_queries(
             query_offsets, self._queryFam_ranked[:, 0], self._queryFam_scores[:, 0], self._queryFam_overlaps[:, 0], self.fam_tab, 
-            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, self.hog_tab, self.db._hog_taxa_buff[:])
 
-    def output_results(self, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff):
+    def output_results(self, overlap, fst, sst, ref_taxon):
         # not priority
         # def get_prot_ids(ms, hog_off):
         #     desc_hogs = list(get_descendant_hogs(hog_off, ms.db._hog_tab, ms.db._chog_arr)) + [hog_off]
         #     prot_ii = get_descendant_prots(desc_hogs, ms.db._hog_tab, ms.db._cprot_arr)
         #     return ms.db._prot_tab.read_coordinates(prot_ii, 'ID')
         # [','.join(map(lambda x: x.decode('ascii'), get_prot_ids(ms, hog_off))) for hog_off in q2hog_off] 
+        tax_tab = self.db._tax_tab[:]
+        if ref_taxon:
+            ref_taxoff = np.searchsorted(tax_tab['ID'], ref_taxon.encode('ascii'))
+        else:
+            ref_taxoff = None
 
         # place queries
         query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
         q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
-            query_offsets, overlap, fst, sst, ref_taxoff, hog_taxa_idx, hog_taxa_buff)
+            query_offsets, overlap, fst, sst, ref_taxoff)
         
         # compute taxonomic congruences
-        tax_tab = self.db._tax_tab[:]
         q2closest_taxon = get_closest_taxa_from_ref(
-            q2hog_off, ref_taxoff, tax_tab, hog_taxa_idx, hog_taxa_buff, self.hog_tab)
+            q2hog_off, ref_taxoff, tax_tab, self.hog_tab, self.db._hog_taxa_buff[:])
         
         c = ['qseqid', 'hogid', 'closetax', 'overlap', 'family-score', 'subfamily-score']
         r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],

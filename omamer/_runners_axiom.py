@@ -20,7 +20,7 @@ import numpy as np
 from tqdm import tqdm
 
 '''
-    General functions to run OMAmer on axiom (e.g. from notebook).
+General functions to run OMAmer on axiom (e.g. from notebook).
 '''
 
 def is_complete(fn, path):
@@ -36,20 +36,20 @@ def set_complete(fn, path):
     with open('{}COMPLETE.txt'.format(path), 'a') as inf:
         inf.write('{}\n'.format(fn))
 
-def build_database_from_oma(db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, oma_db_fn, nwk_fn):
+def build_database_from_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, oma_db_fn, nwk_fn, overwrite):
     '''
-    parse OMA HOGs
+    Parse OMA HOGs.
     '''
-    db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
+    db_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1])
 
-    if not is_complete(db_fn, db_path):
+    if not is_complete(db_fn, db_path) or overwrite:
         if os.path.exists(db_fn):
             os.remove(db_fn)
             
         db = DatabaseFromOMA(
-            filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness,
-            include_younger_fams=include_younger_fams, mode='w')
+            filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness,
+            include_younger_fams=True, mode='w')
 
         # load sequences from OMA database
         db.build_database(oma_db_fn, nwk_fn)
@@ -57,27 +57,26 @@ def build_database_from_oma(db_path, root_taxon, min_fam_size, min_fam_completen
 
         set_complete(db_fn, db_path)
 
-def build_suffix_array(db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet):
+def build_suffix_array(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, overwrite):
     '''
-    compute SA 
+    Compute Suffix Array. 
     '''
     # reload database
-    db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
+    db_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1])
 
     assert os.path.exists(db_fn), 'database missing'
 
     db = DatabaseFromOMA(
-        filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness,
-        include_younger_fams=include_younger_fams, mode='r')
+        filename=db_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness,
+        include_younger_fams=True, mode='r')
 
     # compute suffix array
     alphabet_n = 21 if not reduced_alphabet else 13    
-    sa_fn = '{}SA_{}_MinFamSize{}_MinFamComp0{}_{}_A{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
-        'yf' if include_younger_fams else 'rf', alphabet_n)
+    sa_fn = '{}SA_{}_MinFamSize{}_{}_MinFamComp0{}_A{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], alphabet_n)
 
-    if not is_complete(sa_fn, db_path):
+    if not is_complete(sa_fn, db_path) or overwrite:
         if os.path.exists(sa_fn):
             os.remove(sa_fn)
 
@@ -92,25 +91,24 @@ def build_suffix_array(db_path, root_taxon, min_fam_size, min_fam_completeness, 
         set_complete(sa_fn, db_path)
 
 def build_kmer_table(
-    db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k):
+    db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, hidden_taxa, overwrite):
     
     alphabet_n = 21 if not reduced_alphabet else 13
 
-    db_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 'yf' if include_younger_fams else 'rf')
+    db_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1])
     
-    sa_fn = '{}SA_{}_MinFamSize{}_MinFamComp0{}_{}_A{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
-        'yf' if include_younger_fams else 'rf', alphabet_n) 
+    sa_fn = '{}SA_{}_MinFamSize{}_{}_MinFamComp0{}_A{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], alphabet_n)
 
     assert os.path.exists(db_fn), 'database missing'
     assert os.path.exists(sa_fn), 'suffix array missing'
 
-    ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
-        'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
+    ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}_A{}_k{}{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], alphabet_n, k, 
+        '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '')
 
-    if not is_complete(ki_fn, db_path):
+    if not is_complete(ki_fn, db_path) or overwrite:
         if os.path.exists(ki_fn):
             os.remove(ki_fn)
 
@@ -119,8 +117,8 @@ def build_kmer_table(
 
         # load in append mode
         db = DatabaseFromOMA(
-            filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness,
-            include_younger_fams=include_younger_fams, mode='a')   
+            filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness,
+            include_younger_fams=True, mode='a')   
 
         # load suffix array
         sa_h5 = tables.open_file(sa_fn, 'r', filters=db._compr)
@@ -135,31 +133,34 @@ def build_kmer_table(
 
         set_complete(ki_fn, db_path)
 
-def is_in_oma(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp):
-    ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1])
+def is_in_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, query_sp):
+    ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1])
     db = DatabaseFromOMA(
-        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
+        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
     return np.argwhere(db._sp_tab.col('ID') == query_sp.encode('ascii')).size > 0
 
 def search(
-    db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, overwrite, proteome_fn, store_hdf5, out_path, ref_taxon):
+    db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, query_sp, proteome_fn, store_hdf5, out_path, ref_taxon, overwrite):
+    
+    alphabet_n = 21 if not reduced_alphabet else 13
 
-    # if proteome in OMA, hide it
-    hidden_taxa = [query_sp] if is_in_oma(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp) else []
+    # if proteome in OMA, hide it (NOTE sure about this because specific to taxonomic placement validation)
+    hidden_taxa = [query_sp] if is_in_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, query_sp) else []
 
     # reload k-mer table
-    ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}{}.h5'.format(
-        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
+    ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}_A{}_k{}{}.h5'.format(
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], alphabet_n, k, 
         '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '')
-    assert os.path.exists(ki_fn), 'index missing'
+
+    assert os.path.exists(ki_fn), '{} missing'.format(ki_fn)
     
     db = DatabaseFromOMA(
-        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
+        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
 
     # search
-    ms_fn = '{}_MinFamSize{}_MinFamComp0{}{}_query_{}'.format(
-        root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
+    ms_fn = '{}_MinFamSize{}_{}_MinFamComp0{}_A{}_k{}{}_query_{}'.format(
+        root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], alphabet_n, k, 
         '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '', '_'.join(query_sp.split()))
     
     tsv_fn = '{}{}.tsv'.format(out_path, ms_fn)
@@ -172,32 +173,12 @@ def search(
 
         # search
         ms = MergeSearch(ki=db.ki, nthreads=1)
-        # if hidden_taxa:
-        #     sbuff = QuerySequenceBuffer(db=db, query_sp=query_sp)
-        # else:
         sbuff = SequenceBufferFasta(proteome_fn)
         ms.merge_search(seqs=[s for s in sbuff], ids=list(sbuff.ids), fasta_file=None, score='nonparam_naive', cum_mode='max', top_m_fams=100, 
             top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64))
-        
-        # load hog2taxa
-        if ref_taxon:
-            ref_taxoff = np.searchsorted(db._tax_tab.col('ID'), ref_taxon.encode('ascii'))
-            hog2taxa_fn = '{}{}_MinFamSize{}_MinFamComp0{}_hog2taxa.pkl'.format(
-                db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1])
-            if os.path.exists(hog2taxa_fn):
-                with open(hog2taxa_fn, 'rb') as inf:
-                    d = pickle.load(inf)
-                    hog_taxa_idx = d['hog_taxa_idx']
-                    hog_taxa_buff = d['hog_taxa_buff']
-            else:
-                print('{} missing'.format(hog2taxa_fn))
-                return None
-        else:
-            ref_taxoff = None
-            hog_taxa_idx, hog_taxa_buff = None, None
 
         # export results
-        df = ms.output_results(overlap=0, fst=0, sst=0, ref_taxoff=ref_taxoff, hog_taxa_idx=hog_taxa_idx, hog_taxa_buff=hog_taxa_buff)
+        df = ms.output_results(overlap=0, fst=0, sst=0, ref_taxon=ref_taxon)
         if df.size >0:
             df.to_csv(tsv_fn, sep='\t', index=False, header=False)
             if store_hdf5:
@@ -224,13 +205,14 @@ omamer_path=$1
 db_path=$2
 root_taxon=$3
 min_fam_size=$4
-min_completeness=$5
-include_younger_fams=$6
+logic=$5
+min_completeness=$6
 oma_path=$7
+overwrite=$8
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{oma_path}}
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{oma_path}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -253,13 +235,14 @@ omamer_path=$1
 db_path=$2
 root_taxon=$3
 min_fam_size=$4
-min_completeness=$5
-include_younger_fams=$6
+logic=$5
+min_completeness=$6
 reduced_alphabet=$7
+overwrite=$8
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}}
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -282,15 +265,16 @@ omamer_path=$1
 db_path=$2
 root_taxon=$3
 min_fam_size=$4
-min_completeness=$5
-include_younger_fams=$6
+logic=$5
+min_completeness=$6
 reduced_alphabet=$7
-hidden_taxa=$8
-k=$9
+k=$8
+hidden_taxa=$9
+overwrite=${{10}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}}
+python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
@@ -312,17 +296,20 @@ omamer_path=$1
 db_path=$2
 root_taxon=$3
 min_fam_size=$4
-min_completeness=$5
-query_sp=$6
-overwrite=$7
-proteome_fn=$8
-store_hdf5=$9
-out_path=${{10}}
-ref_taxon=${{11}}
+logic=$5
+min_completeness=$6
+reduced_alphabet=$7
+k=$8
+query_sp=$9
+proteome_fn=${{10}}
+store_hdf5=${{11}}
+out_path=${{12}}
+ref_taxon=${{13}}
+overwrite=${{14}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{query_sp}} ${{overwrite}} ${{proteome_fn}} ${{store_hdf5}} ${{out_path}} ${{ref_taxon}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} omamer_search ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{query_sp}} ${{proteome_fn}} ${{store_hdf5}} ${{out_path}} ${{ref_taxon}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -334,47 +321,54 @@ if __name__ == "__main__":
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
         min_fam_size = int(sys.argv[5])
-        min_fam_completeness = float(sys.argv[6])
-        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        logic = sys.argv[6]
+        min_fam_completeness = float(sys.argv[7])
         oma_path = sys.argv[8]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
+        overwrite =  True if (sys.argv[9] == 'True') else False
         build_database_from_oma(
-            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, oma_db_fn, nwk_fn)
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, oma_db_fn, nwk_fn, overwrite)
     
     elif step == 'suffix_array':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
         min_fam_size = int(sys.argv[5])
-        min_fam_completeness = float(sys.argv[6])
-        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        logic = sys.argv[6]
+        min_fam_completeness = float(sys.argv[7])
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        overwrite =  True if (sys.argv[9] == 'True') else False
         build_suffix_array(
-            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet)
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, overwrite)
 
     elif step == 'kmer_table':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
         min_fam_size = int(sys.argv[5])
-        min_fam_completeness = float(sys.argv[6])
-        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        logic = sys.argv[6]
+        min_fam_completeness = float(sys.argv[7])
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
-        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
-        k = int(sys.argv[10])
+        k = int(sys.argv[9])
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[10].split(',')]
+        overwrite =  True if (sys.argv[11] == 'True') else False
         build_kmer_table(
-            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k)   
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, hidden_taxa, overwrite)   
 
     elif step == 'omamer_search':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
         min_fam_size = int(sys.argv[5])
-        min_fam_completeness = float(sys.argv[6])
-        query_sp = ' '.join(sys.argv[7].split('_'))
-        overwrite = True if (sys.argv[8] == 'True') else False
-        proteome_fn = sys.argv[9]
-        store_hdf5 = True if (sys.argv[10] == 'True') else False
-        out_path = sys.argv[11]
-        ref_taxon = sys.argv[12]
+        logic = sys.argv[6]
+        min_fam_completeness = float(sys.argv[7])
+        reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        k = int(sys.argv[9])
+        query_sp = ' '.join(sys.argv[10].split('_'))
+        proteome_fn = sys.argv[11]
+        store_hdf5 = True if (sys.argv[12] == 'True') else False
+        out_path = sys.argv[13]
+        ref_taxon = sys.argv[14]
+        overwrite = True if (sys.argv[15] == 'True') else False
 
-        search(db_path, root_taxon, min_fam_size, min_fam_completeness, query_sp, overwrite, proteome_fn, store_hdf5, out_path, ref_taxon)
-
+        search(
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, query_sp, proteome_fn, store_hdf5, 
+            out_path, ref_taxon, overwrite)

@@ -35,7 +35,10 @@ import tables
 
 from ._utils import LOG
 from .alphabets import Alphabet
-from .hierarchy import get_lca_off, get_descendant_species, get_descendant_taxa
+from .hierarchy import (
+    get_lca_off, 
+    get_descendants
+)
 
 
 @numba.njit
@@ -80,7 +83,7 @@ class Index(object):
     def sp_filter(self):
         sp_filter = np.full((len(self.db._sp_tab),), False)
         for hidden_taxon in self.hidden_taxa:
-            descendant_species = get_descendant_species(
+            descendant_species = get_descendants(
                 np.searchsorted(self.db._tax_tab.col('ID'), hidden_taxon.encode('ascii')), self.db._tax_tab, self.db._ctax_arr)
             # case where hidden taxon is species
             if descendant_species.size == 0:
@@ -96,7 +99,7 @@ class Index(object):
         for hidden_taxon in self.hidden_taxa:
             htax_off = np.searchsorted(self.db._tax_tab.col('ID'), hidden_taxon.encode('ascii'))
             tax_filter[htax_off] = True
-            descendant_taxa = get_descendant_taxa(htax_off, self.db._tax_tab, self.db._ctax_arr)
+            descendant_taxa = get_descendants(htax_off, self.db._tax_tab, self.db._ctax_arr)
             for htax_off in descendant_taxa:
                 tax_filter[htax_off] = True
         return tax_filter

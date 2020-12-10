@@ -34,36 +34,39 @@ from ._utils import LOG, is_progress_disabled
 
 from .hierarchy import (
     get_lca_off,
-    get_descendant_species_taxoffs,
+    get_hog_child_prots, 
+    get_children,
+    get_hog2taxa
 )
+
 from .index import Index
 
 
 class Database(object):
-    # define the format of the tables
+
     class ProteinTableFormat(tables.IsDescription):
         ID = tables.StringCol(255, pos=1, dflt=b"")
-        SeqOff = tables.UInt64Col(pos=2)
-        SeqLen = tables.UInt64Col(pos=3)
-        SpeOff = tables.UInt64Col(pos=4)
-        HOGoff = tables.UInt64Col(pos=5)
-        FamOff = tables.UInt64Col(pos=6)
+        SpeOff = tables.UInt64Col(pos=2)
+        HOGoff = tables.UInt64Col(pos=3)
+        FamOff = tables.UInt64Col(pos=4)
+        SeqOff = tables.UInt64Col(pos=5)
+        SeqLen = tables.UInt64Col(pos=6)
 
     class HOGtableFormat(tables.IsDescription):
         ID = tables.StringCol(255, pos=1, dflt=b"")
-        FamOff = tables.UInt64Col(pos=2)
-        TaxOff = tables.UInt64Col(pos=3)
-        ParentOff = tables.Int64Col(pos=4)
-        # ChildrenHOGoff = tables.Int64Col(pos=5)
-        # ChildrenHOGnum = tables.Int64Col(pos=6)
-        ChildrenOff = tables.Int64Col(pos=5)
-        ChildrenNum = tables.Int64Col(pos=6)
-        ChildrenProtOff = tables.Int64Col(pos=7)
-        ChildrenProtNum = tables.Int64Col(pos=8)
-        OmaID = tables.StringCol(255, pos=9, dflt=b"")
-        LCAtaxOff = tables.UInt64Col(pos=10)
-        NrMemberGenes = tables.Int64Col(pos=11)
-        CompletenessScore = tables.Float64Col(pos=12)
+        OmaID = tables.StringCol(255, pos=2, dflt=b"")
+        FamOff = tables.UInt64Col(pos=3)
+        TaxOff = tables.UInt64Col(pos=4)
+        ParentOff = tables.Int64Col(pos=5)
+        ChildrenOff = tables.Int64Col(pos=6)
+        ChildrenNum = tables.Int64Col(pos=7)
+        ChildrenProtOff = tables.Int64Col(pos=8)
+        ChildrenProtNum = tables.Int64Col(pos=9)
+        HOGtaxaOff = tables.Int64Col(pos=10)
+        HOGtaxaNum = tables.Int64Col(pos=11)
+        LCAtaxOff = tables.UInt64Col(pos=12)
+        NrMemberGenes = tables.Int64Col(pos=13)
+        CompletenessScore = tables.Float64Col(pos=14)
 
     class FamilyTableFormat(tables.IsDescription):
         ID = tables.UInt64Col(pos=1)
@@ -81,11 +84,12 @@ class Database(object):
 
     class TaxonomyTableFormat(tables.IsDescription):
         ID = tables.StringCol(255, pos=1, dflt=b"")
-        ParentOff = tables.Int64Col(pos=2)
-        ChildrenOff = tables.Int64Col(pos=3)
-        ChildrenNum = tables.Int64Col(pos=4)
-        SpeOff = tables.Int64Col(pos=5)
-        Level = tables.Int64Col(pos=6)
+        TaxID = tables.Int64Col(pos=2)
+        ParentOff = tables.Int64Col(pos=3)
+        ChildrenOff = tables.Int64Col(pos=4)
+        ChildrenNum = tables.Int64Col(pos=5)
+        SpeOff = tables.Int64Col(pos=6)
+        Level = tables.Int64Col(pos=7)
 
     def __init__(self, filename, root_taxon=None, mode='r', nthreads=1):
         assert (mode != 'w' or root_taxon), "A root_taxon must be defined when building the database"
@@ -193,6 +197,13 @@ class Database(object):
             return None
 
     @property
+    def _hog_taxa_buff(self):
+        if "/HOGtaxa" in self.db:
+            return self.db.root.HOGtaxa
+        else:
+            return None
+
+    @property
     def _ctax_arr(self):
         if "/ChildrenTax" in self.db:
             return self.db.root.ChildrenTax
@@ -262,6 +273,7 @@ class Database(object):
             tax_rows.append(
                 (
                     tax,
+                    -1,
                     par_off,
                     children_buffer_off if child_offsets else -1,
                     len(child_offsets),
@@ -458,6 +470,7 @@ class Database(object):
                 list(
                     zip(
                         hogs,
+                        oma_hogs,
                         repeat(fam_off),
                         hog_taxoffs,
                         parents,
@@ -465,7 +478,8 @@ class Database(object):
                         child_hogs_numbers,
                         child_prots_offsets,
                         child_prots_numbers,
-                        oma_hogs,
+                        repeat(-1),
+                        repeat(-1),
                         repeat(0),
                         oma_hog_sizes,
                         oma_hog_comps
@@ -583,26 +597,58 @@ class Database(object):
         self._prot_tab.modify_column(colname="HOGoff", column=hogoff_col)
         self._prot_tab.modify_column(colname="FamOff", column=famoff_col)
 
-    def add_lcataxoff_col(self):
-        """
-        compute the LCA taxon between the HOG species members
-        """
-        hog_tab = self._hog_tab[:]
-        chog_buff = self._chog_arr[:]
-        cprot_buff = self._cprot_arr[:]
-        prot2speoff = self._prot_tab.col("SpeOff")
-        speoff2taxoff = self._sp_tab.col("TaxOff")
-        parent_arr = self._tax_tab.col("ParentOff")
+    def store_hog2taxa(self):
+        '''
+        Store taxonomic levels of HOGs.
+        '''
+        hog_taxa_idx, hog_taxa_buff = get_hog2taxa(
+            self._hog_tab[:], self._sp_tab[:], self._prot_tab[:], self._cprot_arr[:], self._tax_tab[:], self._chog_arr[:])
 
-        lcatax_offsets = np.zeros(hog_tab.size, dtype=np.uint64)
+        self.db.create_carray(
+                        "/",
+                        "HOGtaxa",
+                        obj=hog_taxa_buff,
+                        filters=self._compr)
+
+        self._hog_tab.modify_column(colname='HOGtaxaOff', column=hog_taxa_idx[:-1])
+        self._hog_tab.modify_column(colname='HOGtaxaNum', column=hog_taxa_idx[1:] - hog_taxa_idx[:-1])
+
+    def add_lcataxoff_col(self):
+        '''
+        Compute LCA taxon among HOG members.
+        '''
+        hog_tab = self._hog_tab[:]
+        prot_tab = self._prot_tab[:]
+        cprot_buff = self._cprot_arr[:]
+        chog_buff = self._chog_arr[:]
+        tax_tab = self._tax_tab[:]
+        sp_tab = self._sp_tab[:]
+
+        lca_tax_offsets = np.zeros(hog_tab.size, dtype=np.uint64)
 
         for hog_off in range(hog_tab.size):
-            species_tax_offs = get_descendant_species_taxoffs(
-                hog_off, hog_tab, chog_buff, cprot_buff, prot2speoff, speoff2taxoff
-            )
-            lcatax_offsets[hog_off] = get_lca_off(species_tax_offs, parent_arr)
+            hog_ms_taxa = np.append(np.unique(sp_tab['TaxOff'][prot_tab['SpeOff'][get_hog_child_prots(hog_off, hog_tab, cprot_buff)]]), 
+                                    np.unique(hog_tab['TaxOff'][get_children(hog_off, hog_tab, chog_buff)]))
+            lca_tax_offsets[hog_off] = get_lca_off(hog_ms_taxa, tax_tab['ParentOff'])
+            
+        self._hog_tab.modify_column(colname="LCAtaxOff", column=lca_tax_offsets)
 
-        self._hog_tab.modify_column(colname="LCAtaxOff", column=lcatax_offsets)
+        # hog_tab = self._hog_tab[:]
+        # chog_buff = self._chog_arr[:]
+        # cprot_buff = self._cprot_arr[:]
+        # prot2speoff = self._prot_tab.col("SpeOff")
+        # speoff2taxoff = self._sp_tab.col("TaxOff")
+        # parent_arr = self._tax_tab.col("ParentOff")
+
+        # lcatax_offsets = np.zeros(hog_tab.size, dtype=np.uint64)
+
+        # for hog_off in range(hog_tab.size):
+        #     species_tax_offs = get_descendant_species_taxoffs(
+        #         hog_off, hog_tab, chog_buff, cprot_buff, prot2speoff, speoff2taxoff
+        #     )
+        #     lcatax_offsets[hog_off] = get_lca_off(species_tax_offs, parent_arr)
+
+        # self._hog_tab.modify_column(colname="LCAtaxOff", column=lcatax_offsets)
 
     ### generic functions ###
     @staticmethod
@@ -634,11 +680,12 @@ class DatabaseFromOMA(Database):
     """
     Used to parse the OMA browser database file
     """
-    def __init__(self, filename, root_taxon, min_fam_size=6, min_fam_completeness=0, include_younger_fams=True, mode='r'):
+    def __init__(self, filename, root_taxon, min_fam_size=6, min_fam_completeness=0, logic='AND', include_younger_fams=True, mode='r'):
         super().__init__(filename, root_taxon, mode=mode)
 
         self.min_fam_size = min_fam_size
         self.min_fam_completeness = min_fam_completeness
+        self.logic = logic
         self.include_younger_fams = include_younger_fams
 
     ### main function ###
@@ -686,6 +733,9 @@ class DatabaseFromOMA(Database):
         LOG.debug("complete protein table")
         self.update_prot_tab(hog2protoffs)
 
+        LOG.debug("store HOG taxa")
+        self.store_hog2taxa()
+
         LOG.debug("compute LCA taxa")
         self.add_lcataxoff_col()
 
@@ -712,7 +762,8 @@ class DatabaseFromOMA(Database):
             curr_oma_sizes,
             min_fam_size,
             curr_oma_comps,
-            min_fam_completeness
+            min_fam_completeness,
+            logic
         ):
             """
             - decide whether an OMA HOG should be stored based on current root-HOG and HOG taxa
@@ -786,7 +837,8 @@ class DatabaseFromOMA(Database):
                     curr_oma_roothog = curr_oma_hog
                         
                     # but store it only if passes quality thresholds
-                    if hog_size >= min_fam_size and hog_comp >= min_fam_completeness:
+                    ok = (hog_size >= min_fam_size or hog_comp >= min_fam_completeness) if logic == 'OR' else (hog_size >= min_fam_size and hog_comp >= min_fam_completeness)
+                    if ok:
                         
                         fam += 1
                         curr_oma_roothog_ok = True
@@ -813,7 +865,7 @@ class DatabaseFromOMA(Database):
 
         def _process_oma_fam(
             fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness, 
-            roottax, include_younger_fams, min_fam_size, min_fam_completeness):
+            roottax, include_younger_fams, min_fam_size, min_fam_completeness, logic):
             """
             apply _process_oma_hog to one OMA family
              - fam_tab_sort: slice of the HogLevel table for one family sorted by HOG ids
@@ -850,7 +902,8 @@ class DatabaseFromOMA(Database):
                         curr_oma_sizes,
                         min_fam_size,
                         curr_oma_comps,
-                        min_fam_completeness 
+                        min_fam_completeness,
+                        logic
                     )
 
                     # reset for new HOG
@@ -882,7 +935,8 @@ class DatabaseFromOMA(Database):
                 curr_oma_sizes,
                 min_fam_size,
                 curr_oma_comps,
-                min_fam_completeness
+                min_fam_completeness,
+                logic
             )
 
             return fam
@@ -926,7 +980,8 @@ class DatabaseFromOMA(Database):
                     self.root_taxon.encode("ascii"),
                     self.include_younger_fams,
                     self.min_fam_size,
-                    self.min_fam_completeness
+                    self.min_fam_completeness,
+                    self.logic
                 )
 
                 # move pointer and update current family
@@ -949,7 +1004,8 @@ class DatabaseFromOMA(Database):
             self.root_taxon.encode("ascii"),
             self.include_younger_fams,
             self.min_fam_size,
-            self.min_fam_completeness
+            self.min_fam_completeness,
+            self.logic
         )
 
         del hog_tab
@@ -1044,7 +1100,7 @@ class DatabaseFromOMA(Database):
                     
                     # store protein row
                     oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
-                    prot_rows.append((oma_id.encode('ascii'), seq_off, seq_len, sp_off, 0, 0))                        
+                    prot_rows.append((oma_id.encode('ascii'), sp_off, 0, 0, seq_off, seq_len))                        
                     
                     # track hog and family
                     hog = oma_hog2hog[oma_hog]
@@ -1074,3 +1130,11 @@ class DatabaseFromOMA(Database):
         del genome_tab, ent_tab, oma_seq_buffer
 
         return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog
+
+    def add_taxid_col(self, h5file):
+        '''
+        Parse NCBI taxonomic ids from OMA database
+        '''
+        oma_tax_tab = h5file.root.Taxonomy[:]
+        tax2taxid = dict(zip(oma_tax_tab['Name'], oma_tax_tab['NCBITaxonId']))
+        self._tax_tab.modify_column(colname="TaxID", column=np.array(list(map(lambda x: tax2taxid[x], self._tax_tab.col('ID'))), dtype=np.int64))

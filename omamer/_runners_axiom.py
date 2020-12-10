@@ -212,7 +212,7 @@ overwrite=$8
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{oma_path}} ${{overwrite}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} db ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{oma_path}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -242,7 +242,7 @@ overwrite=$8
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{overwrite}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} sa ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -274,7 +274,7 @@ overwrite=${{10}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}/omamer/_runners_validation.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} ki ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 

@@ -341,8 +341,6 @@ if __name__ == "__main__":
         build_suffix_array(
             db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, overwrite)
 
-${{omamer_path}} kmer_table ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
-
     elif step == 'kmer_table':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]

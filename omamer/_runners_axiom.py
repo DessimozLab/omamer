@@ -341,6 +341,8 @@ if __name__ == "__main__":
         build_suffix_array(
             db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, overwrite)
 
+${{omamer_path}} kmer_table ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
+
     elif step == 'kmer_table':
         db_path = sys.argv[3]
         root_taxon = sys.argv[4]
@@ -349,7 +351,7 @@ if __name__ == "__main__":
         min_fam_completeness = float(sys.argv[7])
         reduced_alphabet = True if (sys.argv[8] == 'True') else False
         k = int(sys.argv[9])
-        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[10].split(',')]
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[10].split(',')] if sys.argv[10] != 'na' else []
         overwrite =  True if (sys.argv[11] == 'True') else False
         build_kmer_table(
             db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, hidden_taxa, overwrite)   

@@ -32,7 +32,11 @@ from time import time
 
 from ._utils import LOG
 from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
-from .hierarchy import get_root_leaf_offsets, get_hog_taxon_levels
+from .hierarchy import (
+    get_root_leaf_offsets, 
+    get_hog_taxon_levels, 
+    get_hog_member_prots
+)
 
 # --> will be renamed Search
 # numba does not like nested methods 
@@ -105,25 +109,6 @@ def parse_seq(
 
     return r1, p1
 
-# @numba.njit
-# def parse_seq(
-#     s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_char, x_flag):
-#     '''
-#     get the sequence unique k-mers
-#     '''
-#     s_norm = DIGITS_AA_LOOKUP[s]
-#     r = np.zeros(n_kmers, dtype=np.uint32)  # max kmer 7
-#     for i in numba.prange(n_kmers):
-#         # numba can't do np.dot with non-float
-#         for j in numba.prange(k):
-#             r[i] += trans[j] * s_norm[i + j]
-#         # does k-mer contain any X?
-#         x_seen = np.any(s_norm[i:i+k] == x_char)
-#         # if yes, replace it by the x_flag
-#         r[i] = r[i] if not x_seen else x_flag
-#     r1 = np.unique(r)
-#     return r1
-
 @numba.njit
 def search_seq_kmers(
     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
@@ -177,41 +162,6 @@ def search_seq_kmers(
                 fam_highloc[fam_off] = loc
 
     return hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc
-
-# @numba.njit
-# def search_seq_kmers(
-#     r1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
-    
-#     ## search k-mer table
-#     hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
-#     fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
-
-#     # store total occurences of query k-mers
-#     query_occ = np.uint32(0)
-
-#     # store total occurence of query-hog k-mers
-#     hog_occurs = np.zeros(hog_tab.size, dtype=np.uint32)
-
-#     # iterate unique k-mers
-#     for m in numba.prange(r1.shape[0]):
-#         kmer = r1[m]
-
-#         # to ignore k-mers with X
-#         if kmer == x_flag:
-#             continue
-#         else:
-#             pass
-
-#         # get mapping to HOGs
-#         x = table_idx[kmer : kmer + 2]
-#         hogs = table_buff[x[0] : x[1]]
-#         fams = hog_tab['FamOff'][hogs]
-#         hog_counts[hogs] += np.uint16(1)
-#         fam_counts[fams] += np.uint16(1)
-#         query_occ += np.uint32(hogs.size)
-#         hog_occurs[hogs] += np.uint32(hogs.size)
-    
-#     return hog_counts, fam_counts, query_occ, hog_occurs
 
 @numba.njit
 def get_top_m_fams(
@@ -993,13 +943,6 @@ def compute_hog_nonparametric_pvalue(
     hc = fam_hog_cumcounts[0]
     fam_hog_scores[0] = compute_nonparametric_pvalue(hc, query_counts, fam_ref_hog_counts[0], fam_hog_perm_counts[:, 0], dist)
 
-    # if hc > 0:
-    #     max_count = np.int64(min(query_counts, fam_ref_hog_counts[0]))
-    #     lamb = poisson_mle(fam_hog_perm_counts[:, 0])    
-    #     fam_hog_scores[0] = compute_log_poisson_pvalue(max_count, hc, lamb)
-    # else:
-    #     fam_hog_scores[0] = 0.0
-
     # set the root-HOG as best path
     fam_bestpath[0] = True
     
@@ -1020,13 +963,6 @@ def compute_hog_nonparametric_pvalue(
             ho = hog_offsets[j]
             hc = fam_hog_cumcounts[ho]
             fam_hog_scores[ho] = compute_nonparametric_pvalue(hc, qh_count[j], fam_ref_hog_counts[ho], fam_hog_perm_counts[:, ho], dist)
-
-            # if hc > 0:
-            #     max_count = np.int64(min(qh_count[j], fam_ref_hog_counts[ho]))
-            #     lamb = poisson_mle(fam_hog_perm_counts[:, ho])    
-            #     fam_hog_scores[ho] = compute_log_poisson_pvalue(max_count, hc, lamb)
-            # else:
-            #     fam_hog_scores[ho] = 0.0
 
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=True)
@@ -1149,41 +1085,6 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, hog_taxa_
             q2closest_taxon[i] = hog_tab['TaxOff'][hog_off]
     
     return q2closest_taxon
-
-# @numba.njit
-# def get_taxonomic_congruence(q2hog_off, hog_taxa_idx, hog_taxa_buff, ref_taxoff, tax_tab, hog_tab):
-#     '''
-#     Evaluate congruence between each placement and the reference taxon.
-#         - at_level: the predicted HOG implies the reference taxon
-#         - under_specific: the predicted HOG implies an ancestor of the reference taxon
-#         - wrong_path: the predicted HOG implies neither the reference taxon nor its ancestors
-#         - not_placed: no predicted HOG
-#     '''
-#     ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])
-#     res = np.zeros(q2hog_off.size, dtype=np.uint8)
-#     for i, hog_off in enumerate(q2hog_off):
-        
-#         # not placed
-#         if hog_off == -1:
-#             res[i] = 3
-#             continue
-        
-#         # placed at the right level
-#         x = hog_taxa_idx[hog_off: hog_off + 2]
-#         hog_taxa = hog_taxa_buff[x[0]: x[1]]
-#         if np.argwhere(hog_taxa == ref_taxoff).size == 1:
-#             continue
-        
-#         # placed under-specifically
-#         elif np.argwhere(ref_lineage == hog_tab['TaxOff'][hog_off]).size == 1:
-#             res[i] = 1
-        
-#         # placed wrongly
-#         else:
-#             res[i] = 2
-            
-#     return res
-
 
 class MergeSearch(object):
     def __init__(self, ki, nthreads=None, low_mem=False, include_extant_genes=False):
@@ -1382,12 +1283,7 @@ class MergeSearch(object):
             self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, self.hog_tab, self.db._hog_taxa_buff[:])
 
     def output_results(self, overlap, fst, sst, ref_taxon):
-        # not priority
-        # def get_prot_ids(ms, hog_off):
-        #     desc_hogs = list(get_descendant_hogs(hog_off, ms.db._hog_tab, ms.db._chog_arr)) + [hog_off]
-        #     prot_ii = get_descendant_prots(desc_hogs, ms.db._hog_tab, ms.db._cprot_arr)
-        #     return ms.db._prot_tab.read_coordinates(prot_ii, 'ID')
-        # [','.join(map(lambda x: x.decode('ascii'), get_prot_ids(ms, hog_off))) for hog_off in q2hog_off] 
+
         tax_tab = self.db._tax_tab[:]
         if ref_taxon:
             ref_taxoff = np.searchsorted(tax_tab['ID'], ref_taxon.encode('ascii'))
@@ -1411,10 +1307,15 @@ class MergeSearch(object):
             map(lambda x: x if x != -1 else 'na', q2max_hog_score),
             map(lambda x: x if x != -1 else 'na', q2hog_score)]
 
-        # TO DO: update hierarchy
-        #     if ms.include_extant_genes:
-        #         c.append('subfamily-geneset')
-        #         r.append([','.join(map(lambda x: x.decode('ascii'), get_prot_ids(ms, hog_off))) for hog_off in q2hog_off])
+        # add member proteins as csv
+        if ms.include_extant_genes:
+            chog_buff = self.db._chog_arr[:]
+            cprot_buff = self.db._cprot_arr[:]
+            prot_tab = self.db._prot_tab[:]
+
+            c.append('subfamily-geneset')
+            r.append([','.join(map(lambda x: x.decode('ascii'), prot_tab['ID'][get_hog_member_prots(
+                hog_off, self.hog_tab, chog_buff, cprot_buff)])) for hog_off in q2hog_off])
 
         return pd.DataFrame(zip(*r), columns=c)
 

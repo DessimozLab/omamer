@@ -132,7 +132,7 @@ def get_hog_child_prots(hog_off, hog_tab, cprot_buff):
     cprot_off = hog_ent["ChildrenProtOff"]
     return cprot_buff[cprot_off : cprot_off + hog_ent["ChildrenProtNum"]]
     
-def get_hog_member_prots(hog_off, hog_tab, chog_buff):
+def get_hog_member_prots(hog_off, hog_tab, chog_buff, cprot_buff):
     '''
     Collect proteins from HOG and its descendants.
     '''

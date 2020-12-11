@@ -1308,7 +1308,7 @@ class MergeSearch(object):
             map(lambda x: x if x != -1 else 'na', q2hog_score)]
 
         # add member proteins as csv
-        if ms.include_extant_genes:
+        if self.include_extant_genes:
             chog_buff = self.db._chog_arr[:]
             cprot_buff = self.db._cprot_arr[:]
             prot_tab = self.db._prot_tab[:]

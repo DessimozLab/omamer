@@ -21,6 +21,9 @@ from tqdm import tqdm
 
 '''
 General functions to run OMAmer on axiom (e.g. from notebook).
+
+TO DO:
+ - check search_validate step
 '''
 
 def is_complete(fn, path):
@@ -185,6 +188,92 @@ def search(
                 ms.store_results(hdf5_fn)
             set_complete(tsv_fn, out_path)
 
+def search_validate(
+    db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
+    thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
+    pvalue_score, query_sp, overwrite, perm_nr, w_size, dist, comp_t, size_t):
+    
+    alphabet_n = 21 if not reduced_alphabet else 13
+    
+    # reload k-mer table
+    ki_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}.h5'.format(
+        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
+        'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]))
+    
+    assert os.path.exists(ki_fn), 'index missing'
+
+    # load in append mode
+    db = DatabaseFromOMA(
+        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness,
+        include_younger_fams=include_younger_fams, mode='r')
+
+    # setup search and validation steps
+    se_va_fn = '{}{}_MinFamSize{}_MinFamComp0{}_{}_A{}_k{}_wo_{}_query_{}_{}_{}_top{}fams{}{}_{}_{}_{}_{}fbn_{}hbn_MinFamComp0{}_MinFamSize{}.h5'.format(
+        db_path, root_taxon, min_fam_size, str(min_fam_completeness).split('.')[-1], 
+        'yf' if include_younger_fams else 'rf', alphabet_n, k, '_'.join(['_'.join(x.split()) for x in hidden_taxa]),
+        '_'.join(query_sp.split()), score, cum_mode, top_m_fams, '_{}perms_w{}'.format(perm_nr, w_size) if (score == 'nonparam_pvalue') or (score == 'nonparam_naive') else '', 
+        '_{}'.format(dist) if (score == 'nonparam_pvalue') else '',
+        val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, str(comp_t).split('.')[-1], size_t)    
+
+    if not is_complete(se_va_fn, db_path) or overwrite:
+        if os.path.exists(se_va_fn):
+            os.remove(se_va_fn)
+        fasta = '{}.fa'.format(se_va_fn.split('.h5')[0])
+        if os.path.exists(fasta):
+            os.remove(fasta)
+
+        ms = MergeSearch(ki=db.ki, nthreads=1)
+
+        # maximum number of queries (used for clade-specific negatives) is the proteome size
+        sp_off = np.searchsorted(db._sp_tab.col('ID'), query_sp)
+        max_query_nr = db._sp_tab[sp_off]['ProtNum']
+
+        va = Validation(db, se_va_fn, thresholds, oma_db_fn=oma_db_fn, nwk_fn=nwk_fn, 
+                        neg_query_file='{}.fa'.format(se_va_fn.split('.')[0]), nthreads=1, query_sp=query_sp, 
+                        max_query_nr=max_query_nr, val_mode=val_mode, neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, 
+                        fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num, comp_t=comp_t, size_t=size_t)
+
+        assert va.mode == 'w'
+
+        # load query sequences (keep the ones from filtered families)
+        fam_filter = va.fam_filter
+        sbuff = QuerySequenceBuffer(db, query_sp, fam_filter=fam_filter)
+        
+        # search and validate
+        chunksize = 10000
+
+        ids = []
+        seqs = []
+
+        pbar = tqdm(desc='Searching')
+        for i, q in enumerate(sbuff.ids):
+            ids.append(q)
+            seqs.append(sbuff[i])
+            if len(ids) == chunksize:
+                # search and validate the chunk
+                ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
+                    fam_filter=fam_filter) 
+                va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, 
+                    perm_nr=perm_nr, w_size=w_size, dist=dist)     
+
+                pbar.update(len(ids))
+                ids = []
+                seqs = []
+
+        # search and validate last chunk
+        if len(ids) > 0:
+            ms.merge_search(seqs=seqs, ids=ids, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, perm_nr=perm_nr, w_size=w_size, dist=dist,
+                fam_filter=fam_filter) 
+            va.validate(ms, score=score, cum_mode=cum_mode, top_m_fams=top_m_fams, pvalue_score=pvalue_score, perm_nr=perm_nr, w_size=w_size, dist=dist) 
+            pbar.update(len(ids))
+
+        # close stuff
+        pbar.close()
+        va.va.close()
+
+        set_complete(se_va_fn, db_path)
+
+
 def write_axiom_script(step, name, tmp_path, mem, hour_nr, oe_path):
 
     if step == 'parse_hogs':
@@ -313,6 +402,52 @@ python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} omamer_search $
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
+    
+    elif step == 'search_validate':
+        with open(name, 'w') as inf:
+            inf.write(
+"""#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem={}G
+#SBATCH --time={}:00:00
+#SBATCH --job-name={}
+#SBATCH --partition=axiom
+#SBATCH --output={}%x_%j.out
+#SBATCH --error={}%x_%j.err
+
+omamer_path=$1
+db_path=$2
+root_taxon=$3
+min_fam_size=$4
+min_completeness=$5
+include_younger_fams=$6
+reduced_alphabet=$7
+hidden_taxa=$8
+k=$9
+oma_path=${{10}}
+score=${{11}}
+cum_mode=${{12}}
+top_m_fams=${{13}}
+val_mode=${{14}}
+neg_root_taxon=${{15}}
+focal_taxon=${{16}}
+fam_bin_num=${{17}}
+hog_bin_num=${{18}}
+query_sp=${{19}}
+overwrite=${{20}}
+perm_nr=${{21}}
+w_size=${{22}}
+dist=${{23}}
+comp_t=${{24}}
+size_t=${{25}}
+
+source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
+
+python ${{omamer_path}}omamer/_runners_validation.py ${{omamer_path}} se_va ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}} ${{oma_path}} ${{score}} ${{cum_mode}} ${{top_m_fams}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{query_sp}} ${{overwrite}} ${{perm_nr}} ${{w_size}} ${{dist}} ${{comp_t}} ${{size_t}}
+sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
+sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
 if __name__ == "__main__":
 
@@ -372,3 +507,46 @@ if __name__ == "__main__":
         search(
             db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, query_sp, proteome_fn, store_hdf5, 
             out_path, ref_taxon, overwrite)
+
+    elif step == 'search_validate':
+        db_path = sys.argv[3]
+        root_taxon = sys.argv[4]
+        min_fam_size = int(sys.argv[5])
+        min_fam_completeness = float(sys.argv[6])
+        include_younger_fams =  True if (sys.argv[7] == 'True') else False
+        reduced_alphabet = True if (sys.argv[8] == 'True') else False
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[9].split(',')]
+        k = int(sys.argv[10])
+        # thresholds = np.arange(*(float(x) for x in sys.argv[11].split(',')))  # e.g. "0,1.01,0.01"
+        oma_path = sys.argv[11]
+        oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
+        nwk_fn = os.path.join(oma_path, "speciestree.nwk")
+        score = sys.argv[12]
+        cum_mode = sys.argv[13]
+        top_m_fams = int(sys.argv[14])
+        val_mode = sys.argv[15]
+        neg_root_taxon = sys.argv[16]
+        focal_taxon = sys.argv[17]
+        fam_bin_num = int(sys.argv[18])
+        hog_bin_num = int(sys.argv[19])
+        query_sp = ' '.join(sys.argv[20].split('_'))
+        overwrite = True if (sys.argv[21] == 'True') else False
+        perm_nr = int(sys.argv[22])
+        w_size = int(sys.argv[23])
+        dist = sys.argv[24]
+        comp_t = float(sys.argv[25])
+        size_t = int(sys.argv[26])
+
+        if score in {'mash_pvalue', 'kmerfreq_pvalue', 'nonparam_pvalue'}:
+            thresholds = np.concatenate((np.arange(-1000, -9, 10), np.arange(-10, -0.9, 1), np.arange(-1, -0.09, 0.1), np.arange(-0.1, -0.009, 0.01)))
+            pvalue_score = True
+        else:
+            thresholds = np.arange(0, 1.01, 0.01)
+            pvalue_score = False
+
+        search_validate(
+            db_path, root_taxon, min_fam_size, min_fam_completeness, include_younger_fams, reduced_alphabet, hidden_taxa, k,
+            thresholds, oma_db_fn, nwk_fn, score, cum_mode, top_m_fams, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, 
+            pvalue_score, query_sp, overwrite, perm_nr, w_size, dist, comp_t, size_t)
+    else:
+        print('unknown step')

@@ -31,7 +31,7 @@ def mkdb_oma(args):
     LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
-        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, min_fam_completeness=0, include_younger_fams=True, mode='w'
+        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, logic=args.logic, min_fam_completeness=args.completeness, include_younger_fams=True, mode='w'
     )
 
     oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
@@ -43,7 +43,7 @@ def mkdb_oma(args):
 
     # build index
     LOG.info('Building index')
-    ki = Index(db, k=args.k, reduced_alphabet=False, nthreads=1, hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')])
+    ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')])
     ki.build_kmer_table()
 
     db.close()
@@ -86,7 +86,7 @@ def search(args):
                 seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
             ) 
             pbar.update(len(ids))
-            df = ms.output_results(threshold=args.threshold)
+            df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
             if df.size >0:
                 df.to_csv(args.out, sep='\t', index=False, header=print_header)
             ids = []
@@ -98,7 +98,7 @@ def search(args):
         ms.merge_search(
             seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
         ) 
-        df = ms.output_results(threshold=args.threshold)
+        df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
         pbar.update(len(ids))
         if df.size >0:
             df.to_csv(args.out, sep='\t', index=False, header=print_header)

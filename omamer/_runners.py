@@ -21,7 +21,6 @@
 '''
 from ._utils import LOG
 
-
 def mkdb_oma(args):
     from .database import DatabaseFromOMA
     from .index import Index
@@ -31,7 +30,7 @@ def mkdb_oma(args):
     LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
-        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, logic=args.logic, min_fam_completeness=args.completeness, include_younger_fams=True, mode='w'
+        args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, logic=args.logic, min_fam_completeness=args.min_fam_completeness, include_younger_fams=True, mode='w'
     )
 
     oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
@@ -52,6 +51,7 @@ def mkdb_oma(args):
 def search(args):
     from Bio import SeqIO
     from tqdm import tqdm
+    import numpy as np
     import sys
 
     from .database import Database

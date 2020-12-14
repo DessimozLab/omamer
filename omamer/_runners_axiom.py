@@ -136,20 +136,23 @@ def build_kmer_table(
 
         set_complete(ki_fn, db_path)
 
-def is_in_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, query_sp):
-    ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1])
-    db = DatabaseFromOMA(
-        filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
-    return np.argwhere(db._sp_tab.col('ID') == query_sp.encode('ascii')).size > 0
+# def is_in_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, alphabet_n, k, query_sp):
+#     hidden_taxa = []
+#     ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}_A{}_k{}{}.h5'.format(
+#         db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], alphabet_n, k, 
+#         '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '')
+#     db = DatabaseFromOMA(
+#         filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, logic=logic, min_fam_completeness=min_fam_completeness, include_younger_fams=True)
+#     return np.argwhere(db._sp_tab.col('ID') == query_sp.encode('ascii')).size > 0
 
 def search(
     db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, query_sp, proteome_fn, store_hdf5, out_path, ref_taxon, overwrite):
     
     alphabet_n = 21 if not reduced_alphabet else 13
 
-    # if proteome in OMA, hide it (NOTE sure about this because specific to taxonomic placement validation)
-    hidden_taxa = [query_sp] if is_in_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, query_sp) else []
+    # # if proteome in OMA, hide it (NOTE sure about this because specific to taxonomic placement validation)
+    # hidden_taxa = [query_sp] if is_in_oma(db_path, root_taxon, min_fam_size, logic, min_fam_completeness, query_sp) else []
+    hidden_taxa = []
 
     # reload k-mer table
     ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}_A{}_k{}{}.h5'.format(

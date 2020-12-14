@@ -152,7 +152,7 @@ search_parser.add_argument(
 search_parser.add_argument(
     "--threshold", default=0.05, type=float, help="Score threshold used to vary placement specificity."
 )
-mkdb_parser.add_argument(
+search_parser.add_argument(
     "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."
 )
 search_parser.add_argument(

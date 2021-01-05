@@ -495,7 +495,7 @@ if __name__ == "__main__":
         include_younger_fams = True if (sys.argv[8] == 'True') else False
         reduced_alphabet = True if (sys.argv[9] == 'True') else False
         k = int(sys.argv[10])
-        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[10].split(',')] if sys.argv[11] != 'na' else []
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[11].split(',')] if sys.argv[11] != 'na' else []
         overwrite =  True if (sys.argv[12] == 'True') else False
         build_kmer_table(
             db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa, overwrite)   

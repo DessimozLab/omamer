@@ -45,7 +45,7 @@ def build_database_from_oma(
     Parse OMA HOGs.
     '''
     db_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '_yf' if include_younger_fams else '')
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf')
 
     if not is_complete(db_fn, db_path) or overwrite:
         if os.path.exists(db_fn):
@@ -68,7 +68,7 @@ def build_suffix_array(
     '''
     # reload database
     db_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '_yf' if include_younger_fams else '')
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf')
 
     assert os.path.exists(db_fn), 'database missing'
 
@@ -79,7 +79,7 @@ def build_suffix_array(
     # compute suffix array
     alphabet_n = 21 if not reduced_alphabet else 13    
     sa_fn = '{}SA_{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '_yf' if include_younger_fams else '', alphabet_n)
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf', alphabet_n)
 
     if not is_complete(sa_fn, db_path) or overwrite:
         if os.path.exists(sa_fn):
@@ -101,16 +101,16 @@ def build_kmer_table(
     alphabet_n = 21 if not reduced_alphabet else 13
 
     db_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '_yf' if include_younger_fams else '')
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf')
     
     sa_fn = '{}SA_{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '_yf' if include_younger_fams else '', alphabet_n)
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf', alphabet_n)
 
     assert os.path.exists(db_fn), 'database missing'
     assert os.path.exists(sa_fn), 'suffix array missing'
 
     ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '_yf' if include_younger_fams else '', alphabet_n, k, 
+        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf', alphabet_n, k, 
         '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '')
 
     if not is_complete(ki_fn, db_path) or overwrite:
@@ -468,7 +468,7 @@ if __name__ == "__main__":
         oma_path = sys.argv[9]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
-        overwrite =  True if (sys.argv[10] == 'True') else False
+        overwrite = True if (sys.argv[10] == 'True') else False
         build_database_from_oma(
             db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, oma_db_fn, nwk_fn, overwrite)
     

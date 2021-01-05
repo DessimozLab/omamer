@@ -332,12 +332,13 @@ root_taxon=$3
 min_fam_size=$4
 logic=$5
 min_completeness=$6
-reduced_alphabet=$7
-overwrite=$8
+include_younger_fams=$7
+reduced_alphabet=$8
+overwrite=$9
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} suffix_array ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{overwrite}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} suffix_array ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -362,14 +363,15 @@ root_taxon=$3
 min_fam_size=$4
 logic=$5
 min_completeness=$6
-reduced_alphabet=$7
-k=$8
-hidden_taxa=$9
-overwrite=${{10}}
+include_younger_fams=$7
+reduced_alphabet=$8
+k=$9
+hidden_taxa=${{10}}
+overwrite=${{11}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} kmer_table ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} kmer_table ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_famsß}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{overwrite}}
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
@@ -478,10 +480,11 @@ if __name__ == "__main__":
         min_fam_size = int(sys.argv[5])
         logic = sys.argv[6]
         min_fam_completeness = float(sys.argv[7])
-        reduced_alphabet = True if (sys.argv[8] == 'True') else False
-        overwrite =  True if (sys.argv[9] == 'True') else False
+        include_younger_fams = True if (sys.argv[8] == 'True') else False
+        reduced_alphabet = True if (sys.argv[9] == 'True') else False
+        overwrite =  True if (sys.argv[10] == 'True') else False
         build_suffix_array(
-            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, overwrite)
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, overwrite)
 
     elif step == 'kmer_table':
         db_path = sys.argv[3]
@@ -489,12 +492,13 @@ if __name__ == "__main__":
         min_fam_size = int(sys.argv[5])
         logic = sys.argv[6]
         min_fam_completeness = float(sys.argv[7])
-        reduced_alphabet = True if (sys.argv[8] == 'True') else False
-        k = int(sys.argv[9])
-        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[10].split(',')] if sys.argv[10] != 'na' else []
-        overwrite =  True if (sys.argv[11] == 'True') else False
+        include_younger_fams = True if (sys.argv[8] == 'True') else False
+        reduced_alphabet = True if (sys.argv[9] == 'True') else False
+        k = int(sys.argv[10])
+        hidden_taxa = [' '.join(x.split('_')) for x in sys.argv[10].split(',')] if sys.argv[11] != 'na' else []
+        overwrite =  True if (sys.argv[12] == 'True') else False
         build_kmer_table(
-            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, reduced_alphabet, k, hidden_taxa, overwrite)   
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa, overwrite)   
 
     elif step == 'omamer_search':
         db_path = sys.argv[3]

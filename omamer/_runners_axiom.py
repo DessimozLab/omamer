@@ -301,12 +301,13 @@ root_taxon=$3
 min_fam_size=$4
 logic=$5
 min_completeness=$6
-oma_path=$7
-overwrite=$8
+include_younger_fams=$7
+oma_path=$8
+overwrite=$9
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} parse_hogs ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{oma_path}} ${{overwrite}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} parse_hogs ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_fams}} ${{oma_path}} ${{overwrite}}
 
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
@@ -463,12 +464,13 @@ if __name__ == "__main__":
         min_fam_size = int(sys.argv[5])
         logic = sys.argv[6]
         min_fam_completeness = float(sys.argv[7])
-        oma_path = sys.argv[8]
+        include_younger_fams = True if (sys.argv[8] == 'True') else False
+        oma_path = sys.argv[9]
         oma_db_fn = os.path.join(oma_path, "OmaServer.h5")
         nwk_fn = os.path.join(oma_path, "speciestree.nwk")
-        overwrite =  True if (sys.argv[9] == 'True') else False
+        overwrite =  True if (sys.argv[10] == 'True') else False
         build_database_from_oma(
-            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, oma_db_fn, nwk_fn, overwrite)
+            db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, oma_db_fn, nwk_fn, overwrite)
     
     elif step == 'suffix_array':
         db_path = sys.argv[3]

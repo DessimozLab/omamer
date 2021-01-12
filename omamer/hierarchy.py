@@ -235,8 +235,7 @@ def get_hog2implied_taxa(hog_tab, tax_tab, ctax_buff, chog_buff):
 
 def get_closest_reference_taxon(tax_off, tax2parent, hidden_taxa):
     """
-    Get taxon from which a hidden tax_off has diverged
-    (This one is used in validation)
+    Get taxon from which a tax_off has diverged (if not hidden, returns tax_off itself)
     """
     root_leaf = get_root_leaf_offsets(tax_off, tax2parent)
     for x in root_leaf[::-1][1:]:

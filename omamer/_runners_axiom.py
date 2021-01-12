@@ -215,7 +215,7 @@ def search_validate(
     # setup search and validation steps
     se_va_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}_query_{}_{}_{}_top{}fams{}{}_{}_{}_{}_{}fbn_{}hbn_MinFamComp0{}_MinFamSize{}.h5'.format(
         db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
-        'yf' if include_younger_fams else 'rf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
+        '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
         '_'.join(query_sp.split()), score, cum_mode, top_m_fams, '_{}perms_w{}'.format(perm_nr, w_size) if (score == 'nonparam_pvalue') or (score == 'nonparam_naive') else '', 
         '_{}'.format(dist) if (score == 'nonparam_pvalue') else '',
         val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, str(comp_t).split('.')[-1], size_t)    

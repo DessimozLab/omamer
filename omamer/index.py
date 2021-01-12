@@ -37,7 +37,8 @@ from ._utils import LOG
 from .alphabets import Alphabet
 from .hierarchy import (
     get_lca_off, 
-    get_descendants
+    get_descendants,
+    get_leaves
 )
 
 
@@ -72,25 +73,26 @@ class Index(object):
         # performance features
         self.nthreads = nthreads
 
-    ### useful for validation
-    def set_species(self, sp_ii):
-        self.sp_filter = np.full((len(self.db._sp_tab),), True)
-        #self.sp_filter[:] = True
-        for i in sp_ii:
-            self.sp_filter[i] = False
+    # ### useful for validation
+    # def set_species(self, sp_ii):
+    #     self.sp_filter = np.full((len(self.db._sp_tab),), True)
+    #     #self.sp_filter[:] = True
+    #     for i in sp_ii:
+    #         self.sp_filter[i] = False
 
     @property
     def sp_filter(self):
+        tax_tab = self.db._tax_tab[:]
         sp_filter = np.full((len(self.db._sp_tab),), False)
         for hidden_taxon in self.hidden_taxa:
-            descendant_species = get_descendants(
-                np.searchsorted(self.db._tax_tab.col('ID'), hidden_taxon.encode('ascii')), self.db._tax_tab, self.db._ctax_arr)
+            descendant_species = get_leaves(
+                np.searchsorted(tax_tab['ID'], hidden_taxon.encode('ascii')), tax_tab, self.db._ctax_arr[:])
             # case where hidden taxon is species
             if descendant_species.size == 0:
                 sp_filter[np.searchsorted(self.db._sp_tab.col('ID'), hidden_taxon.encode('ascii'))] = True
             else:
                 for sp_off in descendant_species:
-                    sp_filter[sp_off] = True
+                    sp_filter[tax_tab['SpeOff'][sp_off]] = True
         return sp_filter
 
     @property

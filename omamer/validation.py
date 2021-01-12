@@ -680,8 +680,7 @@ class Validation():
 
 	    return np.array(sorted(taxa)), species
 
-	@staticmethod
-	def get_clade_specific_negatives(stree_path, oma_h5_path, neg_root_taxon, min_fam_size, max_query_nr):
+	def get_clade_specific_negatives(self, stree_path, oma_h5_path, neg_root_taxon, min_fam_size, max_query_nr):
 	    '''
 	    1.	precompute clade taxonomic levels
 	    2.	iterate over hog tab and store families with all taxa within clade of interest and with >6 members

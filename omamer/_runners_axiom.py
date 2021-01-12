@@ -454,7 +454,7 @@ size_t=${{26}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/_runners_validation.py ${{omamer_path}} se_va ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}} ${{oma_path}} ${{score}} ${{cum_mode}} ${{top_m_fams}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{query_sp}} ${{overwrite}} ${{perm_nr}} ${{w_size}} ${{dist}} ${{comp_t}} ${{size_t}}
+python ${{omamer_path}}omamer/_runners_axiom.py ${{omamer_path}} search_validate ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{hidden_taxa}} ${{k}} ${{oma_path}} ${{score}} ${{cum_mode}} ${{top_m_fams}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{query_sp}} ${{overwrite}} ${{perm_nr}} ${{w_size}} ${{dist}} ${{comp_t}} ${{size_t}}
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
@@ -555,6 +555,7 @@ if __name__ == "__main__":
             pvalue_score = True
         else:
             thresholds = np.arange(0, 1.01, 0.01)
+            #thresholds = np.arange(0.001, 1.001, 0.005) the one used in OMAmer paper
             pvalue_score = False
 
         search_validate(

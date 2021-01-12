@@ -30,7 +30,7 @@ import random
 import tables
 import os
 
-from .hierarchy import get_root_leaf_offsets
+from .hierarchy import get_root_leaf_offsets, get_closest_reference_taxon
 from .merge_search import MergeSearch
 from .index import Index
 
@@ -388,7 +388,7 @@ class Validation():
 	    tax2tax_off = dict(zip(tax_off2tax, range(tax_off2tax.size)))
 	    
 	    # get the lca taxon bewteen the query species and the reference (including hidden taxa with children propagation)
-	    lca_tax = tax_off2tax[get_lca_tax(
+	    lca_tax = tax_off2tax[get_closest_reference_taxon(
 	        tax2tax_off[query_sp.encode('ascii')], tax_tab['ParentOff'], np.argwhere(tax_filter).flatten())].decode('ascii')
 	    
 	    # bin taxa in the species tree

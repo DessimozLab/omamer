@@ -532,7 +532,7 @@ class Validation():
 	# Family validation
 	@lazy_property
 	def clade_specific_negatives(self):
-		return self.get_clade_specific_negatives(self.nwk_fn, self.oma_db_fn, self.neg_root_taxon, self.db.min_prot_nr, self.max_query_nr)
+		return self.get_clade_specific_negatives(self.nwk_fn, self.oma_db_fn, self.neg_root_taxon, self.db.min_fam_size, self.max_query_nr)
 
 	def validate_family(self, se, score, cum_mode, top_m_fams, pvalue_score, perm_nr, w_size, dist):
 
@@ -681,7 +681,7 @@ class Validation():
 	    return np.array(sorted(taxa)), species
 
 	@staticmethod
-	def get_clade_specific_negatives(stree_path, oma_h5_path, neg_root_taxon, min_prot_nr, max_query_nr):
+	def get_clade_specific_negatives(stree_path, oma_h5_path, neg_root_taxon, min_fam_size, max_query_nr):
 	    '''
 	    1.	precompute clade taxonomic levels
 	    2.	iterate over hog tab and store families with all taxa within clade of interest and with >6 members
@@ -763,7 +763,7 @@ class Validation():
 	    for fam, ent_offsets in tqdm(fam2ent_offsets.items()):
 
 	        # same filter than positive queries
-	        if len(ent_offsets) >= min_prot_nr:
+	        if len(ent_offsets) >= min_fam_size:
 
 	            fam2ent_off[fam] = random.choice(ent_offsets)
 

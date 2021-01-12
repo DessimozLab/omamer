@@ -412,7 +412,7 @@ sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
     
     elif step == 'search_validate':
-        with open(name, 'w') as inf:
+        with open('{}run_{}.sh'.format(tmp_path, name), 'w') as inf:
             inf.write(
 """#!/bin/bash
 #SBATCH --nodes=1

@@ -207,7 +207,7 @@ def search_validate(
     
     assert os.path.exists(ki_fn), 'index missing'
 
-    # load in append mode
+    # load 
     db = DatabaseFromOMA(
         filename=ki_fn, root_taxon=root_taxon, min_fam_size=min_fam_size, min_fam_completeness=min_fam_completeness,
         include_younger_fams=include_younger_fams, mode='r')

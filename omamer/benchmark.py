@@ -216,7 +216,7 @@ def parse_validate_diamond(
 
 def write_cs_script(step, name, tmp_path, mem, hour_nr, oe_path):
 
-    elif step == 'parse_validate_diamond':
+    if step == 'parse_validate_diamond':
         with open('{}run_{}.sh'.format(tmp_path, name), 'w') as inf:
             inf.write(
 """#!/bin/bash

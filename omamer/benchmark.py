@@ -167,7 +167,9 @@ def parse_validate_diamond(
     db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, 
     hidden_taxa, query_sp, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, comp_t, size_t, 
     diamond_thresholds, nwk_fn):
-    
+
+    alphabet_n = 21 if not reduced_alphabet else 13
+
     # reload k-mer table
     db = load_db_ki(
         db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa)

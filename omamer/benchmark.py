@@ -151,6 +151,7 @@ class DIAMONDvalidation(Validation):
 
 def load_db_ki(
     db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa):
+    alphabet_n = 21 if not reduced_alphabet else 13
     
     db_ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.h5'.format(
         db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf', alphabet_n, k, 

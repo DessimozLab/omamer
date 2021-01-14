@@ -14,6 +14,10 @@ from omamer.database import DatabaseFromOMA
 from omamer.index import SequenceBufferFasta
 from omamer.hierarchy import get_root_leaf_offsets
 from omamer.validation import Validation
+from omamer._runners_axiom import (
+	is_complete, 
+	set_complete
+)
 
 class DIAMONDsearch():
     '''
@@ -152,7 +156,7 @@ class DIAMONDvalidation(Validation):
 def load_db_ki(
     db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa):
     alphabet_n = 21 if not reduced_alphabet else 13
-    
+
     db_ki_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.h5'.format(
         db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], '' if include_younger_fams else '_woyf', alphabet_n, k, 
         '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '')
@@ -165,57 +169,63 @@ def load_db_ki(
     return db
 
 def parse_validate_diamond(
-    db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, 
-    hidden_taxa, query_sp, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, comp_t, size_t, 
-    diamond_thresholds, nwk_fn):
+	db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, 
+	hidden_taxa, query_sp, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, comp_t, size_t, 
+	diamond_thresholds, nwk_fn, overwrite):
+	alphabet_n = 21 if not reduced_alphabet else 13
 
-    alphabet_n = 21 if not reduced_alphabet else 13
+	# check if already computed
+	se_va_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}_query_{}_DIAMOND_{}_{}_{}_{}fbn_{}hbn_MinFamComp0{}_MinFamSize{}.h5'.format(
+	    db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
+	    '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
+	    '_'.join(query_sp.split()), val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, str(comp_t).split('.')[-1], size_t)
 
-    # reload k-mer table
-    db = load_db_ki(
-        db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa)
-    
-    # parse negatives
-    query_prots = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.{}_prots'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
-        '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
-        neg_root_taxon)
+	if not is_complete(se_va_fn, db_path) or overwrite:
+		if os.path.exists(se_va_fn):
+		    os.remove(se_va_fn)
 
-    diamond_out = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.diamond_neg_{}'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
-        '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
-        neg_root_taxon)
-    
-    se_neg = DIAMONDsearch(db, query_prots=query_prots, diamond_output=diamond_out)
-    se_neg.import_blast_result(score='evalue', prob=True)
-    
-    # parse positives
-    query_prots = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.query_prots'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
-        '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
-        neg_root_taxon)
+		# reload k-mer table
+		db = load_db_ki(
+		    db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, hidden_taxa)
 
-    diamond_out = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.diamond_pos'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
-        '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
-        neg_root_taxon)
-    
-    se_pos = DIAMONDsearch(db, query_prots=query_prots, diamond_output=diamond_out)
-    se_pos.import_blast_result(score='evalue', prob=True)
-    
-    # validate
-    se_va_fn = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}_query_{}_DIAMOND_{}_{}_{}_{}fbn_{}hbn_MinFamComp0{}_MinFamSize{}.h5'.format(
-        db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
-        '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
-        '_'.join(query_sp.split()), val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, str(comp_t).split('.')[-1], size_t) 
+		# parse negatives
+		query_prots = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.{}_prots'.format(
+		    db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
+		    '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
+		    neg_root_taxon)
 
-    va = DIAMONDvalidation(
-        db, se_va_fn, diamond_thresholds, oma_db_fn=None, nwk_fn=nwk_fn, 
-        neg_query_file=None, nthreads=1, query_sp=query_sp, max_query_nr=None, val_mode=val_mode, 
-        neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num, 
-        comp_t=comp_t, size_t=size_t)
+		diamond_out = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.diamond_neg_{}'.format(
+		    db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
+		    '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
+		    neg_root_taxon)
 
-    va.validate(se_pos, se_neg, pvalue_score=True, hog2bin=True)
+		se_neg = DIAMONDsearch(db, query_prots=query_prots, diamond_output=diamond_out)
+		se_neg.import_blast_result(score='evalue', prob=True)
+
+		# parse positives
+		query_prots = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.query_prots'.format(
+		    db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
+		    '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
+		    neg_root_taxon)
+
+		diamond_out = '{}{}_MinFamSize{}_{}_MinFamComp0{}{}_A{}_k{}{}.diamond_pos'.format(
+		    db_path, root_taxon, min_fam_size, logic, str(min_fam_completeness).split('.')[-1], 
+		    '' if include_younger_fams else '_woyf', alphabet_n, k, '_wo_{}'.format('_'.join(['_'.join(x.split()) for x in hidden_taxa])) if hidden_taxa else '',
+		    neg_root_taxon)
+
+		se_pos = DIAMONDsearch(db, query_prots=query_prots, diamond_output=diamond_out)
+		se_pos.import_blast_result(score='evalue', prob=True)
+
+		# validate 
+		va = DIAMONDvalidation(
+		    db, se_va_fn, diamond_thresholds, oma_db_fn=None, nwk_fn=nwk_fn, 
+		    neg_query_file=None, nthreads=1, query_sp=query_sp, max_query_nr=None, val_mode=val_mode, 
+		    neg_root_taxon=neg_root_taxon, focal_taxon=focal_taxon, fam_bin_num=fam_bin_num, hog_bin_num=fam_bin_num, 
+		    comp_t=comp_t, size_t=size_t)
+
+		va.validate(se_pos, se_neg, pvalue_score=True, hog2bin=True)
+		va.va.close()
+		set_complete(se_va_fn, db_path)
 
 def write_cs_script(step, name, tmp_path, mem, hour_nr, oe_path):
 
@@ -252,10 +262,11 @@ hog_bin_num=${{16}}
 comp_t=${{17}}
 size_t=${{18}}
 nwk_fn=${{19}}
+overwrite=${{20}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer
 
-python ${{omamer_path}}omamer/benchmark.py ${{omamer_path}} parse_validate_diamond ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{query_sp}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{comp_t}} ${{size_t}} ${{nwk_fn}}
+python ${{omamer_path}}omamer/benchmark.py ${{omamer_path}} parse_validate_diamond ${{db_path}} ${{root_taxon}} ${{min_fam_size}} ${{logic}} ${{min_completeness}} ${{include_younger_fams}} ${{reduced_alphabet}} ${{k}} ${{hidden_taxa}} ${{query_sp}} ${{val_mode}} ${{neg_root_taxon}} ${{focal_taxon}} ${{fam_bin_num}} ${{hog_bin_num}} ${{comp_t}} ${{size_t}} ${{nwk_fn}} ${{overwrite}}
 sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
@@ -282,9 +293,10 @@ if __name__ == "__main__":
 		size_t = int(sys.argv[19])
 		diamond_thresholds = np.logspace(-322, 6, base=10, num=165)
 		nwk_fn = sys.argv[20]
+		overwrite = True if (sys.argv[21] == 'True') else False
 
 		parse_validate_diamond(
 			db_path, root_taxon, min_fam_size, logic, min_fam_completeness, include_younger_fams, reduced_alphabet, k, 
 			hidden_taxa, query_sp, val_mode, neg_root_taxon, focal_taxon, fam_bin_num, hog_bin_num, comp_t, size_t, 
-			diamond_thresholds, nwk_fn)
+			diamond_thresholds, nwk_fn, overwrite)
 

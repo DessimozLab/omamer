@@ -16,7 +16,7 @@ from pyoma.browser.db import Database as OmaDatabase
 from pyoma.browser.db import OmaIdMapper
 
 from omamer.database import DatabaseFromOMA
-from omamer.index import SequenceBufferFasta
+from omamer.index import SequenceBufferFasta, QuerySequenceBuffer
 from omamer.hierarchy import get_root_leaf_offsets
 from omamer.validation import Validation
 from omamer._runners_axiom import (

@@ -2,6 +2,7 @@
 Code used to benchmark closest sequence methods, i.e. DIAMOND and Smith-Waterman precomputed in OMA database during all-all.
 Act also as _runners_axiom.py for these methods.ß
 '''
+import os
 import sys
 omamer_path = sys.argv[1]
 sys.path.insert(0, omamer_path)

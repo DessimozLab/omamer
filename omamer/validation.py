@@ -30,7 +30,7 @@ import random
 import tables
 import os
 
-from .hierarchy import get_root_leaf_offsets, get_closest_reference_taxon
+from .hierarchy import get_root_leaf_offsets, get_closest_reference_taxon, is_ancestor
 from .merge_search import MergeSearch
 from .index import Index
 
@@ -172,6 +172,13 @@ class Validation():
 	def _fp(self):
 	    return self._get_node_hog('FP')
 
+	@property
+	def _pconf(self):
+		if '/PlacementConfig' in self.va:
+			return self.va.root.PlacementConfig
+		else:
+			return self.va.create_earray('/', node, tables.UInt8Atom(), shape=(0, self._thresholds.nrows), filters=self.db._compr)
+
 	# for family validation
 	def _get_node_fam(self, node):
 		if '/{}'.format(node) in self.va:
@@ -212,7 +219,7 @@ class Validation():
 	def validate_subfamily(self, se, hog2bin=True, pvalue_score=False):
 		assert (self.mode in {'w', 'a'}), 'Validation must be opened in write mode.'
 
-		tp_pre_query2x2tresh, tp_rec_query2x2tresh, fn_query2x2tresh, fp_query2x2tresh = self._validate_subfamily(
+		tp_pre_query2x2tresh, tp_rec_query2x2tresh, fn_query2x2tresh, fp_query2x2tresh, query2thresh2pconf = self._validate_subfamily(
 			self._thresholds[:], se._queryFam_ranked, se._query_ids, se._queryRankHog_bestpath, se._queryRankHog_scores, 
 			self.db._prot_tab[:], self.db._fam_tab[:], self.db._hog_tab.col('ParentOff'), get_root_leaf_offsets, pvalue_score, 
 			self.hog_off2taxbin if hog2bin else np.array([]), self.fam_filter_lca, self.hog_filter_lca, self.val_mode)
@@ -232,6 +239,10 @@ class Validation():
 		self._query_fambins.append(self.fam_off2taxbin[se._queryFam_ranked.flatten()])
 		self._query_ids.flush()
 		self._query_fambins.flush()
+
+		# store also placement configuration (True subfamily, Over-specific, Under-specific, Wrong path, Not predicted)
+		self.va._pconf.append(query2thresh2pconf)
+		self.va._pconf.flush()
 
 	@staticmethod
 	def _validate_subfamily(
@@ -282,14 +293,40 @@ class Validation():
 			    fn_query2x2tresh[q, fn_x, t_off] = fn_nr
 			    fp_query2x2tresh[q, fp_x, t_off] = fp_nr
 
+		def classify_placement(ms_pred_hog, true_hog, pred_fam, true_fam, hog2parent):
+			'''
+			Compute placement configuration into:
+			True subfamily, Over-specific, Under-specific, Wrong path, Wrong family, Not predicted
+			'''
+		    # wrong path
+		    res_type = 3
+		    # not predicted
+		    if ms_pred_hog == -1:
+		        res_type = 5
+		    # true subfamily
+		    elif ms_pred_hog == true_hog:
+		        res_type = 0
+		    # wrong family
+		    elif pred_fam != true_fam:
+		        res_type = 4
+		    # over-specific
+		    elif is_ancestor(true_hog, ms_pred_hog, hog2parent):
+		        res_type = 1
+		    # under-specific
+		    elif is_ancestor(ms_pred_hog, true_hog, hog2parent):
+		        res_type = 2
+		    return res_type
+
 		thresholds = np.array(thresholds, dtype=np.float64)
 
 		bin_num = (np.max(hog2bin) + 1) if hog2bin.size >0 else None
+		
 		# store validation results
 		tp_pre_query2bin2tresh = np.zeros((query_prot_offsets.size, bin_num if bin_num else hog2parent.size, thresholds.size), dtype=np.uint16)
 		tp_rec_query2bin2tresh = np.zeros((query_prot_offsets.size, bin_num if bin_num else hog2parent.size, thresholds.size), dtype=np.uint16)
 		fn_query2bin2tresh = np.zeros((query_prot_offsets.size, bin_num if bin_num else hog2parent.size, thresholds.size), dtype=np.uint16)
 		fp_query2bin2tresh = np.zeros((query_prot_offsets.size, bin_num if bin_num else hog2parent.size, thresholds.size), dtype=np.uint16)
+		query2thresh2pconf = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.uint8)
 
 		# iterage over queries
 		for q in tqdm(range(query_prot_offsets.size)):
@@ -338,7 +375,10 @@ class Validation():
 			    _compute_tp_fp_fn(tp_hogs, fn_hogs, fp_hogs, hog2bin, bin_num, tp_pre_query2bin2tresh, tp_rec_query2bin2tresh,
 			        fn_query2bin2tresh, fp_query2bin2tresh, val_mode)
 
-		return tp_pre_query2bin2tresh, tp_rec_query2bin2tresh, fn_query2bin2tresh, fp_query2bin2tresh
+			    # store also placement configuration (True subfamily, Over-specific, Under-specific, Wrong path, Not predicted)
+			    query2thresh2pconf[q, t_off] = classify_placement(pred_hogs[-1] if pred_hogs.size > 0 else -1, true_leafhog, pred_fam, true_fam, hog2parent)
+
+		return tp_pre_query2bin2tresh, tp_rec_query2bin2tresh, fn_query2bin2tresh, fp_query2bin2tresh, query2thresh2pconf
 
 	@staticmethod
 	def bin_taxa(stree_tree, focal_taxon, tax_tab, query_sp, tax_filter, bin_num=2, focal_bin=True, merge_post_lca_taxa=True):

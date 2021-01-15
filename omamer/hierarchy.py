@@ -211,7 +211,7 @@ def get_hog_implied_taxa(hog_off, hog_tab, tax_tab, ctax_buff, chog_buff):
     hog_taxa = set(get_descendant_taxa(tax_off, tax_tab, ctax_buff))
     hog_taxa.add(tax_off)
     chogs_taxa = set()
-    for chog_off in _children_hog(hog_off, hog_tab, chog_buff):
+    for chog_off in _children(hog_off, hog_tab, chog_buff):
         ctax_off = hog_tab[chog_off]['TaxOff']
         chogs_taxa.add(ctax_off)
         chogs_taxa.update(get_descendant_taxa(ctax_off, tax_tab, ctax_buff))

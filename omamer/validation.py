@@ -298,24 +298,24 @@ class Validation():
 			Compute placement configuration into:
 			True subfamily, Over-specific, Under-specific, Wrong path, Wrong family, Not predicted
 			'''
-		    # wrong path
-		    res_type = 3
-		    # not predicted
-		    if ms_pred_hog == -1:
-		        res_type = 5
-		    # true subfamily
-		    elif ms_pred_hog == true_hog:
-		        res_type = 0
-		    # wrong family
-		    elif pred_fam != true_fam:
-		        res_type = 4
-		    # over-specific
-		    elif is_ancestor(true_hog, ms_pred_hog, hog2parent):
-		        res_type = 1
-		    # under-specific
-		    elif is_ancestor(ms_pred_hog, true_hog, hog2parent):
-		        res_type = 2
-		    return res_type
+			# wrong path
+			res_type = 3
+			# not predicted
+			if ms_pred_hog == -1:
+			    res_type = 5
+			# true subfamily
+			elif ms_pred_hog == true_hog:
+			    res_type = 0
+			# wrong family
+			elif pred_fam != true_fam:
+			    res_type = 4
+			# over-specific
+			elif is_ancestor(true_hog, ms_pred_hog, hog2parent):
+			    res_type = 1
+			# under-specific
+			elif is_ancestor(ms_pred_hog, true_hog, hog2parent):
+			    res_type = 2
+			return res_type
 
 		thresholds = np.array(thresholds, dtype=np.float64)
 

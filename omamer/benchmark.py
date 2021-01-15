@@ -231,7 +231,7 @@ class SWsearch():
 
         non_ref_count = 0
         i = 0
-        for prot_off in tqdm(ids):
+        for prot_off in tqdm(ids[:10]):
 
             cs, score, non_ref_flag = get_closest_sequence(prot_off, prot_tab, omap, closest, sp_filter, omaid2prot_off)
 

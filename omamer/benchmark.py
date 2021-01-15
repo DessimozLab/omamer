@@ -547,8 +547,8 @@ fam_bin_num=${{15}}
 hog_bin_num=${{16}}
 comp_t=${{17}}
 size_t=${{18}}
-nwk_fn=${{19}}
-oma_db_fn=${{20}}
+oma_db_fn=${{19}}
+nwk_fn=${{20}}
 overwrite=${{21}}
 
 source /scratch/axiom/FAC/FBM/DBC/cdessim2/default/vrossie4/miniconda3/bin/activate omamer

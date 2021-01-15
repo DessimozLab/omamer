@@ -241,8 +241,8 @@ class Validation():
 		self._query_fambins.flush()
 
 		# store also placement configuration (True subfamily, Over-specific, Under-specific, Wrong path, Not predicted)
-		self.va._pconf.append(query2thresh2pconf)
-		self.va._pconf.flush()
+		self._pconf.append(query2thresh2pconf)
+		self._pconf.flush()
 
 	@staticmethod
 	def _validate_subfamily(

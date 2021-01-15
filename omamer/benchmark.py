@@ -10,6 +10,7 @@ sys.path.insert(0, omamer_path)
 import tables
 import random 
 import numpy as np
+from tqdm import tqdm
 from Bio import SeqIO, SearchIO
 from scipy.stats import rankdata
 from pyoma.browser.db import Database as OmaDatabase

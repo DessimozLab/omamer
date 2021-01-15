@@ -177,7 +177,7 @@ class Validation():
 		if '/PlacementConfig' in self.va:
 			return self.va.root.PlacementConfig
 		else:
-			return self.va.create_earray('/', node, tables.UInt8Atom(), shape=(0, self._thresholds.nrows), filters=self.db._compr)
+			return self.va.create_earray('/', 'PlacementConfig', tables.UInt8Atom(), shape=(0, self._thresholds.nrows), filters=self.db._compr)
 
 	# for family validation
 	def _get_node_fam(self, node):

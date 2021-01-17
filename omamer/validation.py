@@ -293,7 +293,7 @@ class Validation():
 			    fn_query2x2tresh[q, fn_x, t_off] = fn_nr
 			    fp_query2x2tresh[q, fp_x, t_off] = fp_nr
 
-		def classify_placement(ms_pred_hog, true_hog, pred_fam, true_fam, hog2parent):
+		def classify_placement(is_fam_pred, pred_fam, true_fam, true_hogs, pred_hogs, hog2parent):
 			'''
 			Compute placement configuration into:
 			True subfamily, Over-specific, Under-specific, Wrong path, Wrong family, Not predicted
@@ -301,19 +301,19 @@ class Validation():
 			# wrong path
 			res_type = 3
 			# not predicted
-			if ms_pred_hog == -1:
-			    res_type = 5
-			# true subfamily
-			elif ms_pred_hog == true_hog:
-			    res_type = 0
+			if not is_fam_pred:
+				res_type = 5
 			# wrong family
 			elif pred_fam != true_fam:
-			    res_type = 4
+				res_type = 4
+			# true subfamily (either no duplication or correct placement)
+			elif (true_hogs.size == 0) or (pred_hogs[-1] == true_hogs[-1]):
+			    res_type = 0
 			# over-specific
-			elif is_ancestor(true_hog, ms_pred_hog, hog2parent):
+			elif is_ancestor(true_hogs[-1], pred_hogs[-1], hog2parent):
 			    res_type = 1
 			# under-specific
-			elif is_ancestor(ms_pred_hog, true_hog, hog2parent):
+			elif is_ancestor(pred_hogs[-1], true_hogs[-1], hog2parent):
 			    res_type = 2
 			return res_type
 
@@ -348,7 +348,8 @@ class Validation():
 
 			# pred fam
 			pred_fam = queryFam_ranked[q, 0]
-			    
+			fam_score = queryRankHog_scores[0, q, 0]
+
 			# hogs of pred fam
 			hog_off = fam_tab[pred_fam]['HOGoff']
 			hog_num = fam_tab[pred_fam]['HOGnum']
@@ -376,7 +377,8 @@ class Validation():
 			        fn_query2bin2tresh, fp_query2bin2tresh, val_mode)
 
 			    # store also placement configuration (True subfamily, Over-specific, Under-specific, Wrong path, Not predicted)
-			    query2thresh2pconf[q, t_off] = classify_placement(pred_hogs[-1] if pred_hogs.size > 0 else -1, true_leafhog, pred_fam, true_fam, hog2parent)
+			    is_fam_pred = (True if fam_score < t_val else False) if pvalue_score else (True if fam_score >= t_val else False)
+			    query2thresh2pconf[q, t_off] = classify_placement(is_fam_pred, pred_fam, true_fam, true_hogs, pred_hogs, hog2parent)
 
 		return tp_pre_query2bin2tresh, tp_rec_query2bin2tresh, fn_query2bin2tresh, fp_query2bin2tresh, query2thresh2pconf
 

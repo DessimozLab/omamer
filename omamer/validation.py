@@ -306,9 +306,15 @@ class Validation():
 			# wrong family
 			elif pred_fam != true_fam:
 				res_type = 4
-			# true subfamily (either no duplication or correct placement)
-			elif (true_hogs.size == 0) or (pred_hogs[-1] == true_hogs[-1]):
+			# true subfamily (no true sub-HOG)
+			elif true_hogs.size == 0: 
 			    res_type = 0
+			# under-specific (no predicted sub-HOG)
+			elif pred_hogs.size == 0:
+				res_type = 2
+			# true subfamily 
+			elif pred_hogs[-1] == true_hogs[-1]):
+				res_type = 0
 			# over-specific
 			elif is_ancestor(true_hogs[-1], pred_hogs[-1], hog2parent):
 			    res_type = 1

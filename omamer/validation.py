@@ -313,7 +313,7 @@ class Validation():
 			elif pred_hogs.size == 0:
 				res_type = 2
 			# true subfamily 
-			elif pred_hogs[-1] == true_hogs[-1]):
+			elif pred_hogs[-1] == true_hogs[-1]:
 				res_type = 0
 			# over-specific
 			elif is_ancestor(true_hogs[-1], pred_hogs[-1], hog2parent):

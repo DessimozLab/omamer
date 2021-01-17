@@ -116,6 +116,9 @@ mkdb_parser.add_argument(
     "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo_sapiens\")", type=str
 )
 mkdb_parser.add_argument(
+    "--species", default="", help="Alternatively to --hidden_taxa, provide a file with species offsets in sp_tab (tmp option for scaling experiment)", type=str
+)
+mkdb_parser.add_argument(
     "--reduced_alphabet", default=False, action="store_true", help="Use reduced alphabet from Linclust paper."
 )
 mkdb_parser.add_argument(

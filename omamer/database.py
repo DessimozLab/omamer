@@ -958,7 +958,9 @@ class DatabaseFromOMA(Database):
         i = 0
         j = 0
 
-        for hog_ent in tqdm(hog_tab, disable=is_progress_disabled()):
+        for hog_ent in hog_tab:
+
+        # for hog_ent in tqdm(hog_tab, disable=is_progress_disabled()):
             oma_fam = hog_ent['Fam']
 
             if oma_fam != curr_fam:
@@ -1044,7 +1046,8 @@ class DatabaseFromOMA(Database):
         seq_buff = []
         prot_rows = []
 
-        for r in tqdm(genome_tab, disable=is_progress_disabled()):
+        for r in genome_tab:
+        # for r in tqdm(genome_tab, disable=is_progress_disabled()):
 
             sp = r['SciName']
             sp_code = r['UniProtSpeciesCode']

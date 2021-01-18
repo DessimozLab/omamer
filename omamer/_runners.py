@@ -27,7 +27,7 @@ def mkdb_oma(args):
     import os
 
     assert (args.k < 8), "Max k-mer size is 7."
-    LOG.info('Create database from OMA build')
+    # LOG.info('Create database from OMA build')
     # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
         args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, logic=args.logic, min_fam_completeness=args.min_fam_completeness, include_younger_fams=True, mode='w'
@@ -37,7 +37,7 @@ def mkdb_oma(args):
     nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
 
     # add sequences from database
-    LOG.info('Adding sequences')
+    # LOG.info('Adding sequences')
     db.build_database(oma_db_fn, nwk_fn)
 
     # tmp argument of species to include (inverse of hidden taxa)
@@ -54,12 +54,12 @@ def mkdb_oma(args):
         hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
 
     # build index
-    LOG.info('Building index')
+    # LOG.info('Building index')
     ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
     ki.build_kmer_table()
 
     db.close()
-    LOG.info('Done')
+    # LOG.info('Done')
 
 def search(args):
     from Bio import SeqIO
@@ -89,7 +89,7 @@ def search(args):
     ids = []
     seqs = []
     
-    pbar = tqdm(desc='Searching')
+    #pbar = tqdm(desc='Searching')
     for rec in filter(lambda x: len(x.seq) >= db.ki.k,
                       SeqIO.parse(args.query, 'fasta')):
         ids.append(rec.id)
@@ -98,7 +98,7 @@ def search(args):
             ms.merge_search(
                 seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
             ) 
-            pbar.update(len(ids))
+            #pbar.update(len(ids))
             df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
             if df.size >0:
                 df.to_csv(args.out, sep='\t', index=False, header=print_header)
@@ -112,9 +112,9 @@ def search(args):
             seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
         ) 
         df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
-        pbar.update(len(ids))
+        #pbar.update(len(ids))
         if df.size >0:
             df.to_csv(args.out, sep='\t', index=False, header=print_header)
 
-    pbar.close()
+    #pbar.close()
     db.close()

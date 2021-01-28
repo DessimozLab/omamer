@@ -38,7 +38,7 @@ Required arguments: ``--db``, ``--oma_path``
 | [``--min_fam_size``](#markdown-header--min_fam_size)|6|Only root-HOGs with a protein count passing this threshold are used.
 | [``--min_fam_completeness``](#markdown-header--min_hog_size)|0.0|Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level.
 | [``--logic``](#markdown-header--min_hog_size)|AND|Logic used between the two above arguments to filter root-HOGs. Options are "AND" or "OR".
-| [``--root_taxon``](#markdown-header--root_taxon)||HOGs defined at, or descending from, this taxon are uses as root-HOGs.
+| [``--root_taxon``](#markdown-header--root_taxon)|LUCA|HOGs defined at, or descending from, this taxon are uses as root-HOGs.
 | [``--hidden_taxa``](#markdown-header--hidden_taxa)||The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (_e.g._ Bacteria,Homo_sapiens).
 | [``--species``](#markdown-header--species)||Temporary option
 | [``--reduced_alphabet``](#markdown-header--reduced_alphabet)||Use reduced alphabet from Linclust paper
@@ -72,29 +72,44 @@ Required arguments: ``--db``, ``--query``
 
 # Output columns
 
-#### Qseqid
-The sequence identifier from the input fasta.
+#### Query sequence identifier
+The sequence identifier from the input fasta
 
-#### Family and Subfamily
-The identifier of the hierarchical orthologous group (HOG) in OMA, which you can access through the OMA browser's REST API (https://omabrowser.org/api/docs). 
+#### Predicted HOG identifier
+The identifier of the hierarchical orthologous group (HOG) in OMA, which you can access through the OMA browser search bar or its REST API (https://omabrowser.org/api/docs). 
 
 A HOG identifier is composed of the root-HOG identifier (following “HOG:” and before the first dot), which is followed by its sub-HOGs (before each subsequent dot). For example, for subfamily HOG:0487954.3l.27l, HOG:0487954 is the root-HOG (HOG without-parent), HOG:0487954.3l is its child and HOG:0487954.3l.27l its grandchild.
 
-#### Family-score
-The number of unique _k_-mers shared between the family and query divided by the number of unique query _k_-mers.
+#### Closest taxon from reference taxon
+The taxon from the predicted HOG that is closest from the reference taxon (given one was provided). This option provides a mean to evaluate the performance of OMAmer placement given some knowledge of the query taxonomy is available.
 
-#### Subfamily-score
-Similar but with the _k_-mers specific to the sub-family (~unique to that subtree in the family tree) instead of the family _k_-mers.
+#### Overlap-score
+The fraction of the query sequence overlapping with k-mers of reference root-HOGs. This score aims to help reject partial homologous matches that are problematic in some applications.
+
+#### Family-level OMAmer-score
+The OMAmer-score of the predicted root-HOG. At the family level, this score measures the sequence similarity between the query and a given root-HOG.
+
+#### Subfamily-level OMAmer-score
+The OMAmer-score of the predicted HOG. At the subfamily level, this score captures the excess of similarity that is shared between the query and a given HOG, thus excluding the similarity with regions conserved in more ancestral HOGs.
+
+#### Subfamily gene set
+Extant gene IDs of predicted HOG, which you can look for in the OMA browser search bar or its REST API (https://omabrowser.org/api/docs). 
 
 # Change log
-#### Version 0.0.1
- - Initial release.
 
-#### Version 0.1.0
- - Added hidden_taxa and threshold arguments.
- 
+#### Version 0.2.0
+ - Added ``--min_fam_completeness``, ``--logic``, ``--score`` and ``--reference_taxon`` options
+ - New output format
+ - Debugging
+
 #### Version 0.1.2 - 0.1.3
  - Debugging
+
+#### Version 0.1.0
+ - Added hidden_taxa and threshold arguments
+
+#### Version 0.0.1
+ - Initial release
 
 # License
 OMAmer is a free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.

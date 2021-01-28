@@ -1,6 +1,6 @@
 # OMAmer
 
-OMAmer is a novel alignment-free protein family assignment method, which limits over-specific subfamily assignments and is suited to phylogenomic databases with thousands of genomes. It is based on an innovative method using subfamily-informed k-mers for alignment-free mapping to ancestral protein subfamilies. Whilst able to reject non-homologous family-level assignments, it has provided better and quicker subfamily-level assignments than a method based on closest sequences (using DIAMOND).
+OMAmer is a novel alignment-free protein family assignment method, which limits over-specific subfamily assignments and is suited to phylogenomic databases with thousands of genomes. It is based on an innovative method using evolutionnary-informed k-mers for alignment-free mapping to ancestral protein subfamilies. Whilst able to reject non-homologous family-level assignments, it has provided better and quicker subfamily-level assignments than a method based on closest sequences (using DIAMOND).
 
 # Installation
 Requires Python >= 3.6. Download the package from the PyPI, resolving the dependencies by using ``pip install omamer``.
@@ -9,59 +9,66 @@ Alternatively, clone this repository and install manually.
 
 # Pre-Built Databases
 
-Download pre-built databases from the links below. More databases to follow shortly -- if you have a request, please create an issue.
+Download pre-built databases from the link below (from January 2020 OMA release).
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3987182.svg)](https://doi.org/10.5281/zenodo.3987182)
- - Metazoa (from January 2020 OMA release)
- - Hominidae (from January 2020 OMA release)
+ - LUCA.h5
+ - Metazoa.h5
+ - Viridiplantae.h5
+ - Hominidae.h5
+
+Their names indicate the root-taxon parameter used. Other non-required parameters were left to default. 
 
 # omamer mkdb - Building a Database
 This is currently reliant on the OMA browser's database file and the species phylogeny of HOGs. Building using OrthoXML files available shortly. 
  - https://omabrowser.org/All/OmaServer.h5
  - https://omabrowser.org/All/speciestree.nwk
 ## Usage
-Required arguments: ``--db``, ``--root_taxon``, ``--oma_path``
+Required arguments: ``--db``, ``--oma_path``
 
-    usage: omamer mkdb [-h] --db DB [--nthreads NTHREADS] [--k K]
-                       [--hidden_taxa HIDDEN_TAXA] [--min_hog_size MIN_HOG_SIZE]
-                       --root_taxon ROOT_TAXON --oma_path OMA_PATH
+    usage: omamer mkdb [-h] --db DB [--nthreads NTHREADS] [--min_fam_size MIN_FAM_SIZE] [--min_fam_completeness MIN_FAM_COMPLETENESS] [--logic {AND,OR}]
+                       [--root_taxon ROOT_TAXON] [--hidden_taxa HIDDEN_TAXA] [--species SPECIES] [--reduced_alphabet] [--k K] --oma_path OMA_PATH
                        [--log_level {debug,info,warning}]
-                     
+                   
 ## Arguments
 | Flag                 | Default                | Description |
 |:--------------------|:----------------------|:-----------|
-| [``--db``](#markdown-header--db) || Database filename.
-| [``--nthreads``](#markdown-header--nthreads)|Number of threads available|Number of threads to use.
-| [``--k``](#markdown-header--k)|6|_k_-mer length.
-| [``--hidden_taxa``](#markdown-header--hidden_taxa)||Proteins of these taxa are hidden from the _k_-mer table.
-| [``--min_hog_size``](#markdown-header--min_hog_size)|6|HOGs passing this threshold are used.
-| [``--root_taxon``](#markdown-header--root_taxon)||HOGs defined at, or descending from, this taxon are uses.
-| [``--oma_path``](#markdown-header--oma_path)||Path to both OmaServer.h5 and speciestree.nwk.
-| [``--log_level``](#markdown-header--log_level)|info|Logging level.
+| [``--db``](#markdown-header--db)||Path to new database (including filename)
+| [``--nthreads``](#markdown-header--nthreads)|1|Number of threads to use
+| [``--min_fam_size``](#markdown-header--min_fam_size)|6|Only root-HOGs with a protein count passing this threshold are used.
+| [``--min_fam_completeness``](#markdown-header--min_hog_size)|0.0|Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level.
+| [``--logic``](#markdown-header--min_hog_size)|AND|Logic used between the two above arguments to filter root-HOGs. Options are "AND" or "OR".
+| [``--root_taxon``](#markdown-header--root_taxon)||HOGs defined at, or descending from, this taxon are uses as root-HOGs.
+| [``--hidden_taxa``](#markdown-header--hidden_taxa)||The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (_e.g._ Bacteria,Homo_sapiens).
+| [``--species``](#markdown-header--species)||Temporary option
+| [``--reduced_alphabet``](#markdown-header--reduced_alphabet)||Use reduced alphabet from Linclust paper
+| [``--k``](#markdown-header--k)|6|_k_-mer length
+| [``--oma_path``](#markdown-header--oma_path)||Path to a directory with both OmaServer.h5 and speciestree.nwk
+| [``--log_level``](#markdown-header--log_level)|info|Logging level
 
 # omamer search - Searching a Database
 Assign proteins to families and subfamilies in a pre-existing database.
 ## Usage
 Required arguments: ``--db``, ``--query``
 
-    usage: omamer search [-h] --db DB --query QUERY [--threshold THRESHOLD]
-                         [--out OUT] [--include_extant_genes]
-                         [--chunksize CHUNKSIZE] [--nthreads NTHREADS]
-                         [--log_level {debug,info,warning}]
-                     
+    usage: omamer search [-h] --db DB --query QUERY [--score {default,sensitive}] [--threshold THRESHOLD] [--reference_taxon REFERENCE_TAXON] [--out OUT]
+                         [--include_extant_genes] [--chunksize CHUNKSIZE] [--nthreads NTHREADS] [--log_level {debug,info,warning}]
+
 ## Arguments
 ### Quick reference table
 
 | Flag                 | Default                | Description |
 |:--------------------|:----------------------|:-----------|
-| [``--db``](#markdown-header--db) || Database filename.
-| [``--query``](#markdown-header--query) || FASTA formatted sequences.
-| [``--threshold``](#markdown-header--threshold) |0.05| Subfamily-score threshold used to vary placement specificity.
-| [``--out``](#markdown-header--db) |stdout| Path to output.
-| [``--include_extant_genes``](#markdown-header--include_extant_genes)||Include extant gene IDs as comma separated entry in results.
-| [``--chunksize``](#markdown-header--chunksize) |500| Number of sequences searched sequentially.
-| [``--nthreads``](#markdown-header--db) |Number of threads available|Number of threads to use.
-| [``--log_level``](#markdown-header--db) |info| Logging level.
+| [``--db``](#markdown-header--db) || Path to existing database (including filename)
+| [``--query``](#markdown-header--query) || Path to FASTA formatted sequences
+| [``--score``](#markdown-header--score) |default| Type of OMAmer-score to use. Options are "default" and "sensitive".
+| [``--threshold``](#markdown-header--threshold) |0.05| Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be. 
+| [``--reference_taxon``](#markdown-header--reference_taxon) || The placement is stopped when reaching a HOG with the reference taxon (must exist in the OMA database).  This is a complementary option to vary the specificity of predicted HOGs. 
+| [``--out``](#markdown-header--db) |stdout| Path to output (default stdout)
+| [``--include_extant_genes``](#markdown-header--include_extant_genes)||Include extant gene IDs as comma separated entry in results
+| [``--chunksize``](#markdown-header--chunksize) |10000| Number of queries to process at once.
+| [``--nthreads``](#markdown-header--db) |1|Number of threads to use
+| [``--log_level``](#markdown-header--db) |info| Logging level
 
 # Output columns
 

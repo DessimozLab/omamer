@@ -294,34 +294,43 @@ class Validation():
 			    fp_query2x2tresh[q, fp_x, t_off] = fp_nr
 
 		def classify_placement(is_fam_pred, pred_fam, true_fam, true_hogs, pred_hogs, hog2parent):
-			'''
-			Compute placement configuration into:
-			True subfamily, Over-specific, Under-specific, Wrong path, Wrong family, Not predicted
-			'''
-			# wrong path
-			res_type = 3
-			# not predicted
-			if not is_fam_pred:
-				res_type = 5
-			# wrong family
-			elif pred_fam != true_fam:
-				res_type = 4
-			# true subfamily (no true sub-HOG)
-			elif true_hogs.size == 0: 
-			    res_type = 0
-			# under-specific (no predicted sub-HOG)
-			elif pred_hogs.size == 0:
-				res_type = 2
-			# true subfamily 
-			elif pred_hogs[-1] == true_hogs[-1]:
-				res_type = 0
-			# over-specific
-			elif is_ancestor(true_hogs[-1], pred_hogs[-1], hog2parent):
-			    res_type = 1
-			# under-specific
-			elif is_ancestor(pred_hogs[-1], true_hogs[-1], hog2parent):
-			    res_type = 2
-			return res_type
+		    '''
+		    Compute placement configuration into:
+		    True subfamily, Over-specific, Under-specific, Wrong path, Wrong family, Not predicted
+		    '''
+		    ## error at family level
+		    # not predicted
+		    if not is_fam_pred:
+		        res_type = 5
+		    # wrong family
+		    elif pred_fam != true_fam:
+		        res_type = 4
+		    
+		    ## cases where true_hogs or/and pred_hogs are empty, which need to be checked first
+		    # true subfamily (placed correctly at the root level)
+		    elif true_hogs.size == 0 and pred_hogs.size == 0: 
+		        res_type = 0
+		    # over-specific
+		    elif true_hogs.size == 0:
+		        res_type = 1
+		    # under-specific
+		    elif pred_hogs.size == 0:
+		        res_type = 2
+		        
+		    ## cases with >0 true_hogs and >0 pred_hogs
+		    # true subfamily 
+		    elif pred_hogs[-1] == true_hogs[-1]:
+		        res_type = 0
+		    # over-specific
+		    elif is_ancestor(true_hogs[-1], pred_hogs[-1], hog2parent):
+		        res_type = 1
+		    # under-specific
+		    elif is_ancestor(pred_hogs[-1], true_hogs[-1], hog2parent):
+		        res_type = 2
+		    # wrong path
+		    else:
+		        res_type = 3 
+		    return res_type
 
 		thresholds = np.array(thresholds, dtype=np.float64)
 

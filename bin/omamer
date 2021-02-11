@@ -101,28 +101,28 @@ mkdb_parser.add_argument(
     help="Number of threads to use (default {}).".format(1),
 )
 mkdb_parser.add_argument(
-    "--min_fam_size", default=6, help="Minimum root-HOG size used to build the database.", type=int
+    "--min_fam_size", default=6, help="Only root-HOGs with a protein count passing this threshold are used.", type=int
 )
 mkdb_parser.add_argument(
-    "--min_fam_completeness", default=0.0, help="Minimum root-HOG species completeness to build the database.", type=float
+    "--min_fam_completeness", default=0.0, help="Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level", type=float
 )
 mkdb_parser.add_argument(
-    "--logic", default="AND", help="Logic used between min_fam_size and min_fam_completeness.", choices=["AND", "OR"]
+    "--logic", default="AND", help="Logic used between the two above arguments to filter root-HOGs. Options are AND or OR.", choices=["AND", "OR"]
 )
 mkdb_parser.add_argument(
-    "--root_taxon", default="LUCA", help="Defines the taxonomic scope of the database."
+    "--root_taxon", default="LUCA", help="HOGs defined at, or descending from, this taxon are uses as root-HOGs."
 )
 mkdb_parser.add_argument(
-    "--hidden_taxa", default="", help="Taxa hidden from the k-mer table. (e.g. \"Bacteria,Homo_sapiens\")", type=str
+    "--hidden_taxa", default="", help="The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (e.g. Bacteria,Homo_sapiens).", type=str
 )
-mkdb_parser.add_argument(
-    "--species", default="", help="Alternatively to --hidden_taxa, provide a file with species offsets in sp_tab (tmp option for scaling experiment)", type=str
-)
+#mkdb_parser.add_argument(
+#    "--species", default="", help="Alternatively to --hidden_taxa, provide a file with species offsets in sp_tab (tmp option for scaling experiment)", type=str
+#)
 mkdb_parser.add_argument(
     "--reduced_alphabet", default=False, action="store_true", help="Use reduced alphabet from Linclust paper."
 )
 mkdb_parser.add_argument(
-    "--k", default=6, help="Word size to use to build the k-mer table.", type=int
+    "--k", default=6, help="k-mer length", type=int
 )
 mkdb_parser.add_argument(
     "--oma_path", required=True, help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk)."
@@ -144,16 +144,16 @@ search_parser.add_argument(
     "--db", required=True, help="Path to existing database (including filename)."
 )
 search_parser.add_argument(
-    "--query", required=True, help="FASTA formatted sequences", type=FileType("r")
+    "--query", required=True, help="Path to FASTA formatted sequences", type=FileType("r")
 )
 search_parser.add_argument(
     "--score", 
     default="default", 
     choices=["default", "sensitive"], 
-    help="Family and subfamily scores."
+    help="Type of OMAmer-score to use. Options are default and sensitive."
 )
 search_parser.add_argument(
-    "--threshold", default=0.05, type=float, help="Score threshold used to vary placement specificity."
+    "--threshold", default=0.05, type=float, help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be."
 )
 search_parser.add_argument(
     "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."

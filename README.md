@@ -11,7 +11,7 @@ Alternatively, clone this repository and install manually.
 
 Download pre-built databases from the link below (from January 2020 OMA release).
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4476143.svg)](https://doi.org/10.5281/zenodo.4476143)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4548214.svg)](https://doi.org/10.5281/zenodo.4548214)
  - LUCA.h5
  - Metazoa.h5
  - Viridiplantae.h5
@@ -121,4 +121,5 @@ You should have received a copy of the GNU Lesser General Public License along w
 # Citation
 Rossier Victor, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, and Christophe Dessimoz. 2020. “OMAmer: Tree-Driven and Alignment-Free Protein Assignment to Subfamilies Outperforms Closest Sequence Approaches.” <bioRxiv. https://doi.org/10.1101/2020.04.30.068296>.
 
-Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4476143.svg)](https://doi.org/10.5281/zenodo.4476143)
+Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4548214.svg)](https://doi.org/10.5281/zenodo.4548214)
+

@@ -82,21 +82,21 @@ def get_children(off, tab, c_buff):
     c_off = ent["ChildrenOff"]
     return c_buff[c_off : c_off + ent["ChildrenNum"]]
 
-def traverse(off, tab, c_buff, acc, leaf_fun, prefix_fun, postfix_fun):
+def traverse(off, tab, c_buff, acc, leaf_fun, prefix_fun, postfix_fun, **kwargs):
     if prefix_fun:
-        prefix_fun(off, acc)
+        prefix_fun(off, acc, **kwargs)
 
     for c in get_children(off, tab, c_buff):
 
         # come back when no more children (could add a stop_fun)
         if tab[c]["ChildrenOff"] == -1:
             if leaf_fun:
-                leaf_fun(c, acc)
+                leaf_fun(c, acc, **kwargs)
         else:
-            traverse(c, tab, c_buff, acc, leaf_fun, prefix_fun, postfix_fun)
+            traverse(c, tab, c_buff, acc, leaf_fun, prefix_fun, postfix_fun, **kwargs)
             
     if postfix_fun:
-        postfix_fun(off, acc)
+        postfix_fun(off, acc, **kwargs)
     
     return acc
 

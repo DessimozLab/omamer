@@ -130,7 +130,7 @@ class Index(object):
     ### main function to build the index ###
     def build_kmer_table(self):
 
-        assert self.db.mode == 'w', "Index must be opened in write mode."
+        assert self.db.mode in {'w', 'a'}, "Index must be opened in write mode."
         assert ('/Index' not in self.db.db), 'Index has already been computed'
 
         # build suffix array with option to translate the sequence buffer first

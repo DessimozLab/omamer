@@ -78,6 +78,7 @@ class Alphabet(object):
         else:
             raise ValueError("Unknown reduced alphabet.")
 
+        self.chars = chars
         self.digits = digits
         self.lookup = lookup
         self.trans = trans

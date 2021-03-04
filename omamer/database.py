@@ -1399,7 +1399,7 @@ class DatabaseFromPANTHER(Database):
             for dfam in dupl_families:
                 # track leaves remaining after HGT splits
                 remaining_leaves = set(dfam.get_leaf_names())
-                parent2speroots = defaultdict(list)
+                parent2speroots = collections.defaultdict(list)
 
                 # bottom-up traversal
                 for node in dfam.traverse("postorder"):
@@ -1456,7 +1456,7 @@ class DatabaseFromPANTHER(Database):
                 assert fam.Ev=='0>1', 'A family should start with a speciation node'
 
                 # to bookeep mapping to functional information
-                hog_id2an_ids = defaultdict(list)
+                hog_id2an_ids = collections.defaultdict(list)
 
                 # because leaf HOGs are implicit in the orthoXML format
                 gene_id2hog_id = {}

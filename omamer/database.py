@@ -44,6 +44,7 @@ from .hierarchy import (
 from .index import Index
 
 # for DatabaseFromPANTHER
+import re
 import glob
 import pyham
 

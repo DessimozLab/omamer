@@ -20,7 +20,7 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
 from Bio import SeqIO
-from ete3 import Tree
+from ete3 import Tree, orthoxml
 from itertools import repeat, chain
 from property_manager import lazy_property
 from tqdm import tqdm
@@ -45,7 +45,6 @@ from .index import Index
 
 # for DatabaseFromPANTHER
 import glob
-import ete3
 import pyham
 
 from .alphabets import Alphabet
@@ -672,7 +671,7 @@ class Database(object):
         Add speciation events and taxa to the species tree.
         Used as templates to build the HOG gene trees inbetween duplication events.
         '''
-        st = ete3.Tree(nwk_fn, format=1, quoted_node_names=True)
+        st = Tree(nwk_fn, format=1, quoted_node_names=True)
         for node in st.traverse():
 
             # keep track of taxon and its level (distance from root)
@@ -1317,8 +1316,8 @@ class DatabaseFromPANTHER(Database):
         Convert PANTHER family trees to one orthoXML file and a mapper between new HOG ids and PANTHER ancestral node ids 
         '''        
         # add an ortho group container to the orthoXML document
-        ortho_groups = ete3.orthoxml.groups()
-        xml = ete3.orthoxml.orthoXML(origin=origin, version=version, originVersion=originVersion)
+        ortho_groups = orthoxml.groups()
+        xml = orthoxml.orthoXML(origin=origin, version=version, originVersion=originVersion)
         xml.set_groups(ortho_groups)
 
         # mapping between new HOG ids and panther fam:node ids
@@ -1360,10 +1359,10 @@ class DatabaseFromPANTHER(Database):
 
                 # create species and genes containers
                 if spname not in sp2genes:
-                    sp = ete3.orthoxml.species(spname)
-                    db = ete3.orthoxml.database(name=dbname)
+                    sp = orthoxml.species(spname)
+                    db = orthoxml.database(name=dbname)
                     sp.add_database(db)
-                    genes = ete3.orthoxml.genes()
+                    genes = orthoxml.genes()
                     db.set_genes(genes)
                     sp2genes[spname] = genes
                     # add info to the orthoXML document
@@ -1372,7 +1371,7 @@ class DatabaseFromPANTHER(Database):
                     genes = sp2genes[spname]
 
                 # store the leaf gene in 'genes' of 'sp'
-                gn = ete3.orthoxml.gene(protId=uniprot_id, id=unique_id)
+                gn = orthoxml.gene(protId=uniprot_id, id=unique_id)
                 genes.add_gene(gn)
 
                 # track gene id
@@ -1385,7 +1384,7 @@ class DatabaseFromPANTHER(Database):
             for pthfam_an_id, prot_id in pthfam_an_id2prot_id.items():
                 pthfam_an2prot_outf.write('{}\t{}\n'.format(pthfam_an_id, prot_id))
 
-            tree = ete3.Tree(tree_str)
+            tree = Tree(tree_str)
 
             #########################################################################################################
             # Split the PANTHER family if starts by duplication events and at each HGT event
@@ -1465,8 +1464,8 @@ class DatabaseFromPANTHER(Database):
                 node2group = {}
 
                 # create the root-HOG
-                taxon = ete3.orthoxml.property('TaxRange', fam.S)
-                node2group[fam] = ete3.orthoxml.group(id=fam_id, property=[taxon])
+                taxon = orthoxml.property('TaxRange', fam.S)
+                node2group[fam] = orthoxml.group(id=fam_id, property=[taxon])
                 ortho_groups.add_orthologGroup(node2group[fam])
                 hog_id2an_ids[fam_id].append(fam.ID)
 
@@ -1506,22 +1505,22 @@ class DatabaseFromPANTHER(Database):
 
                         # A duplication here means no new HOG
                         if child_event == "1>0":
-                            node2group[child] = ete3.orthoxml.group(id=hog_id)
+                            node2group[child] = orthoxml.group(id=hog_id)
                             group.add_paralogGroup(node2group[child])
                             hog_id2an_ids[hog_id].append(child.ID)
 
                         else:
-                            taxon = ete3.orthoxml.property('TaxRange', child.S)
+                            taxon = orthoxml.property('TaxRange', child.S)
 
                             # A speciation following a duplication means a new (explicit) HOG
                             if event == "1>0": 
                                 child_hog_id = "{}.{}".format(hog_id, hog_id2curr_subhog_id[hog_id])
                                 hog_id2curr_subhog_id[hog_id] += 1
                                 hog_id2curr_subhog_id[child_hog_id] = 1
-                                node2group[child] = ete3.orthoxml.group(id=child_hog_id, property=[taxon])
+                                node2group[child] = orthoxml.group(id=child_hog_id, property=[taxon])
                                 hog_id2an_ids[child_hog_id].append(child.ID)
                             else:
-                                node2group[child] = ete3.orthoxml.group(id=hog_id, property=[taxon])
+                                node2group[child] = orthoxml.group(id=hog_id, property=[taxon])
                                 hog_id2an_ids[hog_id].append(child.ID)
 
                             group.add_orthologGroup(node2group[child])
@@ -1803,7 +1802,7 @@ class DatabaseFromPANTHER(Database):
         '''
         Removes internal node annotations and replace node names with taxon located in the S attribute.
         '''
-        st = ete3.Tree(pyham.utils.get_newick_string(nwk_fn_uf, type="nwk"))
+        st = Tree(pyham.utils.get_newick_string(nwk_fn_uf, type="nwk"))
         for node in st.traverse():
             if not node.is_leaf():
                 node.name = node.S

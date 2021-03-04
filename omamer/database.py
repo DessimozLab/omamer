@@ -1292,11 +1292,12 @@ class DatabaseFromPANTHER(Database):
         
         # PyHAM fails whith this family.
         pthfam_filter = set(['PTHR22911'])
-        orthoxml_name = 'toy_panther'
-        #orthoxml_name = 'panther_wo_PTHR22911'
+        #orthoxml_name = 'toy_panther'
+        orthoxml_name = 'panther_wo_PTHR22911'
         
         tree_path = '{}Tree_MSF/'.format(panther_data_path)
-        tree_files = glob.glob("{}*.tree".format(tree_path))[:10]
+        #tree_files = glob.glob("{}*.tree".format(tree_path))[:10]
+        tree_files = glob.glob("{}*.tree".format(tree_path))
         aln_files = glob.glob("{}*.AN.fasta".format(tree_path))
         
         self.PANTHER2orthoXML(tree_files, out_path, orthoxml_name, pthfam_filter=pthfam_filter, origin=origin, version=version, originVersion=originVersion)

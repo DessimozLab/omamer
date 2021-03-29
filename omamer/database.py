@@ -795,7 +795,7 @@ class Database(object):
             hog_tree.children[0].prune(hog_tree.get_leaves())
         else:
             # remove single child speciations
-            hog_tree.prune(hog_tree.get_leaves())
+            hog_tree.prune(hog_tree.get_leaves(), preserve_branch_length=True)
 
         return hog_tree
 

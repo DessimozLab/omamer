@@ -38,7 +38,8 @@ from .hierarchy import (
     get_children,
     get_hog2taxa,
     traverse,
-    is_ancestor
+    is_ancestor,
+    get_seq
 )
 
 from .index import Index
@@ -75,6 +76,7 @@ class Database(object):
         LCAtaxOff = tables.UInt64Col(pos=12)
         NrMemberGenes = tables.Int64Col(pos=13)
         CompletenessScore = tables.Float64Col(pos=14)
+        MedianSeqLen = tables.UInt64Col(pos=15)
 
     class FamilyTableFormat(tables.IsDescription):
         ID = tables.UInt64Col(pos=1)
@@ -490,7 +492,8 @@ class Database(object):
                         repeat(-1),
                         repeat(0),
                         oma_hog_sizes,
-                        oma_hog_comps
+                        oma_hog_comps,
+                        repeat(0)
                     )
                 )
             )
@@ -799,6 +802,50 @@ class Database(object):
 
         return hog_tree
 
+    def add_median_seqlen_col(self):
+        '''
+        Compute the median sequence length for each HOG
+        '''
+        def compute_median_seq_len(
+            hog_off, hog_tab, chog_buff, prot_tab, seq_buff, cprot_buff, median_seq_lengths):
+
+            def _compute_median_seq_len(hog_off, parent2seq_lengths, prot_tab, seq_buff, hog_tab2, cprot_buff, median_seq_lengths):
+
+                # compute HOG sequence lengths
+                seq_lengths = list(map(lambda x: len(get_seq(x, prot_tab, seq_buff)), get_hog_child_prots(hog_off, hog_tab2, cprot_buff)))
+
+                # merge these with child sequence lentgths (stored in parent2seq_lengths)
+                seq_lengths = seq_lengths + parent2seq_lengths[hog_off] # parent2seq_lengths.get(hog_off, [])
+
+                # store in parent2seq_lengths
+                #parent_seq_lengths =  parent2seq_lengths.get(hog_tab2['ParentOff']['HOGoff'], [])
+                parent2seq_lengths[hog_tab2['ParentOff'][hog_off]] += seq_lengths
+
+                # store median
+                median_seq_lengths[hog_off] = np.median(seq_lengths)
+
+                return parent2seq_lengths
+
+            parent2seq_lengths = collections.defaultdict(list)
+
+            parent2seq_lengths = traverse(
+                hog_off, hog_tab, chog_buff, parent2seq_lengths, _compute_median_seq_len, None, _compute_median_seq_len, 
+                prot_tab=prot_tab, seq_buff=seq_buff, hog_tab2=hog_tab, cprot_buff=cprot_buff, median_seq_lengths=median_seq_lengths)
+        
+        fam_tab = self._fam_tab[:]
+        hog_tab = self._hog_tab[:]
+        chog_buff = self._chog_arr[:]
+        cprot_buff = self._cprot_arr[:]
+        prot_tab = self._prot_tab[:]
+        seq_buff = self._seq_buff[:]
+        
+        median_seq_lengths = np.zeros(hog_tab.size, dtype=np.uint64)
+        for hog_off in tqdm(fam_tab['HOGoff']):
+            compute_median_seq_len(
+                hog_off, hog_tab, chog_buff, prot_tab, seq_buff, cprot_buff, median_seq_lengths)
+            
+        self._hog_tab.modify_column(colname='MedianSeqLen', column=median_seq_lengths)
+
 
 class DatabaseFromOMA(Database):
     """
@@ -816,12 +863,13 @@ class DatabaseFromOMA(Database):
     def build_database(self, oma_h5_path, stree_path):
         assert self.mode in {"w", "a"}, "Database must be opened in write mode."
 
+        # load OMA h5 file
+        h5file = tables.open_file(oma_h5_path, mode="r")
+
         # build taxonomy table except the SpeOff column
         LOG.debug("initiate taxonomy table")
         tax2taxoff, species = self.initiate_tax_tab(stree_path)
-
-        # load OMA h5 file
-        h5file = tables.open_file(oma_h5_path, mode="r")
+        self.add_taxid_col(h5file)
 
         LOG.debug("select and strip OMA HOGs")
         fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness = self.select_and_strip_OMA_HOGs(h5file)
@@ -863,8 +911,21 @@ class DatabaseFromOMA(Database):
         LOG.debug("compute LCA taxa")
         self.add_lcataxoff_col()
 
+        # compute the median sequence length of each HOG
+        self.add_median_seqlen_col()
+
         # close and open in read mode
         h5file.close()
+
+    def add_taxid_col(self, h5file):
+        '''
+        Add the NCBI taxon id from OMA hdf5.
+        '''
+        oma_tax_tab = h5file.root.Taxonomy[:]
+        taxid_column = []
+        for sp_name in self._tax_tab.col('ID'):
+            taxid_column.append(oma_tax_tab['NCBITaxonId'][np.argwhere(oma_tax_tab['Name'] == sp_name)[0][0]])
+        self._tax_tab.modify_column(colname='TaxID', column=taxid_column)
 
     ### functions to parse OMA database ###
     def select_and_strip_OMA_HOGs(self, h5file):

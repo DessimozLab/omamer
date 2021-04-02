@@ -77,6 +77,7 @@ def get_lca_off(offsets, parent_arr):
                 i += 1
             return np.uint64(matT[i - 1][0])
 
+@numba.njit
 def get_children(off, tab, c_buff):
     ent = tab[off]
     c_off = ent["ChildrenOff"]
@@ -165,6 +166,26 @@ def get_hog_member_species(hog_off, hog_tab, chog_buff, hog_taxa_buff, tax_tab):
         member_species.extend(list(get_hog_child_species(dhog_off, hog_tab, hog_taxa_buff, tax_tab)))
     return member_species   
 
+@numba.njit
+def is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
+    '''
+    Check whether the HOG implies the true taxon.
+    '''
+    implied = False
+    
+    # the HOG defined on the lineage of the true taxon
+    if np.argwhere(true_tax_lineage == hog_tab['TaxOff'][hog_off]).size == 1:
+        implied = True
+    
+    # child HOGs are defined on the lineage of the true taxon
+    child_hog_taxa = np.unique(hog_tab['TaxOff'][get_children(hog_off, hog_tab, chog_buff)])
+    for tax_off in true_tax_lineage:
+        if np.argwhere(child_hog_taxa == tax_off).size == 1:
+            implied = False
+            break
+
+    return implied
+
 # functions to precompute HOG taxonomic levels (implied or not) 
 def get_hog_taxa(hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_buff):
     '''
@@ -208,13 +229,13 @@ def get_hog_implied_taxa(hog_off, hog_tab, tax_tab, ctax_buff, chog_buff):
     (implied because include taxa having lost their copy)
     '''
     tax_off = hog_tab[hog_off]['TaxOff']
-    hog_taxa = set(get_descendant_taxa(tax_off, tax_tab, ctax_buff))
+    hog_taxa = set(get_descendants(tax_off, tax_tab, ctax_buff))
     hog_taxa.add(tax_off)
     chogs_taxa = set()
-    for chog_off in _children(hog_off, hog_tab, chog_buff):
+    for chog_off in get_children(hog_off, hog_tab, chog_buff):
         ctax_off = hog_tab[chog_off]['TaxOff']
         chogs_taxa.add(ctax_off)
-        chogs_taxa.update(get_descendant_taxa(ctax_off, tax_tab, ctax_buff))
+        chogs_taxa.update(get_descendants(ctax_off, tax_tab, ctax_buff))
     return hog_taxa.difference(chogs_taxa)
 
 def get_hog2implied_taxa(hog_tab, tax_tab, ctax_buff, chog_buff):
@@ -241,6 +262,11 @@ def get_closest_reference_taxon(tax_off, tax2parent, hidden_taxa):
     for x in root_leaf[::-1][1:]:
         if x not in hidden_taxa:
             return x
+
+## Prot tab
+def get_seq(prot_off, prot_tab, seq_buff):
+    seq_off = prot_tab['SeqOff'][prot_off]
+    return seq_buff[seq_off: seq_off + prot_tab['SeqLen'][prot_off]].tobytes().decode("ascii")[:-1]
 
 # TO UPDATE
         

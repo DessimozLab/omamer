@@ -982,7 +982,7 @@ def compute_overlap(fam_highloc, fam_lowloc, k, query_len):
 @numba.njit
 def _place_queries(
     query_offsets, q2fam_off, q2fam_score, q2fam_overlap, fam_tab, q2hog_bestpath, q2hog_scores, overlap, fst, sst,
-    true_tax_off, hog_tab, hog_taxa_buff):
+    true_tax_off, hog_tab, chog_buff):
     '''
     For each query:
         Skip when low sequence overlap (overlap)
@@ -996,6 +996,9 @@ def _place_queries(
     q2hog_off = np.full(q2fam_off.size, -1, dtype=np.int64)
     q2hog_score = np.full(q2fam_off.size, -1, dtype=np.float64)
     q2max_hog_score = np.full(q2fam_off.size, -1, dtype=np.float64)
+    
+    if true_tax_off is not None:
+        true_tax_lineage = get_root_leaf_offsets(true_tax_off, tax_tab['ParentOff'])[::-1]
     
     for i in numba.prange(query_offsets.size):
         q = query_offsets[i]
@@ -1027,9 +1030,11 @@ def _place_queries(
             # stop if subfamily implies the true taxon
             if true_tax_off is not None:
                 hog_off = np.int(root_hog_off + j)
-                hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
-                if np.argwhere(hog_taxa == true_tax_off).size == 1:
+                if is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
                     break
+                #hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
+                #if np.argwhere(hog_taxa == true_tax_off).size == 1:
+                #    break
                         
         # skip if no subfamily-score > subfamily-score threshold or if best subfamily-score < family-score threshold
         if (best_j is None) or (best_s < fst):
@@ -1239,8 +1244,10 @@ class MergeSearch(object):
         self._queryRankHog_bestpath = queryRankHog_bestpath
         self._queryRankHog_scores = queryRankHog_scores
 
-        # store ids of sbuff
+        # store ids and lengths of sbuff
         self._query_ids = sbuff.ids.flatten()
+        self._query_lengths = sbuff.idx[1:] - sbuff.idx[:-1]
+
 
     def store_results(self, filename):
         compr = tables.Filters(complevel=6, complib="blosc", fletcher32=True)
@@ -1278,7 +1285,7 @@ class MergeSearch(object):
         '''
         return _place_queries(
             query_offsets, self._queryFam_ranked[:, 0], self._queryFam_scores[:, 0], self._queryFam_overlaps[:, 0], self.fam_tab, 
-            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, self.hog_tab, self.db._hog_taxa_buff[:])
+            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, self.hog_tab, self.db._chog_arr[:])
 
     def output_results(self, overlap, fst, sst, ref_taxon):
 
@@ -1293,13 +1300,15 @@ class MergeSearch(object):
         q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
             query_offsets, overlap, fst, sst, ref_taxoff)
         
-        c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score']
+        c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'qseqlen', 'subfamily-medianseqlen']
         r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],
             map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off),
             [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 
             map(lambda x: x if x != -1 else 'na', q2max_hog_score),
-            map(lambda x: x if x != -1 else 'na', q2hog_score)]
-
+            map(lambda x: x if x != -1 else 'na', q2hog_score),
+            self.query_lengths,
+            map(lambda x: self.hog_tab['MedianSeqLen'][x] if x != -1 else 'na', q2hog_off)]
+        
         # compute taxonomic congruences 
         if ref_taxon:
             q2closest_taxon = get_closest_taxa_from_ref(

@@ -35,7 +35,8 @@ from .index import get_transform, SequenceBuffer, QuerySequenceBuffer
 from .hierarchy import (
     get_root_leaf_offsets, 
     get_hog_taxon_levels, 
-    get_hog_member_prots
+    get_hog_member_prots,
+    is_taxon_implied
 )
 
 # (numba does not like nested methods)
@@ -982,7 +983,7 @@ def compute_overlap(fam_highloc, fam_lowloc, k, query_len):
 @numba.njit
 def _place_queries(
     query_offsets, q2fam_off, q2fam_score, q2fam_overlap, fam_tab, q2hog_bestpath, q2hog_scores, overlap, fst, sst,
-    true_tax_off, hog_tab, chog_buff):
+    true_tax_off, tax_tab, hog_tab, chog_buff):
     '''
     For each query:
         Skip when low sequence overlap (overlap)
@@ -1124,6 +1125,10 @@ class MergeSearch(object):
     @cached_property
     def hog_tab(self):
         return self.db._hog_tab[:]
+
+    @cached_property
+    def tax_tab(self):
+        return self.db._tax_tab[:]
 
     @cached_property
     def level_arr(self):
@@ -1285,7 +1290,7 @@ class MergeSearch(object):
         '''
         return _place_queries(
             query_offsets, self._queryFam_ranked[:, 0], self._queryFam_scores[:, 0], self._queryFam_overlaps[:, 0], self.fam_tab, 
-            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, self.hog_tab, self.db._chog_arr[:])
+            self._queryRankHog_bestpath[0], self._queryRankHog_scores[0], overlap, fst, sst, ref_taxoff, self.tax_tab, self.hog_tab, self.db._chog_arr[:])
 
     def output_results(self, overlap, fst, sst, ref_taxon):
 
@@ -1308,7 +1313,7 @@ class MergeSearch(object):
             map(lambda x: x if x != -1 else 'na', q2hog_score),
             self.query_lengths,
             map(lambda x: self.hog_tab['MedianSeqLen'][x] if x != -1 else 'na', q2hog_off)]
-        
+
         # compute taxonomic congruences 
         if ref_taxon:
             q2closest_taxon = get_closest_taxa_from_ref(

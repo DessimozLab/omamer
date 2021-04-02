@@ -1311,7 +1311,7 @@ class MergeSearch(object):
             [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 
             map(lambda x: x if x != -1 else 'na', q2max_hog_score),
             map(lambda x: x if x != -1 else 'na', q2hog_score),
-            self.query_lengths,
+            self._query_lengths,
             map(lambda x: self.hog_tab['MedianSeqLen'][x] if x != -1 else 'na', q2hog_off)]
 
         # compute taxonomic congruences 

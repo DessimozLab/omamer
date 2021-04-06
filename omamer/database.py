@@ -917,24 +917,6 @@ class DatabaseFromOMA(Database):
         # close and open in read mode
         h5file.close()
 
-    def add_taxid_col(self, h5file):
-        '''
-        Add the NCBI taxon id from OMA hdf5.
-        '''
-        oma_tax_tab = h5file.root.Taxonomy[:]
-        oma_sp_tab = h5file.root.Genome[:]
-        taxid_column = []
-        for tax_name in self._tax_tab.col('ID'):
-            if tax_name == b'LUCA':
-                taxid_column.append(-1)
-            else:
-                try:
-                    taxid_column.append(oma_tax_tab['NCBITaxonId'][np.argwhere(oma_tax_tab['Name'] == tax_name)[0][0]])
-                # when the taxon name is a uniprot species code
-                except IndexError:
-                    taxid_column.append(oma_sp_tab['NCBITaxonId'][np.argwhere(oma_sp_tab['UniProtSpeciesCode'] == tax_name)[0][0]])
-        self._tax_tab.modify_column(colname='TaxID', column=taxid_column)
-
     ### functions to parse OMA database ###
     def select_and_strip_OMA_HOGs(self, h5file):
         
@@ -1329,11 +1311,21 @@ class DatabaseFromOMA(Database):
 
     def add_taxid_col(self, h5file):
         '''
-        Parse NCBI taxonomic ids from OMA database
+        Add the NCBI taxon id from OMA hdf5.
         '''
         oma_tax_tab = h5file.root.Taxonomy[:]
-        tax2taxid = dict(zip(oma_tax_tab['Name'], oma_tax_tab['NCBITaxonId']))
-        self._tax_tab.modify_column(colname="TaxID", column=np.array(list(map(lambda x: tax2taxid[x], self._tax_tab.col('ID'))), dtype=np.int64))
+        oma_sp_tab = h5file.root.Genome[:]
+        taxid_column = []
+        for tax_name in self._tax_tab.col('ID'):
+            if tax_name == b'LUCA':
+                taxid_column.append(-1)
+            else:
+                try:
+                    taxid_column.append(oma_tax_tab['NCBITaxonId'][np.argwhere(oma_tax_tab['Name'] == tax_name)[0][0]])
+                # when the taxon name is a uniprot species code
+                except IndexError:
+                    taxid_column.append(oma_sp_tab['NCBITaxonId'][np.argwhere(oma_sp_tab['UniProtSpeciesCode'] == tax_name)[0][0]])
+        self._tax_tab.modify_column(colname='TaxID', column=taxid_column)
 
 
 class DatabaseFromPANTHER(Database):

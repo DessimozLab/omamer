@@ -922,9 +922,17 @@ class DatabaseFromOMA(Database):
         Add the NCBI taxon id from OMA hdf5.
         '''
         oma_tax_tab = h5file.root.Taxonomy[:]
+        oma_sp_tab = h5file.root.Genome[:]
         taxid_column = []
-        for sp_name in self._tax_tab.col('ID'):
-            taxid_column.append(oma_tax_tab['NCBITaxonId'][np.argwhere(oma_tax_tab['Name'] == sp_name)[0][0]])
+        for tax_name in self._tax_tab.col('ID'):
+            if tax_name == b'LUCA':
+                taxid_column.append(-1)
+            else:
+                try:
+                    taxid_column.append(oma_tax_tab['NCBITaxonId'][np.argwhere(oma_tax_tab['Name'] == tax_name)[0][0]])
+                # when the taxon name is a uniprot species code
+                except IndexError:
+                    taxid_column.append(oma_sp_tab['NCBITaxonId'][np.argwhere(oma_sp_tab['UniProtSpeciesCode'] == tax_name)[0][0]])
         self._tax_tab.modify_column(colname='TaxID', column=taxid_column)
 
     ### functions to parse OMA database ###

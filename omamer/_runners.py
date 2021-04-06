@@ -40,20 +40,22 @@ def mkdb_oma(args):
     LOG.info('Adding sequences')
     db.build_database(oma_db_fn, nwk_fn)
 
-    # tmp argument of species to include (inverse of hidden taxa)
-    import numpy as np
-    hidden_taxa = []
-    if args.species:
-        with open(args.species, 'r') as inf:
-            sp_offsets = np.array([int(l.rstrip()) for l in inf.readlines()])
-            sp_offsets.sort()
-        f = np.full(db._sp_tab.nrows, False)
-        f[sp_offsets] = True
-        hidden_taxa = list(map(lambda x: x.decode('ascii'), db._sp_tab[:]['ID'][~f]))
-    elif args.hidden_taxa:
+    ## tmp argument of species to include (inverse of hidden taxa)
+    #import numpy as np
+    #hidden_taxa = []
+    #if args.species:
+    #    with open(args.species, 'r') as inf:
+    #        sp_offsets = np.array([int(l.rstrip()) for l in inf.readlines()])
+    #        sp_offsets.sort()
+    #    f = np.full(db._sp_tab.nrows, False)
+    #    f[sp_offsets] = True
+    #    hidden_taxa = list(map(lambda x: x.decode('ascii'), db._sp_tab[:]['ID'][~f]))
+    #elif args.hidden_taxa:
+    #    hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
+    
+    if args.hidden_taxa:
         hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
 
-    # build index
     LOG.info('Building index')
     ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
     ki.build_kmer_table()

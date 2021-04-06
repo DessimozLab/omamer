@@ -53,8 +53,9 @@ def mkdb_oma(args):
     #elif args.hidden_taxa:
     #    hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
     
+    hidden_taxa = []
     if args.hidden_taxa:
-        hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
+        hidden_taxa = [' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
 
     LOG.info('Building index')
     ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)

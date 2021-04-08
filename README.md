@@ -119,7 +119,7 @@ OMAmer is distributed in the hope that it will be useful, but WITHOUT ANY WARRAN
 You should have received a copy of the GNU Lesser General Public License along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 
 # Citation
-Rossier Victor, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, and Christophe Dessimoz. 2020. “OMAmer: Tree-Driven and Alignment-Free Protein Assignment to Subfamilies Outperforms Closest Sequence Approaches.” <bioRxiv. https://doi.org/10.1101/2020.04.30.068296>.
+Victor Rossier, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, Christophe Dessimoz, OMAmer: tree-driven and alignment-free protein assignment to subfamilies outperforms closest sequence approaches, Bioinformatics, 2021;, btab219, https://doi.org/10.1093/bioinformatics/btab219
 
 Code used for that paper is available here: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4593702.svg)](https://doi.org/10.5281/zenodo.4593702)
 

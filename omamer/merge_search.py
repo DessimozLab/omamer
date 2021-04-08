@@ -1305,16 +1305,6 @@ class MergeSearch(object):
         q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
             query_offsets, overlap, fst, sst, ref_taxoff)
         
-        #c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'qseqlen', 'subfamily-medianseqlen']
-        #r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],
-        #    map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off),
-        #    [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 
-        #    map(lambda x: x if x != -1 else 'na', q2max_hog_score),
-        #    map(lambda x: x if x != -1 else 'na', q2hog_score),
-        #    self._query_lengths,
-        #    map(lambda x: self.hog_tab['MedianSeqLen'][x] if x != -1 else 'na', q2hog_off)]
-        
-        # temporary to check PANTHER placement
         c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'qseqlen', 'subfamily-medianseqlen']
         r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],
             map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off),
@@ -1322,7 +1312,17 @@ class MergeSearch(object):
             map(lambda x: x if x != -1 else 'na', q2max_hog_score),
             map(lambda x: x if x != -1 else 'na', q2hog_score),
             self._query_lengths,
-            self._query_lengths]
+            map(lambda x: self.hog_tab['MedianSeqLen'][x] if x != -1 else 'na', q2hog_off)]
+        
+        ## temporary to check PANTHER placement
+        #c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'qseqlen', 'subfamily-medianseqlen']
+        #r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],
+        #    map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off),
+        #    [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())], 
+        #    map(lambda x: x if x != -1 else 'na', q2max_hog_score),
+        #    map(lambda x: x if x != -1 else 'na', q2hog_score),
+        #    self._query_lengths,
+        #    self._query_lengths]
 
         # compute taxonomic congruences 
         if ref_taxon:

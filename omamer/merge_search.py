@@ -1047,48 +1047,92 @@ def _place_queries(
 
     return q2hog_off, q2hog_score, q2max_hog_score
 
+#@numba.njit
+#def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, hog_taxa_buff):
+#    '''
+#    Based on the predicted HOG root and descendant taxa, we find the closest taxon from reference taxon.
+#     - if root-taxon is one of its descendants, we report the HOG root-taxon (older child) (should be root-HOGs when using such stopping criterion)
+#     - if root-taxon is one of its ancestors, we report the first ancestor that is defined within the HOG (based on real hog2taxa)
+#       (basically the speciation before the duplication or loss delimiting the HOG from the reference taxon)
+#     - otherwise, we simply report the HOG root-taxon (still the closer from the reference taxon since on wrong lineage)
+#     - na if not placed    
+#    '''
+#    q2closest_taxon = np.zeros(q2hog_off.size, dtype=np.uint64)
+#    ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])[::-1][1:]
+#
+#    for i, hog_off in enumerate(q2hog_off):
+#
+#        # not placed
+#        if hog_off == -1:
+#            q2closest_taxon[i] == -1
+#            continue
+#
+#        # get the HOG taxa and the HOG root-taxon
+#        hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
+#        root_tax_off = hog_tab['TaxOff'][hog_off]    
+#
+#        # reference taxon in HOG taxa (at level)
+#        if np.argwhere(hog_taxa == ref_taxoff).size == 1:
+#            q2closest_taxon[i] = ref_taxoff
+#
+#        # root-taxon in taxon lineage (more general)
+#        elif np.argwhere(ref_lineage == root_tax_off).size == 1:
+#
+#            # get the closer ancestral taxon in HOG
+#            j = 0
+#            while np.argwhere(hog_taxa == ref_lineage[j]).size == 0:
+#                j += 1
+#            q2closest_taxon[i] = ref_lineage[j]
+#
+#        # root-taxon either in child taxa (more specific) or in a different clade
+#        else:
+#            q2closest_taxon[i] = hog_tab['TaxOff'][hog_off]
+#    
+#    return q2closest_taxon
 @numba.njit
-def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, hog_taxa_buff):
+def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff):
     '''
-    Based on the predicted HOG root and descendant taxa, we find the closest taxon from reference taxon.
-     - if root-taxon is one of its descendants, we report the HOG root-taxon (older child) (should be root-HOGs when using such stopping criterion)
-     - if root-taxon is one of its ancestors, we report the first ancestor that is defined within the HOG (based on real hog2taxa)
-       (basically the speciation before the duplication or loss delimiting the HOG from the reference taxon)
-     - otherwise, we simply report the HOG root-taxon (still the closer from the reference taxon since on wrong lineage)
+    Based on the predicted HOG, we find the closest implied taxon from the reference taxon.
+     - if the reference taxon is implied in the HOG (descendant of root-taxon and ancestor of child-HOG taxa), we report the reference taxon (at level).
+     - if the root-taxon is one of its ancestors, we report the first ancestor that is defined within the HOG child-HOG taxa (more general).
+       (basically the speciation before the duplication delimiting the HOG from the reference taxon)
+     - otherwise, we simply report the HOG root-taxon ('more specific' or 'different lineage').
      - na if not placed    
     '''
     q2closest_taxon = np.zeros(q2hog_off.size, dtype=np.uint64)
-    ref_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])[::-1][1:]
+    true_tax_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])[::-1]
 
     for i, hog_off in enumerate(q2hog_off):
 
         # not placed
         if hog_off == -1:
             q2closest_taxon[i] == -1
-            continue
-
-        # get the HOG taxa and the HOG root-taxon
-        hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
-        root_tax_off = hog_tab['TaxOff'][hog_off]    
-
-        # reference taxon in HOG taxa (at level)
-        if np.argwhere(hog_taxa == ref_taxoff).size == 1:
+            continue 
+        
+        # reference taxon implied in HOG (at level)
+        if is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
             q2closest_taxon[i] = ref_taxoff
 
-        # root-taxon in taxon lineage (more general)
-        elif np.argwhere(ref_lineage == root_tax_off).size == 1:
-
+        # root-taxon in ancestors (more general)
+        elif np.argwhere(true_tax_lineage[1:] == hog_tab['TaxOff'][hog_off]).size == 1:
+            
+            # get the closest taxon from the reference taxon among the HOG children
+            child_hog_taxa = np.unique(hog_tab['TaxOff'][get_children(hog_off, hog_tab, chog_buff)])
+            
             # get the closer ancestral taxon in HOG
             j = 0
-            while np.argwhere(hog_taxa == ref_lineage[j]).size == 0:
+            while np.argwhere(child_hog_taxa == true_tax_lineage[j]).size == 0:
                 j += 1
-            q2closest_taxon[i] = ref_lineage[j]
+            
+            # add 1 because we actually take the parent taxa of child_hog_taxa
+            q2closest_taxon[i] = true_tax_lineage[j + 1]
 
         # root-taxon either in child taxa (more specific) or in a different clade
         else:
             q2closest_taxon[i] = hog_tab['TaxOff'][hog_off]
     
     return q2closest_taxon
+
 
 class MergeSearch(object):
     def __init__(self, ki, nthreads=None, low_mem=False, include_extant_genes=False):
@@ -1327,7 +1371,7 @@ class MergeSearch(object):
         # compute taxonomic congruences 
         if ref_taxon:
             q2closest_taxon = get_closest_taxa_from_ref(
-                q2hog_off, ref_taxoff, tax_tab, self.hog_tab, self.db._hog_taxa_buff[:])
+                q2hog_off, ref_taxoff, tax_tab, self.hog_tab, self.db._chog_arr[:])
             c.insert(2, 'closetax')
             r.insert(2, map(lambda x: tax_tab['ID'][x].decode('ascii') if x != -1 else 'na', q2closest_taxon)) 
 

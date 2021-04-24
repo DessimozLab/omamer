@@ -36,7 +36,8 @@ from .hierarchy import (
     get_root_leaf_offsets, 
     get_hog_taxon_levels, 
     get_hog_member_prots,
-    is_taxon_implied
+    is_taxon_implied,
+    get_children
 )
 
 # (numba does not like nested methods)

@@ -20,8 +20,8 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
 import sys
-omamer_path = sys.argv[1]
-sys.path.insert(0, omamer_path)
+#omamer_path = sys.argv[1]
+#sys.path.insert(0, omamer_path)
 
 from omamer.database import DatabaseFromOMA
 from omamer.index import (
@@ -464,7 +464,7 @@ sstat -j ${{SLURM_JOBID}}.batch --format=MaxRSS
 sacct -j ${{SLURM_JOBID}}.batch --format=elapsed""".format(mem, hour_nr, name, oe_path, oe_path))
 
 if __name__ == "__main__":
-
+    omamer_path = sys.argv[1]
     step = sys.argv[2]
     if step == 'parse_hogs':
         db_path = sys.argv[3]

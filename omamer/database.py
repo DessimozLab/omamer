@@ -47,7 +47,6 @@ from .index import Index
 # for DatabaseFromPANTHER
 import re
 import glob
-import pyham
 
 from .alphabets import Alphabet
 
@@ -1338,11 +1337,17 @@ class DatabaseFromPANTHER(Database):
      2. Parse the resulting orthoXML and alignment files
     '''
     def __init__(self, filename, min_fam_size=6, mode='r'):
+        try:
+            import pyham
+        except ImportError:
+            raise Exception("Conversion from PANTHER requires pyham: 'pip install pyham'")
+
         root_taxon='LUCA'
         super().__init__(filename, root_taxon, mode)
 
         self.min_fam_size = min_fam_size
         self.alphabet = Alphabet(n=21)
+
         
     def build_database(self, panther_data_path, out_path, nwk_fn, uniprot_speclist_file=None):
         '''

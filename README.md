@@ -97,6 +97,10 @@ Extant gene IDs of predicted HOG, which you can look for in the OMA browser sear
 
 # Change log
 
+#### Version 0.2.2
+ - Automated deployment to PyPI
+ - Removed PyHAM dependency
+
 #### Version 0.2.0
  - Added ``--min_fam_completeness``, ``--logic``, ``--score`` and ``--reference_taxon`` options
  - New output format

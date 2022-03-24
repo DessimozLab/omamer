@@ -21,9 +21,22 @@
 '''
 import numba
 import numpy as np
-import itertools
-import tables
 from tqdm import tqdm
+
+## Generic functions for tables and arrays
+def get_seq(prot_off, prot_tab, seq_buff):
+    seq_off = prot_tab['SeqOff'][prot_off]
+    return seq_buff[seq_off: seq_off + prot_tab['SeqLen'][prot_off]].tobytes().decode("ascii")[:-1]
+
+def row_id2off(row_id, tab):
+    if isinstance(row_id, str):
+        row_id = row_id.encode('ascii')
+    x = np.argwhere(tab['ID'] == row_id)
+    if x.size > 0:
+        return x[0][0]
+
+def row_off2id(row_off, tab):
+    return tab['ID'][row_off].decode('ascii')
 
 ## Generic functions for hierarchical tables (hog_tab and tax_tab)
 @numba.njit
@@ -186,6 +199,38 @@ def is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
 
     return implied
 
+def get_hogs_at_level(ref_taxoff, tax_tab, fam_tab, ref_desc_taxoffs, hog_tab, chog_buff, include_younger_fams=False):
+    '''
+    Given a selected reference taxon, finds all HOGs implying that taxon.
+    Option to include root-HOGs defined in descendants of the reference taxon too.
+    TO DO: more filtering options
+    '''
+    cand_hogs = []
+
+    # trace the taxon ancestors
+    true_tax_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])[::-1]
+
+    # traverse reference families and skip the ones that lies outside the taxonomic scope of the reference taxon
+    for fam_ent in tqdm(fam_tab):
+        fam_taxoff = fam_ent['TaxOff']
+
+        # include families defined in descendants of the reference taxon too.
+        if fam_taxoff in ref_desc_taxoffs:
+            if include_younger_fams:
+                cand_hogs.append(fam_ent['HOGoff'])
+            continue
+
+        if fam_taxoff not in true_tax_lineage:
+            continue
+
+        # traverse the family and find the HOGs implying the reference taxon
+        rh_off = fam_ent['HOGoff']
+        for hog_off in np.arange(rh_off, rh_off + fam_ent['HOGnum'], dtype=int):
+            if is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
+                cand_hogs.append(hog_off)
+
+    return np.array(cand_hogs, dtype=np.int64)
+
 # functions to precompute HOG taxonomic levels (implied or not) 
 def get_hog_taxa(hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_buff):
     '''
@@ -253,7 +298,6 @@ def get_hog2implied_taxa(hog_tab, tax_tab, ctax_buff, chog_buff):
     return np.array(hog_taxa_idx, dtype=np.int16), np.array(hog_taxa_buff, dtype=np.int16)
 
 ## Taxonomy specific functions
-
 def get_closest_reference_taxon(tax_off, tax2parent, hidden_taxa):
     """
     Get taxon from which a tax_off has diverged (if not hidden, returns tax_off itself)
@@ -269,7 +313,6 @@ def get_seq(prot_off, prot_tab, seq_buff):
     return seq_buff[seq_off: seq_off + prot_tab['SeqLen'][prot_off]].tobytes().decode("ascii")[:-1]
 
 # TO UPDATE
-        
 def get_sister_taxa(tax_off, tax2parent, hidden_taxa, tax_tab, ctax_buff):
 
     lca_tax = get_lca_taxon(tax_off, tax2parent, hidden_taxa)
@@ -278,147 +321,3 @@ def get_sister_taxa(tax_off, tax2parent, hidden_taxa, tax_tab, ctax_buff):
         return np.setdiff1d(children, tax_off)
     else:
         return np.array([], dtype=np.int64)
-
-## OLD inparalog coverage code (not so interesting)
-# def get_sispecies_candidates(tax_off, tax_tab, ctax_buff, hidden_taxa):
-
-#     # get each possible LCA speciation node
-#     tax_offs = _get_root_leaf_offsets(tax_off, tax_tab["ParentOff"])[::-1]
-
-#     sispecies_cands = []
-#     for i, to in enumerate(tax_offs[:-1]):
-
-#         parent = tax_offs[i + 1]
-
-#         # skip if parent taxa is hidden
-#         if parent in hidden_taxa:
-#             continue
-#         else:
-#             sistaxa = np.setdiff1d(_children_tax(parent, tax_tab, ctax_buff), to)
-#             sispecies = []
-#             for t in sistaxa:
-#                 sispecies.append(list(get_descendant_species(t, tax_tab, ctax_buff)))
-#             sispecies_cands.append(list(itertools.chain(*sispecies)))
-
-#     return sispecies_cands
-
-
-# def get_sister_hogs(hog_off, hog_tab, chog_buff):
-#     parent = hog_tab["ParentOff"][hog_off]
-#     return np.setdiff1d(_children_hog(parent, hog_tab, chog_buff), hog_off)
-
-
-# def find_sisspecies(ortholog_species, inparalog_species, sispecies_cands):
-#     sispecies = []
-#     for ss_cand in sispecies_cands:
-#         if (
-#             len(
-#                 set(list(ortholog_species) + list(inparalog_species)).intersection(
-#                     ss_cand
-#                 )
-#             )
-#             > 0
-#         ):
-#             sispecies = ss_cand
-#             break
-#     return sispecies
-
-
-# def filter_proteins(proteins, protein_species, sisspecies):
-#     mask = np.array([x in sisspecies for x in protein_species])
-#     if mask.size > 0:
-#         return proteins[mask]
-#     else:
-#         return proteins
-
-
-# def calculate_inparalog_coverage(orthologs_f, inparalogs_f):
-#     n = inparalogs_f.size
-#     d = n + orthologs_f.size
-#     return n / d if n != 0 else 0
-
-
-# def compute_inparalog_coverage_new(
-#     qoff,
-#     query_ids,
-#     prot_tab,
-#     cprot_buff,
-#     hog_tab,
-#     chog_buff,
-#     hidden_taxa,
-#     sispecies_cands,
-#     verbose=0,
-# ):
-
-#     poff = query_ids[qoff]
-#     hog_off = prot_tab[poff]["HOGoff"]
-
-#     leaf_root_hogs = _get_root_leaf_offsets(hog_off, hog_tab["ParentOff"])[::-1]
-
-#     for hog_off in leaf_root_hogs:
-#         hog_tax = hog_tab["TaxOff"][hog_off]
-#         hog_lcatax = hog_tab["LCAtaxOff"][hog_off]
-
-#         # duplication inside hidden taxa; move to parent
-#         if hog_tax in hidden_taxa:
-#             continue
-
-#         # duplication outside hidden taxa but not knowloedgeable because of all species members are hidden
-#         elif hog_lcatax in hidden_taxa:
-
-#             # sister HOGs at same taxon and with LCA taxon not hidden
-#             sis_hogs = get_sister_hogs(hog_off, hog_tab, chog_buff)
-#             sis_hogs = [
-#                 h
-#                 for h in sis_hogs
-#                 if hog_tab["TaxOff"][h] == hog_tax
-#                 and hog_tab["LCAtaxOff"][h] not in hidden_taxa
-#             ]
-
-#             # LCA node is a duplication (or several); consider all orthologs and inparalogs to calculate IC
-#             if sis_hogs:
-#                 if verbose == 1:
-#                     print(hog_tab["ID"][sis_hogs])
-
-#                 # collect proteins from sister HOGs sub-HOGs
-#                 orthologs = get_descendant_prots(sis_hogs, hog_tab, cprot_buff)
-#                 sis_inhogs = list(
-#                     itertools.chain(
-#                         *[
-#                             list(get_descendant_hogs(sh, hog_tab, chog_buff))
-#                             for sh in sis_hogs
-#                         ]
-#                     )
-#                 )
-#                 inparalogs = get_descendant_prots(sis_inhogs, hog_tab, cprot_buff)
-
-#                 return calculate_inparalog_coverage(orthologs, inparalogs)
-
-#             # sister HOGs are not knowloedgeable
-#             else:
-#                 continue
-
-#         # HOG is knowloedgeable
-#         else:
-#             if verbose == 1:
-#                 print(hog_tab["ID"][hog_off])
-
-#             # collect orthologs and paralogs
-#             orthologs = _children_prot(hog_off, hog_tab, cprot_buff)
-#             inhogs = get_descendant_hogs(hog_off, hog_tab, chog_buff)
-#             inparalogs = get_descendant_prots(inhogs, hog_tab, cprot_buff)
-
-#             # get the species of these orthologs and paralogs
-#             ortholog_species = prot_tab["SpeOff"][orthologs]
-#             inparalog_species = prot_tab["SpeOff"][inparalogs]
-
-#             # find sister species
-#             sisspecies = find_sisspecies(
-#                 ortholog_species, inparalog_species, sispecies_cands
-#             )
-
-#             # then filter out protein not descending from sister taxa
-#             orthologs_f = filter_proteins(orthologs, ortholog_species, sisspecies)
-#             inparalogs_f = filter_proteins(inparalogs, inparalog_species, sisspecies)
-
-#             return calculate_inparalog_coverage(orthologs_f, inparalogs_f)

@@ -170,6 +170,7 @@ def format_gene_tree(gt):
         # common features
         node.add_features(
             HOG=node.hog_name,
+            HOG_name=node.hog_name,
             description=node.taxon,
             color=''
         )

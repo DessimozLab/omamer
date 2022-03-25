@@ -1,6 +1,6 @@
 import ete3
 import collections
-
+import numpy as np
 from .hierarchy import (
     traverse, 
     is_ancestor,
@@ -198,3 +198,18 @@ def propagate_losses(gt):
             
     return gt
 
+def _diagonalize_matrix(gt, st):
+    '''
+    Diagonalize the matrix by sorting gene tree nodes as in species tree.
+    '''
+    for node in gt.traverse():
+        if node.is_leaf():
+            continue
+
+        elif node.event == 'duplication':
+            node.children = sorted(node.children, key=lambda x: x.HOG)
+
+        else:
+            gt_order = np.array([c.taxon for c in node.children])
+            st_order = np.array([c.name for c in (st & node.taxon).children])
+            node.children = [node.children[i] for i in [np.argwhere(gt_order == t)[0][0] for t in st_order]]

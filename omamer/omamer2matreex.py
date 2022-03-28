@@ -1,4 +1,5 @@
 import ete3
+import json
 import collections
 import numpy as np
 from .hierarchy import (

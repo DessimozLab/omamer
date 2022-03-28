@@ -6,7 +6,16 @@ from .hierarchy import (
     is_ancestor,
     get_hog_child_prots
 )
-
+from omamer.index import SequenceBufferFasta
+from matreex.matreex import (
+    get_hog_gene_trees,
+    merge_gene_trees,
+    gt2json,
+    st2json,
+    export_json,
+    write_html,
+    get_html_template
+)
 '''
 Functions to generate inputs for Matreex visualisation from an OMAmer database.
 '''
@@ -25,7 +34,7 @@ def format_st(nwk_fn):
         if node.is_leaf():
             continue
 
-        node.add_features(S=node.name, Ev='0>1')
+        node.add_features(S=node.name, Ev='0>1', description='', color='')
 
     return st
 
@@ -214,3 +223,89 @@ def _diagonalize_matrix(gt, st):
             gt_order = np.array([c.taxon for c in node.children])
             st_order = np.array([c.name for c in (st & node.taxon).children])
             node.children = [node.children[i] for i in [np.argwhere(gt_order == t)[0][0] for t in st_order]]
+
+def place_fasta(fa_fn, ms):
+    sbuff = SequenceBufferFasta(fa_fn)
+    ms.merge_search(seqs=[s for s in sbuff], ids=list(sbuff.ids), fasta_file=None, score='nonparam_naive',
+                    cum_mode='max', top_m_fams=100,
+                    top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64))
+    return ms.output_results(overlap=0, fst=0, sst=0, ref_taxon=None)
+
+def run_matreex_omamer(
+        ms, nwk_fn, ref_taxon, taxon2color, fa_fn, id2gene_name, ids, max_gene_nr, name, exp_json, out_path,
+        matreex_path, st_collapse_depth):
+    """
+    Matreex pipeline for OMAmer.
+    """
+    sp_tab = ms.db._sp_tab[:]
+    tax_id2tax_off = dict(zip(map(lambda x: x.decode('ascii'), ms.tax_tab['ID']), range(ms.tax_tab.size)))
+
+    root_st = format_st(nwk_fn)
+    assert ref_taxon in {x.name for x in root_st.traverse()}, 'invalid ref. taxon'
+    for n in root_st.traverse():
+        n.add_features(color=taxon2color.get(n.taxon, ''), description='')
+
+    # gather non-duplicated HOG ids from sequences (in fasta) or HOG ids
+    hog_ids = []
+    hog_id2gene_name = {}
+    if fa_fn:
+        df = place_fasta(fa_fn, ms)
+        ids = df['hogid'].tolist()
+        seqids = df['qseqid'].tolist()
+        for i, hog_id in enumerate(ids):
+            if hog_id not in hog_ids:
+                hog_ids.append(hog_id)
+                hog_id2gene_name[hog_id] = id2gene_name.get(seqids[i])
+    else:
+        for x in ids:
+            if x.encode('ascii') in ms.hog_tab['OmaID'] and x not in hog_ids:
+                hog_ids.append(x)
+                hog_id2gene_name[x] = id2gene_name.get(x)
+            else:
+                print('{} invalid'.format(x))
+
+    # collect non-duplicated gene trees of HOGs
+    fam_id2gt = {}
+    gene_trees = []
+    gt_ids = set()
+    for hog_id in hog_ids:
+        fam_id = hog_id.split('.')[0]
+        root_hog_off = np.argwhere(ms.hog_tab['OmaID'] == fam_id.encode('ascii'))[0][0]
+        if fam_id not in fam_id2gt:
+            fam_gt = convert_hog2gt(
+                ms.db, root_hog_off, ms.hog_tab, ms.db._chog_arr[:], ms.tax_tab, root_st, tax_id2tax_off, ms.db._cprot_arr[:],
+                sp_tab, ms.db._prot_tab[:], keep_losses=True)
+            fam_gt = format_gene_tree(fam_gt)
+            propagate_losses(fam_gt)
+            _diagonalize_matrix(fam_gt, root_st)
+            fam_id2gt[fam_id] = fam_gt
+        else:
+            fam_gt = fam_id2gt[fam_id]
+        family_name = hog_id2gene_name.get(hog_id, hog_id)
+        for gt in get_hog_gene_trees(ref_taxon, root_st, fam_gt, hog_id):
+            if len(gt.get_leaves()) <= max_gene_nr and gt.HOG not in gt_ids:
+                print(hog_id)
+                # rename family nodes
+                for n in gt.traverse('postorder'):
+                    if n.HOG_name == gt.HOG_name:
+                        n.HOG_name = family_name
+                    n.color = taxon2color.get(n.taxon, '')
+                gene_trees.append(gt)
+                gt_ids.add(gt.HOG)
+
+    # merge them and add lost subtrees
+    merged_gt = merge_gene_trees(gene_trees, root_st)
+
+    # convert to json
+    gt_json = gt2json(merged_gt)
+    st_json = st2json(root_st & merged_gt.taxon)
+
+    # write html
+    if not name:
+        name = '{}'.format(fa_fn.split('/')[-1].split('.fa')[0]) if fa_fn else '{}'.format(
+            '_'.join([x.replace(':', '') for x in ids]))
+    if exp_json:
+        export_json(out_path, name, gt_json, st_json)
+    write_html(get_html_template(matreex_path, overwrite=True, st_collapse_depth=st_collapse_depth),
+               json.dumps(gt_json), json.dumps(st_json),
+               '{}/{}.html'.format(out_path, name))

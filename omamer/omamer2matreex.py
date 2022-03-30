@@ -233,7 +233,7 @@ def place_fasta(fa_fn, ms):
     return ms.output_results(overlap=0, fst=0, sst=0, ref_taxon=None)
 
 def run_matreex_omamer(
-        ms, nwk_fn, ref_taxon, taxon2color, fa_fn, id2gene_name, ids, max_gene_nr, name, exp_json, out_path,
+        ms, nwk_fn, ref_taxon, taxon2color, taxon2description, fa_fn, id2gene_name, ids, max_gene_nr, name, exp_json, out_path,
         matreex_path, st_collapse_depth):
     """
     Matreex pipeline for OMAmer.
@@ -244,7 +244,7 @@ def run_matreex_omamer(
     root_st = format_st(nwk_fn)
     assert ref_taxon in {x.name for x in root_st.traverse()}, 'invalid ref. taxon'
     for n in root_st.traverse():
-        n.add_features(color=taxon2color.get(n.taxon, ''), description='')
+        n.add_features(color=taxon2color.get(n.taxon, ''), description=taxon2description.get(n.taxon, ''))
 
     # gather non-duplicated HOG ids from sequences (in fasta) or HOG ids
     hog_ids = []

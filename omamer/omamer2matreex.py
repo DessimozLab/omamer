@@ -9,6 +9,9 @@ from .hierarchy import (
 )
 from omamer.index import SequenceBufferFasta
 from matreex.matreex import (
+    _disambiguate_st,
+    get_oma_fam_gt,
+    _add_lost_subtrees,
     get_hog_gene_trees,
     merge_gene_trees,
     gt2json,
@@ -232,19 +235,26 @@ def place_fasta(fa_fn, ms):
                     top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64))
     return ms.output_results(overlap=0, fst=0, sst=0, ref_taxon=None)
 
+
 def run_matreex_omamer(
-        ms, nwk_fn, ref_taxon, taxon2color, taxon2description, fa_fn, id2gene_name, ids, max_gene_nr, name, exp_json, out_path,
-        matreex_path, st_collapse_depth):
+        nwk_fn, ms, custom_sp2disambiguate, taxon2color, taxon2description, ref_taxon, ref_sp, fa_fn, id2gene_name,
+        ids, omadb, max_gene_nr, name, exp_json, out_path, matreex_path, st_collapse_depth):
     """
     Matreex pipeline for OMAmer.
     """
-    sp_tab = ms.db._sp_tab[:]
-    tax_id2tax_off = dict(zip(map(lambda x: x.decode('ascii'), ms.tax_tab['ID']), range(ms.tax_tab.size)))
-
-    root_st = format_st(nwk_fn)
-    assert ref_taxon in {x.name for x in root_st.traverse()}, 'invalid ref. taxon'
+    root_st = ete3.Tree(nwk_fn, format=1, quoted_node_names=True)
+    oma_species = {x.decode('ascii') for x in ms.db._sp_tab.col('ID')}
+    sp2disambiguate = _disambiguate_st(root_st, oma_species)
+    # required for bird-OMA
+    sp2disambiguate.update(custom_sp2disambiguate)
     for n in root_st.traverse():
-        n.add_features(color=taxon2color.get(n.taxon, ''), description=taxon2description.get(n.taxon, ''))
+        n.add_features(color=taxon2color.get(n.name, ''), description=taxon2description.get(n.name, ''))
+
+    if ref_taxon:
+        assert ref_taxon in {x.name for x in root_st.traverse()}, 'invalid ref. taxon'
+    if ref_sp:
+        assert ref_taxon in {x.name for x in
+                             (root_st & ref_sp).get_ancestors()}, 'Ref. species must descend from the reference taxon'
 
     # gather non-duplicated HOG ids from sequences (in fasta) or HOG ids
     hog_ids = []
@@ -271,18 +281,21 @@ def run_matreex_omamer(
     gt_ids = set()
     for hog_id in hog_ids:
         fam_id = hog_id.split('.')[0]
-        root_hog_off = np.argwhere(ms.hog_tab['OmaID'] == fam_id.encode('ascii'))[0][0]
         if fam_id not in fam_id2gt:
-            fam_gt = convert_hog2gt(
-                ms.db, root_hog_off, ms.hog_tab, ms.db._chog_arr[:], ms.tax_tab, root_st, tax_id2tax_off, ms.db._cprot_arr[:],
-                sp_tab, ms.db._prot_tab[:], keep_losses=True)
-            fam_gt = format_gene_tree(fam_gt)
-            propagate_losses(fam_gt)
-            _diagonalize_matrix(fam_gt, root_st)
+            # ! a bit different from API
+            oma_xml = omadb.get_orthoxml(int(fam_id.split(':')[1]), augmented=True).decode('ascii').replace(
+                'orthologGroup og', 'orthologGroup id')
+            fam_gt = get_oma_fam_gt(oma_xml, hog_id, sp2disambiguate, root_st)
             fam_id2gt[fam_id] = fam_gt
         else:
             fam_gt = fam_id2gt[fam_id]
-        family_name = hog_id2gene_name.get(hog_id, hog_id)
+
+        # use input gene name as family name if available but not fasta identifiers (trying to get the most informative name)
+        if fa_fn and not id2gene_name:
+            family_name = None
+        else:
+            family_name = hog_id2gene_name.get(hog_id)
+
         for gt in get_hog_gene_trees(ref_taxon, root_st, fam_gt, hog_id):
             if len(gt.get_leaves()) <= max_gene_nr and gt.HOG not in gt_ids:
                 print(hog_id)
@@ -291,6 +304,7 @@ def run_matreex_omamer(
                     if n.HOG_name == gt.HOG_name:
                         n.HOG_name = family_name
                     n.color = taxon2color.get(n.taxon, '')
+                _add_lost_subtrees(gt, root_st)
                 gene_trees.append(gt)
                 gt_ids.add(gt.HOG)
 

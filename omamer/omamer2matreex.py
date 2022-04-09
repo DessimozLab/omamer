@@ -285,7 +285,7 @@ def run_matreex_omamer(
             # ! a bit different from API
             oma_xml = omadb.get_orthoxml(int(fam_id.split(':')[1]), augmented=True).decode('ascii').replace(
                 'orthologGroup og', 'orthologGroup id')
-            fam_gt = get_oma_fam_gt(oma_xml, hog_id, sp2disambiguate, root_st)
+            fam_gt = get_oma_fam_gt(oma_xml, sp2disambiguate, root_st)
             fam_id2gt[fam_id] = fam_gt
         else:
             fam_gt = fam_id2gt[fam_id]

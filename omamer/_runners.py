@@ -52,7 +52,7 @@ def mkdb_oma(args):
     #    hidden_taxa = list(map(lambda x: x.decode('ascii'), db._sp_tab[:]['ID'][~f]))
     #elif args.hidden_taxa:
     #    hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
-    
+
     hidden_taxa = []
     if args.hidden_taxa:
         hidden_taxa = [' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
@@ -68,11 +68,20 @@ def search(args):
     from Bio import SeqIO
     from tqdm import tqdm
     import numpy as np
+    import os
     import sys
 
     from .database import Database
     from .index import Index
     from .merge_search import MergeSearch
+
+    low_mem = False  # need to reintroduce the low memory
+    if not low_mem:
+        # Set number of threads for numba.
+        # TODO: check whether we also need to check multiprocessing param for numpy.
+        import numba
+        nthreads = args.nthreads if args.nthreads > 0 else os.cpu_count()
+        numba.set_num_threads(nthreads)
 
     # reload
     db = Database(args.db)
@@ -85,13 +94,13 @@ def search(args):
     elif args.score == 'sensitive':
         score = 'nonparam_naive'
 
-    # only print header for file output 
+    # only print header for file output
     print_header = (args.out.name != sys.stdout.name)
 
     # initialise query
     ids = []
     seqs = []
-    
+
     pbar = tqdm(desc='Searching')
     for rec in filter(lambda x: len(x.seq) >= db.ki.k,
                       SeqIO.parse(args.query, 'fasta')):
@@ -100,7 +109,7 @@ def search(args):
         if len(ids) == args.chunksize:
             ms.merge_search(
                 seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
-            ) 
+            )
             pbar.update(len(ids))
             df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
             if df.size >0:
@@ -113,7 +122,7 @@ def search(args):
     if len(ids) > 0:
         ms.merge_search(
             seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
-        ) 
+        )
         df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
         pbar.update(len(ids))
         if df.size >0:

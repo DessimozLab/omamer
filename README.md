@@ -11,6 +11,7 @@ Alternatively, clone this repository and install manually.
 
 Download pre-built databases from the link below (from January 2020 OMA release).
 
+
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4593702.svg)](https://doi.org/10.5281/zenodo.4593702)
  - LUCA.h5
  - Metazoa.h5
@@ -18,6 +19,12 @@ Download pre-built databases from the link below (from January 2020 OMA release)
  - Hominidae.h5
 
 Their names indicate the root-taxon parameter used. Other non-required parameters were left to default. 
+
+*IMPORTANT NOTE*: These databases are built with the OMAmer library and do not run with the latest version of OMAmer. You can get the pre-build databases for the latest OMA release from the [download section on the OMA Browser website](https://omabrowser.org/oma/current).
+
+ - LUCA: https://omabrowser.org/All/LUCA.h5
+ - Metazoa: https://omabrowser.org/All/Metazoa.h5
+
 
 # omamer mkdb - Building a Database
 This is currently reliant on the OMA browser's database file and the species phylogeny of HOGs. Building using OrthoXML files available shortly. 

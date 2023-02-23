@@ -9,7 +9,7 @@ Alternatively, clone this repository and install manually.
 
 # Pre-Built Databases
 
-Database are built with the OMAmer library and do not run with the latest version of OMAmer. Pre-built databases are available for the latest OMA release from the [download section on the OMA Browser website](https://omabrowser.org/oma/current).
+Pre-built databases are available for the latest OMA release from the [download section on the OMA Browser website](https://omabrowser.org/oma/current).
 
  - LUCA: https://omabrowser.org/All/LUCA.h5
  - Metazoa: https://omabrowser.org/All/Metazoa.h5

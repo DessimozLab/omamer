@@ -14,7 +14,9 @@ Pre-built databases are available for the latest OMA release from the [download 
  - LUCA: https://omabrowser.org/All/LUCA.h5
  - Metazoa: https://omabrowser.org/All/Metazoa.h5
 
-Their names indicate the root-taxon parameter used. Other non-required parameters were left to default. 
+Their names indicate the root-taxon parameter used. Other non-required parameters were left to default.
+
+Note: databases included in the [Zenodo upload](https://zenodo.org/record/4593702) from the manuscript are not supported by the most recent version of OMAmer. We recommend using the most recent release with databases built on the most recent OMA browser release.
 
 # omamer mkdb - Building a Database
 This is currently reliant on the OMA browser's database file and the species phylogeny of HOGs. Building using OrthoXML files available shortly. 

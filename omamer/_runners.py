@@ -60,6 +60,7 @@ def mkdb_oma(args):
     LOG.info('Building index')
     ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
     ki.build_kmer_table()
+    db.add_metadata()
 
     db.close()
     LOG.info('Done')
@@ -130,3 +131,16 @@ def search(args):
 
     pbar.close()
     db.close()
+
+
+def info_db(args):
+    from .database import Database
+    with Database(args.db) as db:
+        print("=" * 80)
+        for k, v in db.get_metadata().items():
+            if isinstance(v, list):
+                if len(v) == 0:
+                    v = ['-']
+                v = ",".join(v)
+            print(f"  {k:23s}:{v!s:>40}")
+        print("=" * 80)

@@ -21,7 +21,7 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
 from argparse import ArgumentParser, HelpFormatter, _SubParsersAction, FileType
-from omamer._runners import mkdb_oma, search
+from omamer._runners import mkdb_oma, search, info_db
 from omamer import __version__, __copyright__
 from tables import PerformanceWarning
 import logging
@@ -180,6 +180,16 @@ search_parser.add_argument(
     choices=["debug", "info", "warning"],
     help="Logging level.",
 )
+info_parser = subparsers.add_parser(
+    "info",
+    help="Show metadata about an omamer database.",
+    description="Show metadata about an existing omamer database",
+)
+info_parser.set_defaults(func=info_db)
+info_parser.add_argument(
+    "--db", required=True, help="Path to an existing database (including filename)."
+)
+
 
 args = parser.parse_args()
 if hasattr(args, "func"):

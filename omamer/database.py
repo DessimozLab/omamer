@@ -712,6 +712,27 @@ class Database(object):
             
         self._hog_tab.modify_column(colname='MedianSeqLen', column=median_seq_lengths)
 
+    def add_metadata(self):
+        from . import __version__
+        from datetime import datetime
+        self.db.set_node_attr("/", "omamer_version", __version__)
+        self.db.set_node_attr("/", "root_level", self.root_taxon)
+        self.db.set_node_attr("/", "create_timestamp", datetime.now().isoformat())
+
+    def get_metadata(self):
+        attrs = self.db.root._v_attrs
+        meta = {k.replace('_', ' '): attrs[k] for k in attrs._f_list() if k not in ("oma_version", "panther_version")}
+        if 'source' in meta:
+            src_version = meta['source'].lower() + "_version"
+            meta['source'] += " / {}".format(attrs[src_version])
+        if "omamer version" not in meta:
+            meta['omamer version'] = "<= 0.2.3"
+        meta["k-mer length"] = self.ki.k
+        meta["alphabet size"] = self.ki.alphabet.n
+        meta["nr species"] = len(self._sp_tab)
+        meta["hidden taxa"] = self.ki.hidden_taxa
+        return meta
+
 
 class DatabaseFromOMA(Database):
     """
@@ -724,6 +745,7 @@ class DatabaseFromOMA(Database):
         self.min_fam_completeness = min_fam_completeness
         self.logic = logic
         self.include_younger_fams = include_younger_fams
+        self.oma_version = ""
 
     ### main function ###
     def build_database(self, oma_h5_path, stree_path):
@@ -731,6 +753,10 @@ class DatabaseFromOMA(Database):
 
         # load OMA h5 file
         h5file = tables.open_file(oma_h5_path, mode="r")
+        try:
+            self.oma_version = h5file.get_node_attr("/", "oma_version")
+        except AttributeError:
+            raise Exception("Provided file '{}' does not seem to be an OMA HDF5 database".format(oma_h5_path))
 
         # build taxonomy table except the SpeOff column
         LOG.debug("initiate taxonomy table")
@@ -782,6 +808,15 @@ class DatabaseFromOMA(Database):
 
         # close and open in read mode
         h5file.close()
+
+    def add_metadata(self):
+        super().add_metadata()
+        self.db.set_node_attr("/", "source", "OMA")
+        self.db.set_node_attr("/", "oma_version", self.oma_version)
+        self.db.set_node_attr("/", "min_fam_size", self.min_fam_size)
+        self.db.set_node_attr("/", "min_fam_completeness", self.min_fam_completeness)
+        self.db.set_node_attr("/", "filter_logic", self.logic)
+        self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
 
     ### functions to parse OMA database ###
     def select_and_strip_OMA_HOGs(self, h5file):
@@ -1797,7 +1832,7 @@ class DatabaseFromPANTHER(Database):
 
             sp_code = sp_code.decode('ascii')
 
-            # exception 
+            # exception
             if sp_code == 'SULSO':
                 tax_names.append(b'Sulfolobus solfataricus')
 
@@ -1805,3 +1840,9 @@ class DatabaseFromPANTHER(Database):
                 tax_names.append(sp_code2name_taxid[sp_code][0].encode('ascii'))
 
         self._tax_tab.modify_column(colname="ID", column=tax_names)
+
+    def add_metadata(self):
+        super().add_metadata()
+        self.db.set_node_attr("/", "source", "PANTHER")
+        self.db.set_node_attr("/", "panther_version", "PANTHER v.14.1")
+

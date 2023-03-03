@@ -736,13 +736,21 @@ class Database(object):
     def add_hogcounts(self):
         # temporary so that we do not recompute this every time.
         from .merge_search import MergeSearch
+        assert self.mode != 'r', "database must be opened in a write mode"
+        self.db.close()
+        self.db = tables.open_file(self.filename, 'r', filters=self._compr)
         ms = MergeSearch(ki=self.ki,
                          nthreads=self.nthreads)
+        hog_counts = ms.ref_hog_counts_max
+        fam_counts = ms.ref_fam_counts_max
+        self.db.close()
+        self.db = tables.open_file(self.filename, 'a', filters=self._compr)
 
         # save these in the database
         counts = self.db.create_group('/Index', 'CumulatedCounts', 'family / hog counts (max)')
-        self.db.create_carray(counts, 'FamCounts', obj=ms.ref_fam_counts_max, filters=self.db._compr)
-        self.db.create_carray(counts, 'HogCounts', obj=ms.ref_hog_counts_max, filters=self.db._compr)
+        self.db.create_carray(counts, 'FamCounts', obj=fam_counts, filters=self.db._compr)
+        self.db.create_carray(counts, 'HogCounts', obj=hog_counts, filters=self.db._compr)
+
 
 class DatabaseFromOMA(Database):
     """

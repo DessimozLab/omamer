@@ -736,7 +736,7 @@ class Database(object):
     def add_hogcounts(self):
         # temporary so that we do not recompute this every time.
         from .merge_search import MergeSearch
-        ms = MergeSearch(ki=db.ki,
+        ms = MergeSearch(ki=self.ki,
                          nthreads=self.nthreads)
 
         # save these in the database

@@ -1132,7 +1132,7 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
 
 class MergeSearch(object):
     def __init__(self, ki, nthreads=None, low_mem=False, include_extant_genes=False):
-    	assert ki.db.mode == "r", "Database must be opened in read mode."
+    	assert ki.db.db.mode == "r", "Database must be opened in read mode."
 
     	# load ki and db
     	self.db = ki.db

@@ -748,8 +748,8 @@ class Database(object):
 
         # save these in the database
         counts = self.db.create_group('/Index', 'CumulatedCounts', 'family / hog counts (max)')
-        self.db.create_carray(counts, 'FamCounts', obj=fam_counts, filters=self.db._compr)
-        self.db.create_carray(counts, 'HogCounts', obj=hog_counts, filters=self.db._compr)
+        self.db.create_carray(counts, 'FamCounts', obj=fam_counts, filters=self._compr)
+        self.db.create_carray(counts, 'HogCounts', obj=hog_counts, filters=self._compr)
 
 
 class DatabaseFromOMA(Database):

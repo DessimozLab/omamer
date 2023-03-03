@@ -34,7 +34,7 @@ from ._utils import LOG, is_progress_disabled
 
 from .hierarchy import (
     get_lca_off,
-    get_hog_child_prots, 
+    get_hog_child_prots,
     get_children,
     get_hog2taxa,
     traverse,
@@ -468,7 +468,7 @@ class Database(object):
                 if hog2gene_nr
                 else repeat(-1, hog_num)
             )
-            
+
             oma_hog_comps = (
                 list(map(lambda x: hog2completeness[x], hogs))
                 if hog2completeness
@@ -637,10 +637,10 @@ class Database(object):
         lca_tax_offsets = np.zeros(hog_tab.size, dtype=np.uint64)
 
         for hog_off in range(hog_tab.size):
-            hog_ms_taxa = np.append(np.unique(sp_tab['TaxOff'][prot_tab['SpeOff'][get_hog_child_prots(hog_off, hog_tab, cprot_buff)]]), 
+            hog_ms_taxa = np.append(np.unique(sp_tab['TaxOff'][prot_tab['SpeOff'][get_hog_child_prots(hog_off, hog_tab, cprot_buff)]]),
                                     np.unique(hog_tab['TaxOff'][get_children(hog_off, hog_tab, chog_buff)]))
             lca_tax_offsets[hog_off] = get_lca_off(hog_ms_taxa, tax_tab['ParentOff'])
-            
+
         self._hog_tab.modify_column(colname="LCAtaxOff", column=lca_tax_offsets)
 
     ### generic functions ###
@@ -695,21 +695,21 @@ class Database(object):
             parent2seq_lengths = collections.defaultdict(list)
 
             parent2seq_lengths = traverse(
-                hog_off, hog_tab, chog_buff, parent2seq_lengths, _compute_median_seq_len, None, _compute_median_seq_len, 
+                hog_off, hog_tab, chog_buff, parent2seq_lengths, _compute_median_seq_len, None, _compute_median_seq_len,
                 prot_tab=prot_tab, seq_buff=seq_buff, hog_tab2=hog_tab, cprot_buff=cprot_buff, median_seq_lengths=median_seq_lengths)
-        
+
         fam_tab = self._fam_tab[:]
         hog_tab = self._hog_tab[:]
         chog_buff = self._chog_arr[:]
         cprot_buff = self._cprot_arr[:]
         prot_tab = self._prot_tab[:]
         seq_buff = self._seq_buff[:]
-        
+
         median_seq_lengths = np.zeros(hog_tab.size, dtype=np.uint64)
         for hog_off in tqdm(fam_tab['HOGoff']):
             compute_median_seq_len(
                 hog_off, hog_tab, chog_buff, prot_tab, seq_buff, cprot_buff, median_seq_lengths)
-            
+
         self._hog_tab.modify_column(colname='MedianSeqLen', column=median_seq_lengths)
 
     def add_metadata(self):
@@ -733,6 +733,16 @@ class Database(object):
         meta["hidden taxa"] = self.ki.hidden_taxa
         return meta
 
+    def add_hogcounts(self):
+        # temporary so that we do not recompute this every time.
+        from .merge_search import MergeSearch
+        ms = MergeSearch(ki=db.ki,
+                         nthreads=self.nthreads)
+
+        # save these in the database
+        counts = self.db.create_group('/Index', 'CumulatedCounts', 'family / hog counts (max)')
+        self.db.create_carray(counts, 'FamCounts', obj=ms.ref_fam_counts_max, filters=self.db._compr)
+        self.db.create_carray(counts, 'HogCounts', obj=ms.ref_hog_counts_max, filters=self.db._compr)
 
 class DatabaseFromOMA(Database):
     """
@@ -820,7 +830,7 @@ class DatabaseFromOMA(Database):
 
     ### functions to parse OMA database ###
     def select_and_strip_OMA_HOGs(self, h5file):
-        
+
         def _process_oma_hog(
             tax2level,
             curr_oma_taxa,
@@ -879,20 +889,20 @@ class DatabaseFromOMA(Database):
             # if none of the HOG taxa within the taxonomic scope defined by the root-taxon, skip the HOG
             if min_level == 1000000:
                 pass
-            
+
             else:
                 # the HOG taxon is the older taxon within the taxonimic scope defined by the root-taxon
                 idx = tax_levels.index(min_level)
-                hog_tax = curr_oma_taxa[idx]  
+                hog_tax = curr_oma_taxa[idx]
                 hog_size = curr_oma_sizes[idx]
                 hog_comp = curr_oma_comps[idx]
-                
+
                 # if the HOG is descendant of current OMA root-HOG, new sub-HOG
                 if _is_descendant(curr_oma_hog, curr_oma_roothog):
-                    
+
                     # but store only if root-HOG passed quality thresholds
                     if curr_oma_roothog_ok:
-                        
+
                         _store(
                             fam,
                             curr_oma_hog,
@@ -909,16 +919,16 @@ class DatabaseFromOMA(Database):
 
                 # else, new root-HOG (include only root-HOG at root-taxon if include_younger_fams==False)
                 elif (not include_younger_fams and hog_tax == roottax) or include_younger_fams:
-                    
+
                     curr_oma_roothog = curr_oma_hog
-                        
+
                     # but store it only if passes quality thresholds
                     ok = (hog_size >= min_fam_size or hog_comp >= min_fam_completeness) if logic == 'OR' else (hog_size >= min_fam_size and hog_comp >= min_fam_completeness)
                     if ok:
-                        
+
                         fam += 1
                         curr_oma_roothog_ok = True
-                        
+
                         # store after updating fam
                         _store(
                             fam,
@@ -933,14 +943,14 @@ class DatabaseFromOMA(Database):
                             hog_size,
                             hog_comp
                         )
-                        
+
                     else:
                         curr_oma_roothog_ok = False
 
             return fam, curr_oma_roothog, curr_oma_roothog_ok
 
         def _process_oma_fam(
-            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness, 
+            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness,
             roottax, include_younger_fams, min_fam_size, min_fam_completeness, logic):
             """
             apply _process_oma_hog to one OMA family
@@ -1054,7 +1064,7 @@ class DatabaseFromOMA(Database):
                     hog2oma_hog,
                     hog2tax,
                     hog2gene_nr,
-                    hog2completeness,    
+                    hog2completeness,
                     self.root_taxon.encode("ascii"),
                     self.include_younger_fams,
                     self.min_fam_size,
@@ -1078,7 +1088,7 @@ class DatabaseFromOMA(Database):
             hog2oma_hog,
             hog2tax,
             hog2gene_nr,
-            hog2completeness,    
+            hog2completeness,
             self.root_taxon.encode("ascii"),
             self.include_younger_fams,
             self.min_fam_size,
@@ -1127,7 +1137,7 @@ class DatabaseFromOMA(Database):
 
             sp = r['SciName']
             sp_code = r['UniProtSpeciesCode']
-            
+
             # use species code if scientific name is lacking
             # for ~27 cases the uniprot id replaces the scientific name in OMA species tree
             if sp not in species:
@@ -1135,15 +1145,15 @@ class DatabaseFromOMA(Database):
 
             # filter if species outside root-taxon
             if sp in species:
-                sp_off = sp2sp_off[sp]  
+                sp_off = sp2sp_off[sp]
 
                 # initiate curr_spe
-                if not curr_sp: 
+                if not curr_sp:
                     curr_sp = sp
 
                 # change of species --> store current species
                 if sp != curr_sp:
-                         
+
                     sp_rows[sp2sp_off[curr_sp]] = (
                         curr_sp,
                         curr_prot_off,
@@ -1166,7 +1176,7 @@ class DatabaseFromOMA(Database):
 
                 for rr in sp_ent_tab:
                     oma_hog = rr["OmaHOG"]
-                    
+
                     # select protein if member of selected OMA HOG
                     if oma_hog not in oma_hog2hog:
                         continue
@@ -1174,13 +1184,13 @@ class DatabaseFromOMA(Database):
                     # sequence
                     oma_seq_off = rr["SeqBufferOffset"]
                     seq_len = rr["SeqBufferLength"]
-                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len]    
-                    seq_buff.extend(list(seq))      
-                    
+                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len]
+                    seq_buff.extend(list(seq))
+
                     # store protein row
                     oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
-                    prot_rows.append((oma_id.encode('ascii'), sp_off, 0, 0, seq_off, seq_len))                        
-                    
+                    prot_rows.append((oma_id.encode('ascii'), sp_off, 0, 0, seq_off, seq_len))
+
                     # track hog and family
                     hog = oma_hog2hog[oma_hog]
                     fam = int(hog.split(b".")[0].decode("ascii"))
@@ -1188,7 +1198,7 @@ class DatabaseFromOMA(Database):
 
                     # update offset of protein sequence in buffer and of protein raw in table
                     seq_off += seq_len
-                    prot_off += 1     
+                    prot_off += 1
 
         # end
         sp_rows[sp2sp_off[curr_sp]] = (
@@ -1216,7 +1226,7 @@ class DatabaseFromOMA(Database):
         '''
         oma_tax_tab = h5file.root.Taxonomy[:]
         oma_sp_tab = h5file.root.Genome[:]
-        
+
         # quick check that the values are positives
         if (oma_tax_tab['NCBITaxonId'][0] >= 0) and (oma_sp_tab['NCBITaxonId'][0] >= 0):
             taxid_column = []
@@ -1250,7 +1260,7 @@ class DatabaseFromPANTHER(Database):
         self.min_fam_size = min_fam_size
         self.alphabet = Alphabet(n=21)
 
-        
+
     def build_database(self, panther_data_path, out_path, nwk_fn, uniprot_speclist_file=None):
         '''
         A lot of hard coding because, this may fail anyway given the PANTHER version and especially the species tree obtained.
@@ -1260,34 +1270,34 @@ class DatabaseFromPANTHER(Database):
         origin='PANTHER v.14.1'
         version='0.3'
         originVersion='0.2'
-        
+
         # PyHAM fails whith this family.
         pthfam_filter = set(['PTHR22911'])
         #orthoxml_name = 'toy_panther'
         orthoxml_name = 'panther_wo_PTHR22911'
-        
+
         tree_path = '{}Tree_MSF/'.format(panther_data_path)
         #tree_files = glob.glob("{}*.tree".format(tree_path))[:10]
         tree_files = glob.glob("{}*.tree".format(tree_path))
         aln_files = glob.glob("{}*.AN.fasta".format(tree_path))
-        
+
         self.PANTHER2orthoXML(tree_files, out_path, orthoxml_name, pthfam_filter=pthfam_filter, origin=origin, version=version, originVersion=originVersion)
-        
+
         print('OrthoXML to OMAmer')
         orthoxml_file = '{}{}.orthoxml'.format(out_path, orthoxml_name)
-        
+
         # mappers
         fam_hog_pthfam_ans_file = '{}{}_fam_hog_pthfam_ans.txt'.format(out_path, orthoxml_name)
         pthfam_an2prot_file = '{}{}_pthfam_an2prot.txt'.format(out_path, orthoxml_name)
         gene_id2hog_id_file = '{}{}_gene2leafhog.txt'.format(out_path, orthoxml_name)
-        
+
         self.OrthoXML2OMAmer(nwk_fn, orthoxml_file, gene_id2hog_id_file, fam_hog_pthfam_ans_file, pthfam_an2prot_file, aln_files, uniprot_speclist_file)
-    
+
     @staticmethod
     def PANTHER2orthoXML(tree_files, output_path, orthoxml_name, pthfam_filter=set(), origin='PANTHER v.14.1', version='0.3', originVersion='0.2'):
         '''
-        Convert PANTHER family trees to one orthoXML file and a mapper between new HOG ids and PANTHER ancestral node ids 
-        '''        
+        Convert PANTHER family trees to one orthoXML file and a mapper between new HOG ids and PANTHER ancestral node ids
+        '''
         # add an ortho group container to the orthoXML document
         ortho_groups = orthoxml.groups()
         xml = orthoxml.orthoXML(origin=origin, version=version, originVersion=originVersion)
@@ -1317,7 +1327,7 @@ class DatabaseFromPANTHER(Database):
 
             with open(tf) as inf:
                 tree_str = inf.readline()
-                # mapper to speciesname (mnemonic), source database, uniprot id 
+                # mapper to speciesname (mnemonic), source database, uniprot id
                 leaf_id2info = {}
                 for l in inf:
                     x = l.rstrip().split('|')
@@ -1353,7 +1363,7 @@ class DatabaseFromPANTHER(Database):
 
                 pthfam_an_id2prot_id[':'.join([pthfam_id, leaf_id])]=uniprot_id
 
-            # another mapper 
+            # another mapper
             for pthfam_an_id, prot_id in pthfam_an_id2prot_id.items():
                 pthfam_an2prot_outf.write('{}\t{}\n'.format(pthfam_an_id, prot_id))
 
@@ -1385,7 +1395,7 @@ class DatabaseFromPANTHER(Database):
                     elif node.Ev == '1>0':
                         parent2speroots[node.up].extend(parent2speroots[node])
 
-                    # HGT --> store its speciation roots as new families and update remaining leaves 
+                    # HGT --> store its speciation roots as new families and update remaining leaves
                     elif node.Ev == '0>0':
                         for speroot in parent2speroots[node]:
 
@@ -1412,7 +1422,7 @@ class DatabaseFromPANTHER(Database):
 
                 # finish with root!
                 if remaining_leaves:
-                    # because pruning forces the root to remain, start by taking the LCA between remaining leaves 
+                    # because pruning forces the root to remain, start by taking the LCA between remaining leaves
                     lca_tree = dfam.get_common_ancestor(remaining_leaves)
                     # then prune
                     lca_tree.prune(remaining_leaves)
@@ -1457,7 +1467,7 @@ class DatabaseFromPANTHER(Database):
                     for child in node.children:
                         if child.is_leaf():
 
-                            # Add gene to the group 
+                            # Add gene to the group
                             gene_id = leaf_id2gene_id[child.name]
                             group.add_geneRef(orthoxml.geneRef(id=gene_id))
 
@@ -1486,7 +1496,7 @@ class DatabaseFromPANTHER(Database):
                             taxon = orthoxml.property('TaxRange', child.S)
 
                             # A speciation following a duplication means a new (explicit) HOG
-                            if event == "1>0": 
+                            if event == "1>0":
                                 child_hog_id = "{}.{}".format(hog_id, hog_id2curr_subhog_id[hog_id])
                                 hog_id2curr_subhog_id[hog_id] += 1
                                 hog_id2curr_subhog_id[child_hog_id] = 1
@@ -1522,7 +1532,7 @@ class DatabaseFromPANTHER(Database):
 
         pat = re.compile(r'(.*=)b\'(?P<byte>\".*\")\'(.*)', re.MULTILINE)
         xml_tmp = pat.sub(r'\1\2\3', xml_read) # because two pattern per line
-        xml_write = pat.sub(r'\1\2\3', xml_tmp)  
+        xml_write = pat.sub(r'\1\2\3', xml_tmp)
 
         with open('{}{}.orthoxml'.format(output_path, orthoxml_name), 'w') as outf:
             outf.write('<?xml version="1.0" encoding="UTF-8"?>\n')  # not sure if necessary
@@ -1538,7 +1548,7 @@ class DatabaseFromPANTHER(Database):
         print("parse orthoXML file")
         tree_str = pyham.utils.get_newick_string(nwk_fn, type="nwk")
         ham_analysis = pyham.Ham(tree_str, orthoxml_file, use_internal_name=True)
-        
+
         # build taxonomy table except the SpeOff and TaxID columns
         print("initiate taxonomy table")
         tax_id2tax_off, species = self.initiate_tax_tab(nwk_fn)
@@ -1587,11 +1597,11 @@ class DatabaseFromPANTHER(Database):
         with open(pthfam_an2prot_file, 'r') as inf:
             pthfam_an_id2prot_id = dict(map(lambda x: x.rstrip().split(), inf.readlines()))
         self.load_sequence_buffer(aln_files, pthfam_an_id2prot_id)
-        
+
         if uniprot_speclist_file:
             print("Replace species code by names and add NCBI taxonomic ids")
             self.replace_species_codes_by_names(uniprot_speclist_file)
-    
+
     @staticmethod
     def parse_families_and_hogs(ham_analysis, min_fam_size, overwrite=True, gene_id2hog_id=None):
 
@@ -1625,7 +1635,7 @@ class DatabaseFromPANTHER(Database):
                     else:
                         tmp_hog_id = hog_id
 
-                    # store protein id 
+                    # store protein id
                     hog_id2prot_ids[tmp_hog_id.encode('ascii')].add(child.prot_id.encode('ascii'))
 
                 # Internal HOGs
@@ -1661,7 +1671,7 @@ class DatabaseFromPANTHER(Database):
                     fam_id2hog_ids[fam_id].add(tmp_hog_id.encode('ascii'))  # fam ids are stored in integer. could change
                     hog_id2tax_id[tmp_hog_id.encode('ascii')] = child.genome.name.encode('ascii')
 
-                    _parse_hogs(child, tmp_hog_id, fam_id2hog_ids, fam_id, hog_id2tax_id, hog_id2prot_ids, overwrite, gene_id2hog_id)    
+                    _parse_hogs(child, tmp_hog_id, fam_id2hog_ids, fam_id, hog_id2tax_id, hog_id2prot_ids, overwrite, gene_id2hog_id)
                     subhog_id += 1
                 else:
                     _parse_hogs(child, hog_id, fam_id2hog_ids, fam_id, hog_id2tax_id, hog_id2prot_ids, overwrite, gene_id2hog_id)
@@ -1769,7 +1779,7 @@ class DatabaseFromPANTHER(Database):
 
         # add sequence buffer
         self._seq_buff.append(np.frombuffer(seq_buff.encode('ascii'), dtype=tables.StringAtom(1)))
-    
+
     @staticmethod
     def format_species_tree(nwk_fn_uf, nwk_fn):
         '''
@@ -1781,7 +1791,7 @@ class DatabaseFromPANTHER(Database):
                 node.name = node.S
         with open(nwk_fn, 'w') as inf:
             inf.write(st.write(format=8, format_root_node=True))
-    
+
     @staticmethod
     def get_sp_code2name_taxid(speclist_fn):
         '''
@@ -1802,17 +1812,17 @@ class DatabaseFromPANTHER(Database):
                     sl = l.split()
                     sp_code2name_taxid[sl[0]] = (l.split('N=')[1], int(sl[2][:-1]))
         return sp_code2name_taxid
-    
+
     def replace_species_codes_by_names(self, uniprot_speclist_file):
         '''
-        Replace uniprot species codes by scientific names 
+        Replace uniprot species codes by scientific names
         '''
         sp_code2name_taxid = self.get_sp_code2name_taxid(uniprot_speclist_file)
         sp_names = []
         for sp_code in self._sp_tab[:]['ID']:
             sp_code = sp_code.decode('ascii')
 
-            # exception 
+            # exception
             if sp_code == 'SULSO':
                 sp_names.append(b'Sulfolobus solfataricus')
 

@@ -61,6 +61,7 @@ def mkdb_oma(args):
     ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
     ki.build_kmer_table()
     db.add_metadata()
+    db.add_hogcounts()
 
     db.close()
     LOG.info('Done')
@@ -109,7 +110,7 @@ def search(args):
         seqs.append(str(rec.seq))
         if len(ids) == args.chunksize:
             ms.merge_search(
-                seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
+                seqs=seqs, ids=ids, fasta_file=None, score=score, top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
             )
             pbar.update(len(ids))
             df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
@@ -122,7 +123,7 @@ def search(args):
     # final search
     if len(ids) > 0:
         ms.merge_search(
-            seqs=seqs, ids=ids, fasta_file=None, score=score, cum_mode='max', top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
+            seqs=seqs, ids=ids, fasta_file=None, score=score, top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
         )
         df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
         pbar.update(len(ids))

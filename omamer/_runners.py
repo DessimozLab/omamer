@@ -58,8 +58,8 @@ def mkdb_oma(args):
         hidden_taxa = [' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
 
     LOG.info('Building index')
-    ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
-    ki.build_kmer_table()
+    db.ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
+    db.ki.build_kmer_table()
     db.add_metadata()
     db.add_hogcounts()
 

@@ -96,8 +96,14 @@ Extant gene IDs of predicted HOG, which you can look for in the OMA browser sear
 
 # Change log
 
+#### Version 0.2.5
+ - Fixes an issue when storing the pre-conputed statistics
+
 #### Version 0.2.4
  - Improved loading time for standard search by pre-computing statistics
+ - Adding new command line option "info" to show the metadata of the 
+   dataset used to build the omamer database.
+   
 
 #### Version 0.2.2
  - Automated deployment to PyPI

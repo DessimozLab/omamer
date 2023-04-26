@@ -40,6 +40,14 @@ from .hierarchy import (
     get_children
 )
 
+
+from numba_stats._special import betainc
+
+@numba.njit
+def binom_cdf(x, n, p):
+    return (1 - betainc(x+1, n-x, p)) if x != n else 1
+
+
 # (numba does not like nested methods)
 ## generic functions
 @numba.njit
@@ -1041,7 +1049,7 @@ def _place_queries(
         q2hog_score[i] = ss
         q2max_hog_score[i] = best_s
 
-    return q2hog_off, q2hog_score, q2max_hog_score
+    return q2hog_off, q2hog_score, q2max_hog_score, q2fam_score
 
 #@numba.njit
 #def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, hog_taxa_buff):
@@ -1199,6 +1207,13 @@ class MergeSearch(object):
         else:
             return self.ref_hog_counts_max[self.db._fam_tab.col('HOGoff')]
 
+    @lazy_property
+    def ref_fam_prob(self):
+        if 'FamilyProbability' in self.db.db.root.Index:
+            return self.db.db.root.Index.FamilyProbability[:]
+        else:
+            raise ValueError('FamilyProbability not in db')
+
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize_hogsize_kmerfreq', top_m_fams=100,
         top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
 
@@ -1272,7 +1287,8 @@ class MergeSearch(object):
             ref_hog_counts = ref_hog_counts,
             perm_nr = perm_nr,
             w_size = w_size,
-            dist = dist)
+            dist = dist,
+            ref_fam_prob=self.ref_fam_prob)
 
         t5 = time()
         ts =  t5 - t4
@@ -1337,14 +1353,15 @@ class MergeSearch(object):
 
         # place queries
         query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
-        q2hog_off, q2hog_score, q2max_hog_score = self.place_queries(
+        q2hog_off, q2hog_score, q2max_hog_score, q2fam_score = self.place_queries(
             query_offsets, overlap, fst, sst, ref_taxoff)
 
         c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'qseqlen', 'subfamily-medianseqlen']
         r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],
             map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off),
             [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())],
-            map(lambda x: x if x != -1 else 'na', q2max_hog_score),
+            #map(lambda x: x if x != -1 else 'na', q2max_hog_score),
+            map(lambda x: x if x != -1 else 'na', q2fam_score),
             map(lambda x: x if x != -1 else 'na', q2hog_score),
             self._query_lengths,
             map(lambda x: self.hog_tab['MedianSeqLen'][x] if x != -1 else 'na', q2hog_off)]
@@ -1401,7 +1418,8 @@ class MergeSearch(object):
             ref_hog_counts,
             perm_nr,
             w_size,
-            dist
+            dist,
+            ref_fam_prob
         ):
             '''
             top_n_fams: number of family for which HOG scores are computed
@@ -1449,22 +1467,61 @@ class MergeSearch(object):
                 elif r1[0] == x_flag:
                     continue
 
+                ## TODO: count the numberof kmers which ARE NOT containing X
+
                 ## search sequence
                 hog_counts, fam_counts, query_occ, hog_occurs, fam_lowloc, fam_highloc = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff)
 
-                ## get the raw top m families from summed k-mer counts
-                top_fam, top_fam_counts = get_top_m_fams(
-                    fam_counts, top_m_fams, fam_tab, hog_counts, hog_tab, level_arr, fam_filter)
+                # updated binomial distn based code
+                idx = np.argwhere(fam_counts > 0).flatten()
+                top_fam = idx
+                top_fam_counts = fam_counts[idx]
 
-                ## normalize family counts
-                top_fam_scores = norm_fam_querysize_hogsize_kmerfreq(
-                    top_fam_counts, query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam])
+                # compute the p value for each of these. order by count and p.
+                top_fam_scores = np.zeros(len(top_fam_counts), dtype=np.float64)
+                for i in numba.prange(len(top_fam)):
+                    top_fam_scores[i] = binom_cdf(top_fam_counts[i], len(r1), ref_fam_prob[top_fam[i]])
+
+
+                ### get the raw top m families from summed k-mer counts
+                #top_fam, top_fam_counts = get_top_m_fams(
+                #    fam_counts, top_m_fams, fam_tab, hog_counts, hog_tab, level_arr, fam_filter)
+
+                ### normalize family counts
+                #top_fam_scores = norm_fam_querysize_hogsize_kmerfreq(
+                #    top_fam_counts, query_occ, r1.size, table_buff.size, ref_fam_counts[top_fam])
 
                 # resort by score
                 idx = (-top_fam_scores).argsort()
                 top_fam = top_fam[idx]
                 top_fam_scores = top_fam_scores[idx]
+                top_fam_counts = top_fam_counts[idx]
+
+                f = (top_fam_scores >= 0.95)
+                top_fam = top_fam[f]
+                top_fam_scores = top_fam_scores[f]
+                top_fam_counts = top_fam_counts[f]
+
+                if top_fam_scores[0] != top_fam_scores[1]:
+                    # clear winner
+                    pass
+                else:
+                    # need to decide which to keep based on the kmer count
+                    # filter to just the top
+                    f = (top_fam_scores == top_fam_scores[0])
+                    top_fam = top_fam[f]
+                    top_fam_scores = top_fam_scores[f]
+                    top_fam_counts = top_fam_counts[f]
+
+                    # then order by raw count
+                    idx = (-top_fam_counts).argsort()
+                    top_fam = top_fam[idx]
+                    top_fam_scores = top_fam_scores[idx]
+                    top_fam_counts = top_fam_counts[idx]
+
+                    # then take first in list.
+                    # TODO: place both!!!
 
                 # store them with corresponding scores
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]

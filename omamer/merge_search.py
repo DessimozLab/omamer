@@ -414,9 +414,8 @@ def kmer_prob_freq(kmer_occurs, all_kmer_occurs):
 @numba.njit
 def query_kmer_prob_freq(query_occurs, query_counts, all_kmer_occurs):
     '''average of the kmer_prob_freq over query k-mer set'''
-    #av_kmer_occurs = query_occurs / query_counts
-    #return kmer_prob_freq(av_kmer_occurs, all_kmer_occurs)
-    return kmer_prob_freq(query_occurs, all_kmer_occurs)
+    av_kmer_occurs = query_occurs / query_counts
+    return kmer_prob_freq(av_kmer_occurs, all_kmer_occurs)
 
 # probability to observe the k-mer in a HOG k-mer set
 @numba.njit
@@ -452,14 +451,9 @@ def norm_fam_querysize_kmerfreq():
 @numba.njit
 def norm_fam_querysize_hogsize_kmerfreq(fam_counts, query_occurs, query_counts, all_kmer_occurs, ref_fam_counts):
     # compute expected number of k-mer matches
-    kmer_prob = query_kmer_prob_freq(query_occurs/query_counts, query_counts, all_kmer_occurs)
-    kmer_bernoulli = get_kmer_bernoulli(kmer_prob, ref_fam_counts)
-    exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
-    print(kmer_prob, exp_kmer_counts, ref_fam_counts)
     kmer_prob = query_kmer_prob_freq(query_occurs, query_counts, all_kmer_occurs)
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, ref_fam_counts)
     exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
-    print(kmer_prob, exp_kmer_counts, ref_fam_counts)
 
     return (fam_counts - exp_kmer_counts) / query_counts
 

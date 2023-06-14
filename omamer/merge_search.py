@@ -1026,7 +1026,7 @@ def _place_queries(
 
             # stop if subfamily implies the true taxon
             if true_tax_off is not None:
-                hog_off = np.int(root_hog_off + j)
+                hog_off = np.int64(root_hog_off + j)
                 if is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
                     break
                 #hog_taxa = get_hog_taxon_levels(hog_off, hog_tab, hog_taxa_buff)
@@ -1037,7 +1037,7 @@ def _place_queries(
         if (best_j is None) or (best_s < fst):
             continue
 
-        q2hog_off[i] = np.int(best_j + root_hog_off)
+        q2hog_off[i] = np.int64(best_j + root_hog_off)
         q2hog_score[i] = ss
         q2max_hog_score[i] = best_s
 
@@ -1428,7 +1428,7 @@ class MergeSearch(object):
             for zz in numba.prange(len(seqs_idx) - 1):
 
                 ## get the query sequence
-                s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
+                s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
                 n_kmers = query_len - (k - 1)
 
@@ -1557,7 +1557,7 @@ class MergeSearch(object):
             for zz in numba.prange(len(seqs_idx) - 1):
 
                 ## get the query sequence
-                s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
+                s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
                 n_kmers = query_len - (k - 1)
 
@@ -1691,7 +1691,7 @@ class MergeSearch(object):
             for zz in numba.prange(len(seqs_idx) - 1):
 
                 ## get the query sequence
-                s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
+                s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
                 n_kmers = query_len - (k - 1)
 
@@ -1872,7 +1872,7 @@ class MergeSearch(object):
             for zz in numba.prange(len(seqs_idx) - 1):
 
                 ## get the query sequence
-                s = seqs[seqs_idx[zz] : np.int(seqs_idx[zz + 1] - 1)]
+                s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
                 n_kmers = query_len - (k - 1)
 

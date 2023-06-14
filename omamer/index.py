@@ -287,7 +287,7 @@ class Index(object):
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db._prot_tab)
         sa_mask = np.zeros(sa.shape, dtype=np.uint64)
-        sa_filter = np.zeros(sa.shape, dtype=np.bool)
+        sa_filter = np.zeros(sa.shape, dtype=np.bool8)
 
         _compute_mask_and_filter(
             sa,

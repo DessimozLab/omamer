@@ -639,9 +639,9 @@ class Validation():
 	    '''
 	    results from the positive query set
 	    '''
-	    tp_query2tresh = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.bool)
-	    fn_query2tresh = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.bool)
-	    fp_query2tresh = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.bool)
+	    tp_query2tresh = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.bool8)
+	    fn_query2tresh = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.bool8)
+	    fp_query2tresh = np.zeros((query_prot_offsets.size, thresholds.size), dtype=np.bool8)
 	    
 	    # insure these are a flat arrays
 	    queryFam_ranked = queryFam_ranked.flatten()
@@ -689,8 +689,8 @@ class Validation():
 	    '''
 	    results from the negative query set
 	    '''
-	    tn_query2tresh = np.zeros((queryFam_ranked.size, thresholds.size), dtype=np.bool)
-	    fp_query2tresh = np.zeros((queryFam_ranked.size, thresholds.size), dtype=np.bool)
+	    tn_query2tresh = np.zeros((queryFam_ranked.size, thresholds.size), dtype=np.bool8)
+	    fp_query2tresh = np.zeros((queryFam_ranked.size, thresholds.size), dtype=np.bool8)
 
 	    # insure these are a flat arrays
 	    queryFam_ranked = queryFam_ranked.flatten()
@@ -899,7 +899,7 @@ class Validation():
 		part2query_nr = np.zeros((part_num), dtype=np.uint64)
 		for p in range(part_num):
 		    part = partitions[p]
-		    part2query_nr[p] = np.sum(np.array(fp_pos_query2tresh[:, 0][part], dtype=np.bool) + np.array(fn_query2tresh[:, 0][part], dtype=np.bool) + np.array(tp_query2tresh[:, 0][part], dtype=np.bool))
+		    part2query_nr[p] = np.sum(np.array(fp_pos_query2tresh[:, 0][part], dtype=np.bool8) + np.array(fn_query2tresh[:, 0][part], dtype=np.bool8) + np.array(tp_query2tresh[:, 0][part], dtype=np.bool8))
 
 		return part2pre, part2rec, part2spe, part2query_nr
 

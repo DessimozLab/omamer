@@ -19,6 +19,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
+from fast_fisher.fast_fisher_numba import fisher_exact as fisher_exact_numba
 from property_manager import lazy_property, cached_property
 import numba
 import numpy as np
@@ -321,7 +322,7 @@ def cumulate_counts_nfams(
 
 @numba.njit
 def _propagate_counts(hog_count, hog2parent, levels, hog_offset):
-    # propagate up by iterating backwards
+    # propagate down
     res = hog_count.copy()
     # root already valid.
     for i in range(len(levels) - 1):
@@ -372,6 +373,58 @@ def cumulate_counts(hog_counts, fam_tab, hog2parent):
         res[s:e] = _cumulate_counts(hog_counts[s:e], hog2parent[s:e], s)
 
     return res
+
+@numba.njit
+def decision_tree_fisher(query_count, db_count, hog2parent, levels, hog_offset):
+    '''
+        New method using fisher's exact test to see if we are enriched in kmers for a given level.
+    '''
+    current_best = 0  # root
+    current_p = -2 # root p not defined.
+
+    for i in range(len(levels) - 1):
+        x = levels[i:i+2]
+
+        ps = np.zeros(x[1]-x[0], dtype=np.float64)
+
+        for j in range(x[0], x[1]):
+            m = int(j-hog_offset)
+            p = hog2parent[m]
+            if p > -1:
+                # we can do perform a test.
+                p = int(p-hog_offset)
+
+                # form the contingency table
+                a = query_count[m]
+                b = query_count[p] - query_count[m]
+                c = db_count[m] - a
+                d = db_count[p] - db_count[m] - b
+
+                # now perform fisher exact using numba
+                ps[j-x[0]] = fisher_exact_numba(a, b, c, d, alternative="greater")
+
+        # now find the best p
+        alpha = 0.05
+        #beta = 1e-3
+        nsig = np.sum(ps <= alpha)
+        if nsig == 0:
+            break
+        #if nsig != 1:
+        #    # STOP, we either have 0 sig or >1 sig
+        #    if nsig > 1 and np.sum(ps <= beta) == 1:
+        #        pass
+        #    else:
+        #        break
+
+        # nsig == 1
+        current_best = np.argmin(ps)
+        current_p = ps[current_best]
+        current_best += x[0] - hog_offset
+        if current_best == 0:
+            # fix for the root to give na
+            current_p = -2
+
+    return (current_best, current_p)
 
 
 ## generic score functions
@@ -1320,13 +1373,6 @@ class MergeSearch(object):
         else:
             raise ValueError('FamilyProbability not in db')
 
-    @lazy_property
-    def ref_hog_prob(self):
-        if 'HOGProbability' in self.db.db.root.Index:
-            return self.db.db.root.Index.HOGProbability[:]
-        else:
-            raise ValueError('HOGProbability not in db')
-
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize_hogsize_kmerfreq', top_m_fams=100,
         top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
 
@@ -1402,8 +1448,7 @@ class MergeSearch(object):
             perm_nr = perm_nr,
             w_size = w_size,
             dist = dist,
-            ref_fam_prob=self.ref_fam_prob,
-            ref_hog_prob=self.ref_hog_prob)
+            ref_fam_prob=self.ref_fam_prob)
 
         t5 = time()
         ts =  t5 - t4
@@ -1554,8 +1599,7 @@ class MergeSearch(object):
             perm_nr,
             w_size,
             dist,
-            ref_fam_prob,
-            ref_hog_prob
+            ref_fam_prob
         ):
             '''
             top_n_fams: number of family for which HOG scores are computed
@@ -1735,17 +1779,39 @@ class MergeSearch(object):
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
                 for i in numba.prange(top_n_fams):
-                    s = fam_tab["HOGoff"][top_fam[i]]
-                    e = s+fam_tab["HOGnum"][top_fam[i]]
+                    #s = fam_tab["HOGoff"][top_fam[i]]
+                    #e = s+fam_tab["HOGnum"][top_fam[i]]
+
+                    # early exit if we only have no sub-hogs
                     if fam_tab["HOGnum"][top_fam[i]] == 1:
                         queryHog_id[zz,i] = fam_tab["HOGoff"][top_fam[i]]
-                        queryHog_scores[zz,i] = queryFam_scores[zz,i]
                         continue
 
-                    #c = _cumulate_counts(
-                    #        hog_counts[s:e],
-                    #        hog_tab["ParentOff"][s:e],
-                    #        s)
+                    # now find the family structure.
+                    entry = fam_tab[top_fam[i]]
+                    hog_s = entry["HOGoff"]
+                    hog_e = hog_s+entry["HOGnum"]
+                    level_s = int(entry["LevelOff"])
+                    level_e = int(level_s+entry["LevelNum"]+1)
+
+                    # cumulate the counts for the HOGs going up the tree
+                    # this is query_counts in the fisher decision tree function.
+                    c = _cumulate_counts(
+                            hog_counts[hog_s:hog_e],
+                            hog_tab["ParentOff"][hog_s:hog_e],
+                            hog_s)
+
+                    # now we need to walk DOWN the tree.
+                    (choice, pval) = decision_tree_fisher(c, ref_hog_counts[hog_s:hog_e], hog_tab["ParentOff"][hog_s:hog_e], level_arr[level_s:level_e], hog_s)
+
+                    queryHog_id[zz,i] = choice + hog_s
+                    queryHog_scores[zz,i] = pval
+                    queryHog_counts[zz,i] = c[int(choice)]
+                    continue
+
+                    '''
+                    # OLD CODE:: 
+
 
                     ## compute cumulative style probabilities (prop up)
                     #p = -1.0*np.ones(len(c), dtype=np.float64)
@@ -1759,6 +1825,7 @@ class MergeSearch(object):
                     ## bonferroni correction
                     #p -= np.log(len(p) + len(ref_fam_counts))
 
+                    # TRY 2:
                     # propagate the counts down the hog structure
                     s1 = int(fam_tab["LevelOff"][top_fam[i]])
                     e1 = int(s1+fam_tab["LevelNum"][top_fam[i]]+1)
@@ -1792,6 +1859,7 @@ class MergeSearch(object):
                             parent = hog_tab["ParentOff"][s+node]
                             if parent != -1:
                                 parentscore = p[parent-s]
+                                # TODO: work out what to do here.
                                 if (score - parentscore) > eps or parentscore < alpha:
                                     break
                             else:
@@ -1862,6 +1930,7 @@ class MergeSearch(object):
 
                     #queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
                     #queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
+                    '''
 
             #return queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores
             return queryFam_ranked, queryFam_scores, queryFam_counts, queryFam_normcount, queryFam_overlaps, queryHog_id, queryHog_scores, queryHog_parentscores, queryHog_counts

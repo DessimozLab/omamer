@@ -19,7 +19,6 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
-from fast_fisher.fast_fisher_numba import fisher_exact as fisher_exact_numba
 from property_manager import lazy_property, cached_property
 import numba
 import numpy as np
@@ -374,58 +373,6 @@ def cumulate_counts(hog_counts, fam_tab, hog2parent):
 
     return res
 
-@numba.njit
-def decision_tree_fisher(query_count, db_count, hog2parent, levels, hog_offset):
-    '''
-        New method using fisher's exact test to see if we are enriched in kmers for a given level.
-    '''
-    current_best = 0  # root
-    current_p = -2 # root p not defined.
-
-    for i in range(len(levels) - 1):
-        x = levels[i:i+2]
-
-        ps = np.zeros(x[1]-x[0], dtype=np.float64)
-
-        for j in range(x[0], x[1]):
-            m = int(j-hog_offset)
-            p = hog2parent[m]
-            if p > -1:
-                # we can do perform a test.
-                p = int(p-hog_offset)
-
-                # form the contingency table
-                a = query_count[m]
-                b = query_count[p] - query_count[m]
-                c = db_count[m] - a
-                d = db_count[p] - db_count[m] - b
-
-                # now perform fisher exact using numba
-                ps[j-x[0]] = fisher_exact_numba(a, b, c, d, alternative="greater")
-
-        # now find the best p
-        alpha = 0.05
-        #beta = 1e-3
-        nsig = np.sum(ps <= alpha)
-        if nsig == 0:
-            break
-        #if nsig != 1:
-        #    # STOP, we either have 0 sig or >1 sig
-        #    if nsig > 1 and np.sum(ps <= beta) == 1:
-        #        pass
-        #    else:
-        #        break
-
-        # nsig == 1
-        current_best = np.argmin(ps)
-        current_p = ps[current_best]
-        current_best += x[0] - hog_offset
-        if current_best == 0:
-            # fix for the root to give na
-            current_p = -2
-
-    return (current_best, current_p)
-
 
 ## generic score functions
 @numba.njit
@@ -603,6 +550,7 @@ def norm_hog_querysize_hogsize_kmerfreq(
 
     ## root-HOG score
     # compute expected number of k-mer matches
+    # TODO edit the expected count here!!!
     kmer_prob = query_kmer_prob_freq(query_occurs, query_counts, all_kmer_occurs)
     kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[0])
     exp_kmer_counts = get_expected_kmer_counts(query_counts, kmer_bernoulli)
@@ -628,6 +576,7 @@ def norm_hog_querysize_hogsize_kmerfreq(
 
         ## HOG score
         # compute expected number of k-mer matches
+        # TODO edit the expected count here!!!
         kmer_prob = query_kmer_prob_freq(qh_occur, qh_count, all_kmer_occurs)
         kmer_bernoulli = get_kmer_bernoulli(kmer_prob, fam_ref_hog_counts[hog_offsets])
         exp_kmer_counts = get_expected_kmer_counts(qh_count, kmer_bernoulli)
@@ -1426,7 +1375,7 @@ class MergeSearch(object):
 
         # actual OMAmer search
         #queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores = lookup_fun(
-        queryFam_ranked, queryFam_scores, queryFam_counts, queryFam_normcount, queryFam_overlaps, queryHog_id, queryHog_scores, queryHog_parentscores, queryHog_counts = lookup_fun(
+        queryFam_ranked, queryFam_scores, queryFam_counts, queryFam_normcount, queryFam_overlaps, queryHog_id, queryHog_scores, queryHog_counts = lookup_fun(
             sbuff.buff,
             sbuff.idx,
             trans,
@@ -1463,7 +1412,6 @@ class MergeSearch(object):
         #self._queryRankHog_scores = queryRankHog_scores
         self._queryHog_id = queryHog_id
         self._queryHog_scores = queryHog_scores
-        self._queryHog_parentscores = queryHog_parentscores
         self._queryHog_counts = queryHog_counts
 
         # store ids and lengths of sbuff
@@ -1517,14 +1465,14 @@ class MergeSearch(object):
         else:
             ref_taxoff = None
 
-        # place queries
-        query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
+        ## place queries
+        #query_offsets = np.arange(self._query_ids.size, dtype=np.int64)
         #q2hog_off, q2hog_score, q2max_hog_score, q2fam_score = self.place_queries(
         #    query_offsets, overlap, fst, sst, ref_taxoff)
 
         # NOTE: we don't need to place again. done in the original search
 
-        c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'subfamily-parentscore', 'family-count', 'family-normcount', 'subfamily-count', 'qseqlen', 'subfamily-medianseqlen']
+        c = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'family-count', 'family-normcount', 'subfamily-count', 'qseqlen', 'subfamily-medianseqlen']
         #r = [[x.decode('ascii') if isinstance(x, bytes) else x for x in self._query_ids],
         #    map(lambda x: self.hog_tab['OmaID'][x].decode('ascii') if x != -1 else 'na', q2hog_off),
         #    [x if q2hog_off[i] != -1 else 'na' for i, x in enumerate(self._queryFam_overlaps.flatten())],
@@ -1539,7 +1487,6 @@ class MergeSearch(object):
             #map(lambda x: x if x != -1 else 'na', q2max_hog_score),
             map(lambda x: x if x != -2 else 'na', self._queryFam_scores[:,0]),
             map(lambda x: x if x != -2 else 'na', self._queryHog_scores[:,0]),
-            map(lambda x: x if x != -2 else 'na', self._queryHog_parentscores[:,0]),
             map(lambda x: x if x != -1 else 'na', self._queryFam_counts[:,0]),
             map(lambda x: x if x != -1 else 'na', self._queryFam_normcount[:,0]),
             map(lambda x: x if x != -1 else 'na', self._queryHog_counts[:,0]),
@@ -1614,10 +1561,10 @@ class MergeSearch(object):
             # scores and bestpath mask for HOGs of top_n_fam
             queryHog_id = -1*np.ones((len(seqs_idx) - 1, top_n_fams), dtype=np.int32)
             queryHog_scores = -2*np.ones((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
-            queryHog_parentscores = -2*np.ones((len(seqs_idx) - 1, top_n_fams), dtype=np.float64)
             queryHog_counts = -1*np.ones((len(seqs_idx) - 1, top_n_fams), dtype=np.int32)
-            #queryRankHog_scores = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.float64)
-            #queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)
+            
+            queryRankHog_scores = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.float64)
+            queryRankHog_bestpath = np.zeros((top_n_fams, len(seqs_idx) - 1, max_hog_nr), dtype=np.bool8)
             # OPTION: store only HOGs on the bestpath
 
             # query sequence overlaps with families
@@ -1778,162 +1725,61 @@ class MergeSearch(object):
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
+                fst = 0
+                sst = 0.05
                 for i in numba.prange(top_n_fams):
-                    #s = fam_tab["HOGoff"][top_fam[i]]
-                    #e = s+fam_tab["HOGnum"][top_fam[i]]
-
-                    # early exit if we only have no sub-hogs
-                    if fam_tab["HOGnum"][top_fam[i]] == 1:
-                        queryHog_id[zz,i] = fam_tab["HOGoff"][top_fam[i]]
-                        continue
+                    ## early exit if we have no sub-hogs
+                    #if fam_tab["HOGnum"][top_fam[i]] == 1:
+                    #    queryHog_id[zz,i] = fam_tab["HOGoff"][top_fam[i]]
+                    #    continue
 
                     # now find the family structure.
                     entry = fam_tab[top_fam[i]]
                     hog_s = entry["HOGoff"]
                     hog_e = hog_s+entry["HOGnum"]
-                    level_s = int(entry["LevelOff"])
-                    level_e = int(level_s+entry["LevelNum"]+1)
+                    #level_s = int(entry["LevelOff"])
+                    #level_e = int(level_s+entry["LevelNum"]+1)
 
                     # cumulate the counts for the HOGs going up the tree
-                    # this is query_counts in the fisher decision tree function.
                     c = _cumulate_counts(
                             hog_counts[hog_s:hog_e],
                             hog_tab["ParentOff"][hog_s:hog_e],
                             hog_s)
 
-                    # now we need to walk DOWN the tree.
-                    (choice, pval) = decision_tree_fisher(c, ref_hog_counts[hog_s:hog_e], hog_tab["ParentOff"][hog_s:hog_e], level_arr[level_s:level_e], hog_s)
+                    # retrieve cumulated HOG counts for that family
+                    fam_hog_counts = hog_counts[hog_s:hog_e]
 
-                    queryHog_id[zz,i] = choice + hog_s
-                    queryHog_scores[zz,i] = pval
-                    queryHog_counts[zz,i] = c[int(choice)]
-                    continue
+                    # get locally indexed variants
+                    fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
+                    fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
-                    '''
-                    # OLD CODE:: 
+                    # querysize_kmerfreq
+                    fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
+                            c, r1.size, query_occ, table_buff.size, ref_hog_counts[hog_s:hog_e],
+                            fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
 
+                    # now choose the position on the path
+                    choice = None
+                    choice_score = 0
+                    for j in np.argwhere(fam_bestpath).flatten():
+                        sf_score = fam_hog_scores[j]
+                        # check we are above the threshold
+                        if sf_score >= sst and sf_score > choice_score:
+                            choice = j
+                            choice_score = sf_score
 
-                    ## compute cumulative style probabilities (prop up)
-                    #p = -1.0*np.ones(len(c), dtype=np.float64)
-                    #p[0] = queryFam_scores[zz,i] + np.log(len(ref_fam_counts))
-                    #for j in numba.prange(1,len(c)):
-                    #    # allow for query already covered by parent
-                    #    # i.e., n_query - all by hog + those for this hog.
-                    #    n = len(r1) - c[0] + c[j]
-                    #    p[j] = binom_neglogccdf(c[j], n, ref_hog_prob[s+j])
-
-                    ## bonferroni correction
-                    #p -= np.log(len(p) + len(ref_fam_counts))
-
-                    # TRY 2:
-                    # propagate the counts down the hog structure
-                    s1 = int(fam_tab["LevelOff"][top_fam[i]])
-                    e1 = int(s1+fam_tab["LevelNum"][top_fam[i]]+1)
-                    c = _propagate_counts(
-                            hog_counts[s:e],
-                            hog_tab["ParentOff"][s:e],
-                            level_arr[s1:e1],
-                            s)
-
-                    # compute log p values
-                    p = np.zeros(len(c), dtype=np.float64)
-                    correction_factor = np.log(len(p) + len(ref_fam_counts))
-                    for j in numba.prange(len(c)):
-                        # allow for query already covered by parent
-                        # i.e., n_query - all by hog + those for this hog.
-                        p[j] = binom_neglogccdf(c[j], len(r1), ref_hog_prob[s+j]) - correction_factor
-
-                    # now we place using traceback
-                    choice = np.argmax(p)
-                    score = p[choice]
-                    count = c[choice]
-                    
-                    if score < alpha:
-                        # do not place. minimum subfamily score is < alpha.
+                    if (choice is None) or (choice_score < fst):
+                        # remove the choice.
+                        queryFam_scores[zz,i] = -2.0
+                        queryFam_counts[zz,i] = -1
+                        queryFam_normcount[zz,i] = -1.0
                         continue
-                    else:
-                        # see if we want to go up the hog
-                        eps = -1.0*np.log(1e-12)
-                        node = choice
-                        while True:
-                            parent = hog_tab["ParentOff"][s+node]
-                            if parent != -1:
-                                parentscore = p[parent-s]
-                                # TODO: work out what to do here.
-                                if (score - parentscore) > eps or parentscore < alpha:
-                                    break
-                            else:
-                                # at root
-                                break
-                            node = parent-s
-
-                        # then save this one as the score
-                        choice = node
-                        p = p[choice]
-                        count = c[choice]
-
-                        choice += s  # global translation
-                        #(choice, score, count) = traceback(
-                        #        p,
-                        #        c,
-                        #        hog_tab["ParentOff"][s:e],
-                        #        s)
                     
-                    queryHog_id[zz,i] = choice
-                    queryHog_scores[zz,i] = score
-                    #queryHog_parentscores[zz,i] = parentscore
-                    queryHog_counts[zz,i] = count
-                    continue
+                    queryHog_id[zz,i] = choice + hog_s
+                    queryHog_scores[zz,i] = choice_score
+                    queryHog_counts[zz,i] = c[int(choice)]
 
-                    # should p[0] be the same as the fam probability score?
-                    #subhog_offset = np.argwhere(p >= (1-(alpha/len(p))))
-                    subhog_offset = np.argwhere(p <= alpha).flatten()  # alpha is np.log(0.05) by default
-                    p = p[subhog_offset]
-
-                    # count is only relevant with respect to parent / siblings
-                    c = c[subhog_offset]
-
-                    ## have to have x% overlap with the specific family.
-                    #f = (c >= 0.01*len(r1))
-                    #subhog_offset = subhog_offset[f]
-                    #p = p[f]
-                    #c = c[f]
-
-                    # possibly have none left...
-                    if len(p) > 0:
-                        # order by p
-                        idx = np.argsort(p)
-                        subhog_offset = subhog_offset[idx]
-                        p = p[idx]
-                        #c = c[idx]
-
-                        subhog_choice = np.argmin(p)
-
-                        # save (in a different way)
-                        queryHog_id[zz,i] = subhog_offset[subhog_choice] + s
-                        queryHog_scores[zz,i] = p[subhog_choice]
-                    else:
-                        # do we still want to place or not? 
-                        queryHog_id[zz,i] = s
-                        queryHog_scores[zz,i] = queryFam_scores[zz,i]
-
-                    # todo: walk a down the HOGs, taking the best path. If it is not obvious STOP.
-
-                    # todo: compute a subfamily overlap score?
-
-
-
-                    ## querysize_kmerfreq
-                    #fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
-                    #    fam_hog_cumcounts, r1.size, query_occ, table_buff.size, ref_hog_counts[fam_hog_off:fam_hog_off + fam_hog_nr],
-                    #    fam_level_offsets, fam_hog2parent, fam_hog_counts, hog_occurs[fam_hog_off:fam_hog_off + fam_hog_nr])
-
-                    #queryRankHog_bestpath[fam_rank, zz, :fam_bestpath.size] = fam_bestpath
-                    #queryRankHog_scores[fam_rank, zz, :fam_hog_scores.size] = fam_hog_scores
-                    '''
-
-            #return queryFam_ranked, queryFam_scores, queryFam_overlaps, queryRankHog_bestpath, queryRankHog_scores
-            return queryFam_ranked, queryFam_scores, queryFam_counts, queryFam_normcount, queryFam_overlaps, queryHog_id, queryHog_scores, queryHog_parentscores, queryHog_counts
+            return queryFam_ranked, queryFam_scores, queryFam_counts, queryFam_normcount, queryFam_overlaps, queryHog_id, queryHog_scores, queryHog_counts
 
         if not self.low_mem:
             # Set nthreads, note: this only works before numba called first time!

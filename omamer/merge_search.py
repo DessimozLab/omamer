@@ -1297,14 +1297,14 @@ class MergeSearch(object):
     # k-mer counts of reference HOGs and family
     @lazy_property
     def ref_hog_counts_max(self):
-        #if 'CumulatedCounts' in self.db.db.root.Index:
-        #    # load precomputed
-        #    return self.db.db.root.Index.CumulatedCounts.HogCounts[:]
-        #
-        #else:
-        return cumulate_counts_nfams(
-            self.ki._hog_count[:], self.db._fam_tab[:], self.db._level_arr[:], self.db._hog_tab.col('ParentOff'),
-            cumulate_counts_1fam, _sum, _max)
+        if 'CumulatedCounts' in self.db.db.root.Index:
+            # load precomputed
+            return self.db.db.root.Index.CumulatedCounts.HogCounts[:]
+        
+        else:
+            return cumulate_counts_nfams(
+                self.ki._hog_count[:], self.db._fam_tab[:], self.db._level_arr[:], self.db._hog_tab.col('ParentOff'),
+                cumulate_counts_1fam, _sum, _max)
 
     @lazy_property
     def ref_fam_counts_max(self):
@@ -1740,22 +1740,22 @@ class MergeSearch(object):
                     #level_s = int(entry["LevelOff"])
                     #level_e = int(level_s+entry["LevelNum"]+1)
 
-                    # retrieve cumulated HOG counts for that family
-                    fam_hog_counts = hog_counts[hog_s:hog_e]
+                    ## retrieve cumulated HOG counts for that family
+                    #fam_hog_counts = hog_counts[hog_s:hog_e]
 
                     # get locally indexed variants
                     fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
-                    ## cumulate the counts for the HOGs going up the tree
-                    #c = _cumulate_counts(
-                    #        hog_counts[hog_s:hog_e],
-                    #        hog_tab["ParentOff"][hog_s:hog_e],
-                    #        hog_s)
+                    # cumulate the counts for the HOGs going up the tree
+                    c = _cumulate_counts(
+                            hog_counts[hog_s:hog_e],
+                            hog_tab["ParentOff"][hog_s:hog_e],
+                            hog_s)
                     
-                    # old cumulation of counts
-                    fam_hog_cumcounts = fam_hog_counts.copy()
-                    cumulate_counts_1fam(fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
-                    c = fam_hog_cumcounts
+                    ## old cumulation of counts
+                    #fam_hog_cumcounts = fam_hog_counts.copy()
+                    #cumulate_counts_1fam(fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
+                    #c = fam_hog_cumcounts
 
                     # querysize_kmerfreq
                     fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(

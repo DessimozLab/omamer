@@ -599,9 +599,9 @@ def hog_path_placement(
 
     # initialise root HOG
     fam_bestpath[0] = True
-    expect_count = fam_ref_hog_prob[0] * query_nkmer
-    fam_hog_scores[0] = (fam_hog_cumcounts[0] - expect_count) / query_nkmer
-    #fam_hog_scores[0] = binom_neglogccdf(fam_hog_cumcounts[0], query_nkmer, fam_ref_hog_prob[0])
+    #expect_count = fam_ref_hog_prob[0] * query_nkmer
+    #fam_hog_scores[0] = (fam_hog_cumcounts[0] - expect_count) / query_nkmer
+    fam_hog_scores[0] = binom_neglogccdf(fam_hog_cumcounts[0], query_nkmer, fam_ref_hog_prob[0])
 
     # loop through hog levels
     for i in range(1, fam_level_offsets.size - 2):
@@ -616,14 +616,14 @@ def hog_path_placement(
         revcum_counts[hog_offsets] = qh_count
 
         ## HOG score
-        # compute expected number of k-mer matches
-        expect_counts = fam_ref_hog_prob[hog_offsets] * qh_count
-        fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - expect_counts) / qh_count
+        ## compute expected number of k-mer matches
+        #expect_counts = fam_ref_hog_prob[hog_offsets] * qh_count
+        #fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - expect_counts) / qh_count
         
-        #correction_factor = np.log(len(hog_offsets))
-        #for i in hog_offsets:
-        #    fam_hog_scores[i] = binom_neglogccdf(fam_hog_cumcounts[i], qh_count, fam_ref_hog_prob[i])
-        #    fam_hog_scores[i] = max(0.0, fam_hog_scores[i]-correction_factor)
+        correction_factor = np.log(len(hog_offsets))
+        for i in hog_offsets:
+            fam_hog_scores[i] = binom_neglogccdf(fam_hog_cumcounts[i], qh_count, fam_ref_hog_prob[i])
+            fam_hog_scores[i] = max(0.0, fam_hog_scores[i]-correction_factor)
         
         # store bestpath
         # NOTE: pv_score=False as we are working in neglog units.
@@ -1778,7 +1778,7 @@ class MergeSearch(object):
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
                 fst = 0
-                sst = 0.05
+                sst = 0 #0.05
                 for i in numba.prange(top_n_fams):
                     ## early exit if we have no sub-hogs
                     #if fam_tab["HOGnum"][top_fam[i]] == 1:

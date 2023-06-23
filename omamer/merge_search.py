@@ -1763,30 +1763,24 @@ class MergeSearch(object):
                             fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
 
                     # now choose the position on the path
-                    choice = None
-                    choice_score = 0
+                    choice = 0
+                    choice_score = -2
                     for j in np.argwhere(fam_bestpath).flatten():
                         sf_score = fam_hog_scores[j]
-                        ## check we are above the threshold
-                        #if sf_score >= sst and sf_score > choice_score:
-                        #    choice = j
-                        #    choice_score = sf_score
-
                         if sf_score >= sst:
                             choice = j
                             choice_score = sf_score
 
-                    # TODO: change this so that we do not filter and just place at the root instead.
-                    if (choice is None) or (choice_score < fst):
-                        # remove the choice.
-                        queryFam_scores[zz,i] = -2.0
-                        queryFam_counts[zz,i] = -1
-                        queryFam_normcount[zz,i] = -1.0
-                        continue
+                    #if choice is None:
+                    #    # remove the choice.
+                    #    queryFam_scores[zz,i] = -2.0
+                    #    queryFam_counts[zz,i] = -1
+                    #    queryFam_normcount[zz,i] = -1.0
+                    #    continue
                     
                     queryHog_id[zz,i] = choice + hog_s
                     queryHog_scores[zz,i] = choice_score
-                    queryHog_counts[zz,i] = c[int(choice)]
+                    queryHog_counts[zz,i] = c[int(choice)] if choice_score != -2.0 else -1
 
             return queryFam_ranked, queryFam_scores, queryFam_counts, queryFam_normcount, queryFam_overlaps, queryHog_id, queryHog_scores, queryHog_counts
 

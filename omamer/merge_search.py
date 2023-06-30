@@ -1699,13 +1699,14 @@ class MergeSearch(object):
 
                 # based on sequence coverage
                 top_fam_overlaps = compute_overlap(fam_highloc[top_fam], fam_lowloc[top_fam], k, query_len)
-                f = (top_fam_overlaps >= (30/query_len))
+                '''f = (top_fam_overlaps >= (30/query_len))
                 top_fam = top_fam[f]
                 top_fam_scores = top_fam_scores[f]
                 top_fam_counts = top_fam_counts[f]
                 top_fam_overlaps = top_fam_overlaps[f]
                 if len(top_fam) == 0:
                     continue
+                '''
 
                 top_fam_expect_counts = ref_fam_prob[top_fam] * len(r1)
                 top_fam_normcount = ((top_fam_counts - top_fam_expect_counts) / (len(r1) - top_fam_expect_counts))

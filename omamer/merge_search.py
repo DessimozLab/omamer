@@ -1771,7 +1771,7 @@ class MergeSearch(object):
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
                 sst = 0.05
-                fst = sst #0.01
+                fst = 0.01
                 for i in numba.prange(top_n_fams):
                     ## early exit if we have no sub-hogs
                     #if fam_tab["HOGnum"][top_fam[i]] == 1:
@@ -1789,15 +1789,15 @@ class MergeSearch(object):
                     fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
-                    ## cumulate the counts for the HOGs going up the tree
-                    #c = _cumulate_counts(
-                    #        hog_counts[hog_s:hog_e],
-                    #        hog_tab["ParentOff"][hog_s:hog_e],
-                    #        hog_s)
+                    # cumulate the counts for the HOGs going up the tree
+                    c = _cumulate_counts(
+                            hog_counts[hog_s:hog_e],
+                            hog_tab["ParentOff"][hog_s:hog_e],
+                            hog_s)
                     
-                    # old cumulation of counts
-                    c = hog_counts[hog_s:hog_e].copy()
-                    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
+                    ## old cumulation of counts
+                    #c = hog_counts[hog_s:hog_e].copy()
+                    #cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
 
                     ## old expected count
                     #fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(

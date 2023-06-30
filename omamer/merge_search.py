@@ -1688,13 +1688,14 @@ class MergeSearch(object):
                 if len(top_fam) == 0:
                     continue
 
-                # minimum proportion of matches
+                '''# minimum proportion of matches
                 f = (top_fam_counts >= 0.05*len(r1))
                 top_fam = top_fam[f]
                 top_fam_scores = top_fam_scores[f]
                 top_fam_counts = top_fam_counts[f]
                 if len(top_fam) == 0:
                     continue
+                '''
 
                 # based on sequence coverage
                 top_fam_overlaps = compute_overlap(fam_highloc[top_fam], fam_lowloc[top_fam], k, query_len)

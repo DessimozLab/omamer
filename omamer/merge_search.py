@@ -591,7 +591,7 @@ def norm_hog_querysize_hogsize_kmerfreq(
 
 @numba.njit
 def hog_path_placement(
-    fam_hog_cumcounts, query_nkmer, fam_ref_hog_counts, fam_level_offsets, fam_hog2parent, fam_hog_counts, fam_ref_hog_prob):
+    fam_hog_cumcounts, query_nkmer, fam_level_offsets, fam_hog2parent, fam_hog_counts, fam_ref_hog_prob):
 
     fam_hog_scores = np.zeros(fam_hog_cumcounts.shape, dtype=np.float64)
     fam_bestpath = np.full(fam_hog_cumcounts.shape, False)
@@ -1799,15 +1799,15 @@ class MergeSearch(object):
                     c = hog_counts[hog_s:hog_e].copy()
                     cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
 
-                    # old expected count
-                    fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
-                            c, r1.size, query_occ, table_buff.size, ref_hog_counts[hog_s:hog_e],
-                            fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
+                    ## old expected count
+                    #fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
+                    #        c, r1.size, query_occ, table_buff.size, ref_hog_counts[hog_s:hog_e],
+                    #        fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
 
-                    ## new expected count
-                    #fam_hog_scores, fam_bestpath = hog_path_placement(
-                    #        c, r1.size, ref_hog_counts[hog_s:hog_e],
-                    #        fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], ref_hog_prob[hog_s:hog_e])
+                    # new expected count
+                    fam_hog_scores, fam_bestpath = hog_path_placement(
+                            c, r1.size,
+                            fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], ref_hog_prob[hog_s:hog_e])
 
                     # now choose the position on the path
                     choice = 0  # default root 

@@ -599,9 +599,8 @@ def hog_path_placement(
 
     # initialise root HOG
     fam_bestpath[0] = True
-    #expect_count = fam_ref_hog_prob[0] * query_nkmer
-    #fam_hog_scores[0] = (fam_hog_cumcounts[0] - expect_count) / query_nkmer
-    fam_hog_scores[0] = binom_neglogccdf(fam_hog_cumcounts[0], query_nkmer, fam_ref_hog_prob[0])
+    expect_count = fam_ref_hog_prob[0] * query_nkmer
+    fam_hog_scores[0] = (fam_hog_cumcounts[0] - expect_count) / query_nkmer
 
     # loop through hog levels
     for i in range(1, fam_level_offsets.size - 2):
@@ -616,17 +615,11 @@ def hog_path_placement(
         revcum_counts[hog_offsets] = qh_count
 
         ## HOG score
-        ## compute expected number of k-mer matches
-        #expect_counts = fam_ref_hog_prob[hog_offsets] * qh_count
-        #fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - expect_counts) / qh_count
-        
-        correction_factor = np.log(len(hog_offsets))
-        for i in hog_offsets:
-            fam_hog_scores[i] = binom_neglogccdf(fam_hog_cumcounts[i], qh_count, fam_ref_hog_prob[i])
-            fam_hog_scores[i] = max(0.0, fam_hog_scores[i]-correction_factor)
+        # compute expected number of k-mer matches
+        expect_count = fam_ref_hog_prob[hog_offsets] * qh_count
+        fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - expect_count) / qh_count
         
         # store bestpath
-        # NOTE: pv_score=False as we are working in neglog units.
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores, pv_score=False)
 
     return fam_hog_scores, fam_bestpath
@@ -1777,8 +1770,8 @@ class MergeSearch(object):
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
-                fst = 0
-                sst = 0 #0.05
+                sst = 0.05
+                fst = sst #0.01
                 for i in numba.prange(top_n_fams):
                     ## early exit if we have no sub-hogs
                     #if fam_tab["HOGnum"][top_fam[i]] == 1:
@@ -1792,42 +1785,44 @@ class MergeSearch(object):
                     #level_s = int(entry["LevelOff"])
                     #level_e = int(level_s+entry["LevelNum"]+1)
 
-                    ## retrieve cumulated HOG counts for that family
-                    #fam_hog_counts = hog_counts[hog_s:hog_e]
-
                     # get locally indexed variants
                     fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
-                    # cumulate the counts for the HOGs going up the tree
-                    c = _cumulate_counts(
-                            hog_counts[hog_s:hog_e],
-                            hog_tab["ParentOff"][hog_s:hog_e],
-                            hog_s)
-                    
-                    ## old cumulation of counts
-                    #fam_hog_cumcounts = fam_hog_counts.copy()
-                    #cumulate_counts_1fam(fam_hog_cumcounts, fam_level_offsets, fam_hog2parent, _sum, _max)
-                    #c = fam_hog_cumcounts
 
-                    # querysize_kmerfreq
-                    #fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
-                    #        c, r1.size, query_occ, table_buff.size, ref_hog_counts[hog_s:hog_e],
-                    #        fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
-                    fam_hog_scores, fam_bestpath = hog_path_placement(
-                            c, r1.size, ref_hog_counts[hog_s:hog_e],
-                            fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], ref_hog_prob[hog_s:hog_e])
+                    ## cumulate the counts for the HOGs going up the tree
+                    #c = _cumulate_counts(
+                    #        hog_counts[hog_s:hog_e],
+                    #        hog_tab["ParentOff"][hog_s:hog_e],
+                    #        hog_s)
+                    
+                    # old cumulation of counts
+                    c = hog_counts[hog_s:hog_e].copy()
+                    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
+
+                    # old expected count
+                    fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(
+                            c, r1.size, query_occ, table_buff.size, ref_hog_counts[hog_s:hog_e],
+                            fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
+
+                    ## new expected count
+                    #fam_hog_scores, fam_bestpath = hog_path_placement(
+                    #        c, r1.size, ref_hog_counts[hog_s:hog_e],
+                    #        fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], ref_hog_prob[hog_s:hog_e])
 
                     # now choose the position on the path
-                    choice = None  #0
-                    choice_score = 0  #-2
+                    choice = 0  # default root 
+                    choice_score = -2
+                    best_score = -2
                     for j in np.argwhere(fam_bestpath).flatten():
                         sf_score = fam_hog_scores[j]
+                        best_score = max(best_score, sf_score)
                         if sf_score >= sst:
                             choice = j
                             choice_score = sf_score
 
-                    if choice is None:
-                        # remove the choice.
+                    if choice_score == -2 and best_score < fst:
+                        # filter the family as no hog is above the sst or fst.
+                        # note: when no hog is below sst, but best score above fst we still place at the root.
                         queryFam_scores[zz,i] = -2.0
                         queryFam_counts[zz,i] = -1
                         queryFam_normcount[zz,i] = -1.0

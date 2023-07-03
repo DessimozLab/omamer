@@ -1709,7 +1709,7 @@ class MergeSearch(object):
 
                 top_fam_expect_counts = ref_fam_prob[top_fam] * len(r1)
                 top_fam_normcount = ((top_fam_counts - top_fam_expect_counts) / (len(r1) - top_fam_expect_counts))
-                #if top_fam_scores[0] != top_fam_scores[1]:
+                '''#if top_fam_scores[0] != top_fam_scores[1]:
                 if top_fam_scores[0] < 15:
                     pass
                 else:
@@ -1722,43 +1722,43 @@ class MergeSearch(object):
                     top_fam_normcount = top_fam_normcount[f]
                     top_fam_counts = top_fam_counts[f]
                     top_fam_overlaps = top_fam_overlaps[f]
-                
-                    # just filter the candidates by significance and use the normcount to order.
-                    # then order by raw count
-                    #idx = (-top_fam_counts).argsort()
-                    idx = (-top_fam_normcount).argsort()
+                '''
+                # just filter the candidates by significance and use the normcount to order.
+                # then order by raw count
+                #idx = (-top_fam_counts).argsort()
+                idx = (-top_fam_normcount).argsort()
+                top_fam = top_fam[idx]
+                top_fam_scores = top_fam_scores[idx]
+                top_fam_normcount = top_fam_normcount[idx]
+                top_fam_counts = top_fam_counts[idx]
+                top_fam_overlaps = top_fam_overlaps[idx]
+
+                # TODO: change this so that we keep multiple best hits.
+                # if we still have overlap, order by difference to median sequence length
+                #if top_fam_counts[0] != top_fam_counts[1]:
+                if top_fam_normcount[0] != top_fam_normcount[1]:
+                    # clear winner
+                    pass
+                else:
+                    # need to decide which to keep based on the kmer count
+                    # filter to just the top
+                    #f = (top_fam_counts == top_fam_counts[0])
+                    f = (top_fam_normcount == top_fam_normcount[0])
+                    top_fam = top_fam[f]
+                    top_fam_scores = top_fam_scores[f]
+                    top_fam_normcount = top_fam_normcount[f]
+                    top_fam_counts = top_fam_counts[f]
+                    top_fam_overlaps = top_fam_overlaps[f]
+
+                    ## then order by difference to median sequence length
+                    #top_fam_seqlen_diff = np.abs(hog_tab['MedianSeqLen'][top_fam] - query_len)
+                    #idx = top_fam_seqlen_diff.argsort()
+                    idx = (-top_fam_overlaps).argsort()
                     top_fam = top_fam[idx]
                     top_fam_scores = top_fam_scores[idx]
                     top_fam_normcount = top_fam_normcount[idx]
                     top_fam_counts = top_fam_counts[idx]
                     top_fam_overlaps = top_fam_overlaps[idx]
-
-                    # TODO: change this so that we keep multiple best hits.
-                    # if we still have overlap, order by difference to median sequence length
-                    #if top_fam_counts[0] != top_fam_counts[1]:
-                    if top_fam_normcount[0] != top_fam_normcount[1]:
-                        # clear winner
-                        pass
-                    else:
-                        # need to decide which to keep based on the kmer count
-                        # filter to just the top
-                        #f = (top_fam_counts == top_fam_counts[0])
-                        f = (top_fam_normcount == top_fam_normcount[0])
-                        top_fam = top_fam[f]
-                        top_fam_scores = top_fam_scores[f]
-                        top_fam_normcount = top_fam_normcount[f]
-                        top_fam_counts = top_fam_counts[f]
-                        top_fam_overlaps = top_fam_overlaps[f]
-
-                        ## then order by difference to median sequence length
-                        #top_fam_seqlen_diff = np.abs(hog_tab['MedianSeqLen'][top_fam] - query_len)
-                        #idx = top_fam_seqlen_diff.argsort()
-                        idx = (-top_fam_overlaps).argsort()
-                        top_fam = top_fam[idx]
-                        top_fam_scores = top_fam_scores[idx]
-                        top_fam_normcount = top_fam_normcount[idx]
-                        top_fam_counts = top_fam_counts[idx]
-                        top_fam_overlaps = top_fam_overlaps[idx]
 
                 # store them with corresponding scores
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]

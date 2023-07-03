@@ -1679,7 +1679,7 @@ class MergeSearch(object):
                 top_fam_counts = top_fam_counts[idx]
 
 
-                alpha = -1.0*np.log(0.05)
+                alpha = -1.0*np.log(0.01)
                 #f = (top_fam_scores >= (1-(alpha/len(ref_fam_counts))))
                 f = top_fam_scores >= alpha
                 top_fam = top_fam[f]
@@ -1699,14 +1699,13 @@ class MergeSearch(object):
 
                 # based on sequence coverage
                 top_fam_overlaps = compute_overlap(fam_highloc[top_fam], fam_lowloc[top_fam], k, query_len)
-                '''f = (top_fam_overlaps >= (30/query_len))
+                f = (top_fam_overlaps >= (30/query_len))
                 top_fam = top_fam[f]
                 top_fam_scores = top_fam_scores[f]
                 top_fam_counts = top_fam_counts[f]
                 top_fam_overlaps = top_fam_overlaps[f]
                 if len(top_fam) == 0:
                     continue
-                '''
 
                 top_fam_expect_counts = ref_fam_prob[top_fam] * len(r1)
                 top_fam_normcount = ((top_fam_counts - top_fam_expect_counts) / (len(r1) - top_fam_expect_counts))
@@ -1792,15 +1791,15 @@ class MergeSearch(object):
                     fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
-                    # cumulate the counts for the HOGs going up the tree
-                    c = _cumulate_counts(
-                            hog_counts[hog_s:hog_e],
-                            hog_tab["ParentOff"][hog_s:hog_e],
-                            hog_s)
+                    ## cumulate the counts for the HOGs going up the tree
+                    #c = _cumulate_counts(
+                    #        hog_counts[hog_s:hog_e],
+                    #        hog_tab["ParentOff"][hog_s:hog_e],
+                    #        hog_s)
                     
-                    ## old cumulation of counts
-                    #c = hog_counts[hog_s:hog_e].copy()
-                    #cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
+                    # old cumulation of counts
+                    c = hog_counts[hog_s:hog_e].copy()
+                    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
 
                     ## old expected count
                     #fam_hog_scores, fam_bestpath = norm_hog_querysize_hogsize_kmerfreq(

@@ -156,6 +156,9 @@ search_parser.add_argument(
     "--threshold", default=0.05, type=float, help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be."
 )
 search_parser.add_argument(
+    "--family_alpha", default=0.05, type=float, help="Significance threshold used when filtering families."
+)
+search_parser.add_argument(
     "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."
 )
 search_parser.add_argument(

@@ -110,7 +110,7 @@ def search(args):
         seqs.append(str(rec.seq))
         if len(ids) == args.chunksize:
             ms.merge_search(
-                seqs=seqs, ids=ids, fasta_file=None, score=score, top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)
+                seqs=seqs, ids=ids, fasta_file=None, score=score, top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64, alpha=args.family_alpha, sst=args.threshold)
             )
             pbar.update(len(ids))
             df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)

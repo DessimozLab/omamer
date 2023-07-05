@@ -1366,7 +1366,7 @@ class MergeSearch(object):
             raise ValueError('HOGProbability not in db')
 
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize_hogsize_kmerfreq', top_m_fams=100,
-        top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64)):
+        top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64, alpha=0.05, sst=0.05)):
 
         # load query sequences
         t1 = time()
@@ -1441,7 +1441,9 @@ class MergeSearch(object):
             w_size = w_size,
             dist = dist,
             ref_fam_prob=self.ref_fam_prob,
-            ref_hog_prob=self.ref_hog_prob)
+            ref_hog_prob=self.ref_hog_prob,
+            alpha_cutoff=alpha,
+            sst=sst)
 
         t5 = time()
         ts =  t5 - t4
@@ -1591,7 +1593,9 @@ class MergeSearch(object):
             w_size,
             dist,
             ref_fam_prob,
-            ref_hog_prob
+            ref_hog_prob,
+            alpha_cutoff,
+            sst
         ):
             '''
             top_n_fams: number of family for which HOG scores are computed
@@ -1678,8 +1682,7 @@ class MergeSearch(object):
                 top_fam_scores = top_fam_scores[idx]
                 top_fam_counts = top_fam_counts[idx]
 
-
-                alpha = -1.0*np.log(0.05)
+                alpha = -1.0*np.log(alpha_cutoff)
                 #f = (top_fam_scores >= (1-(alpha/len(ref_fam_counts))))
                 f = top_fam_scores >= alpha
                 top_fam = top_fam[f]
@@ -1699,7 +1702,7 @@ class MergeSearch(object):
 
                 # based on sequence coverage
                 top_fam_overlaps = compute_overlap(fam_highloc[top_fam], fam_lowloc[top_fam], k, query_len)
-                f = (top_fam_overlaps >= (30/query_len))
+                f = (top_fam_overlaps >= (25/query_len))
                 top_fam = top_fam[f]
                 top_fam_scores = top_fam_scores[f]
                 top_fam_counts = top_fam_counts[f]
@@ -1709,6 +1712,7 @@ class MergeSearch(object):
 
                 top_fam_expect_counts = ref_fam_prob[top_fam] * len(r1)
                 top_fam_normcount = ((top_fam_counts - top_fam_expect_counts) / (len(r1) - top_fam_expect_counts))
+                '''
                 #if top_fam_scores[0] != top_fam_scores[1]:
                 if top_fam_scores[0] < 15:
                     pass
@@ -1722,43 +1726,43 @@ class MergeSearch(object):
                     top_fam_normcount = top_fam_normcount[f]
                     top_fam_counts = top_fam_counts[f]
                     top_fam_overlaps = top_fam_overlaps[f]
-                
-                    # just filter the candidates by significance and use the normcount to order.
-                    # then order by raw count
-                    #idx = (-top_fam_counts).argsort()
-                    idx = (-top_fam_normcount).argsort()
+                '''
+                # just filter the candidates by significance and use the normcount to order.
+                # then order by raw count
+                #idx = (-top_fam_counts).argsort()
+                idx = (-top_fam_normcount).argsort()
+                top_fam = top_fam[idx]
+                top_fam_scores = top_fam_scores[idx]
+                top_fam_normcount = top_fam_normcount[idx]
+                top_fam_counts = top_fam_counts[idx]
+                top_fam_overlaps = top_fam_overlaps[idx]
+
+                # TODO: change this so that we keep multiple best hits.
+                # if we still have overlap, order by difference to median sequence length
+                #if top_fam_counts[0] != top_fam_counts[1]:
+                if top_fam_normcount[0] != top_fam_normcount[1]:
+                    # clear winner
+                    pass
+                else:
+                    # need to decide which to keep based on the kmer count
+                    # filter to just the top
+                    #f = (top_fam_counts == top_fam_counts[0])
+                    f = (top_fam_normcount == top_fam_normcount[0])
+                    top_fam = top_fam[f]
+                    top_fam_scores = top_fam_scores[f]
+                    top_fam_normcount = top_fam_normcount[f]
+                    top_fam_counts = top_fam_counts[f]
+                    top_fam_overlaps = top_fam_overlaps[f]
+
+                    ## then order by difference to median sequence length
+                    #top_fam_seqlen_diff = np.abs(hog_tab['MedianSeqLen'][top_fam] - query_len)
+                    #idx = top_fam_seqlen_diff.argsort()
+                    idx = (-top_fam_overlaps).argsort()
                     top_fam = top_fam[idx]
                     top_fam_scores = top_fam_scores[idx]
                     top_fam_normcount = top_fam_normcount[idx]
                     top_fam_counts = top_fam_counts[idx]
                     top_fam_overlaps = top_fam_overlaps[idx]
-
-                    # TODO: change this so that we keep multiple best hits.
-                    # if we still have overlap, order by difference to median sequence length
-                    #if top_fam_counts[0] != top_fam_counts[1]:
-                    if top_fam_normcount[0] != top_fam_normcount[1]:
-                        # clear winner
-                        pass
-                    else:
-                        # need to decide which to keep based on the kmer count
-                        # filter to just the top
-                        #f = (top_fam_counts == top_fam_counts[0])
-                        f = (top_fam_normcount == top_fam_normcount[0])
-                        top_fam = top_fam[f]
-                        top_fam_scores = top_fam_scores[f]
-                        top_fam_normcount = top_fam_normcount[f]
-                        top_fam_counts = top_fam_counts[f]
-                        top_fam_overlaps = top_fam_overlaps[f]
-
-                        ## then order by difference to median sequence length
-                        #top_fam_seqlen_diff = np.abs(hog_tab['MedianSeqLen'][top_fam] - query_len)
-                        #idx = top_fam_seqlen_diff.argsort()
-                        idx = (-top_fam_overlaps).argsort()
-                        top_fam = top_fam[idx]
-                        top_fam_scores = top_fam_scores[idx]
-                        top_fam_normcount = top_fam_normcount[idx]
-                        top_fam_counts = top_fam_counts[idx]
-                        top_fam_overlaps = top_fam_overlaps[idx]
 
                 # store them with corresponding scores
                 queryFam_ranked[zz, :top_n_fams] = top_fam[:top_n_fams]
@@ -1771,32 +1775,19 @@ class MergeSearch(object):
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
-                sst = 0.05
-                fst = 0.01
+                #sst = 0.05  # passed as argument
+                fst = sst
                 for i in numba.prange(top_n_fams):
-                    ## early exit if we have no sub-hogs
-                    #if fam_tab["HOGnum"][top_fam[i]] == 1:
-                    #    queryHog_id[zz,i] = fam_tab["HOGoff"][top_fam[i]]
-                    #    continue
-
                     # now find the family structure.
                     entry = fam_tab[top_fam[i]]
                     hog_s = entry["HOGoff"]
                     hog_e = hog_s+entry["HOGnum"]
-                    #level_s = int(entry["LevelOff"])
-                    #level_e = int(level_s+entry["LevelNum"]+1)
 
                     # get locally indexed variants
                     fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
-                    ## cumulate the counts for the HOGs going up the tree
-                    #c = _cumulate_counts(
-                    #        hog_counts[hog_s:hog_e],
-                    #        hog_tab["ParentOff"][hog_s:hog_e],
-                    #        hog_s)
-                    
-                    # old cumulation of counts
+                    # cumulation of counts
                     c = hog_counts[hog_s:hog_e].copy()
                     cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
 
@@ -1805,7 +1796,7 @@ class MergeSearch(object):
                     #        c, r1.size, query_occ, table_buff.size, ref_hog_counts[hog_s:hog_e],
                     #        fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], hog_occurs[hog_s:hog_e])
 
-                    # new expected count
+                    # new expected count.
                     fam_hog_scores, fam_bestpath = hog_path_placement(
                             c, r1.size,
                             fam_level_offsets, fam_hog2parent, hog_counts[hog_s:hog_e], ref_hog_prob[hog_s:hog_e])

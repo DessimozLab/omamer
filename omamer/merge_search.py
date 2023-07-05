@@ -1366,7 +1366,7 @@ class MergeSearch(object):
             raise ValueError('HOGProbability not in db')
 
     def merge_search(self, seqs=None, ids=None, fasta_file=None, score='querysize_hogsize_kmerfreq', top_m_fams=100,
-        top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64, alpha=0.05, sst=0.05)):
+        top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64), alpha=0.05, sst=0.05):
 
         # load query sequences
         t1 = time()

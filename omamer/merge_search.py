@@ -1775,8 +1775,6 @@ class MergeSearch(object):
                 ### Compute HOG scores and bestpath for top n families
                 # iterate over top n families
                 # TODO: generalise this so that it works for more than n=1
-                #sst = 0.05  # passed as argument
-                fst = sst
                 for i in numba.prange(top_n_fams):
                     # now find the family structure.
                     entry = fam_tab[top_fam[i]]
@@ -1812,14 +1810,6 @@ class MergeSearch(object):
                             choice = j
                             choice_score = sf_score
 
-                    '''if choice_score == -2 and best_score < fst:
-                        # filter the family as no hog is above the sst or fst.
-                        # note: when no hog is below sst, but best score above fst we still place at the root.
-                        queryFam_scores[zz,i] = -2.0
-                        queryFam_counts[zz,i] = -1
-                        queryFam_normcount[zz,i] = -1.0
-                        continue
-                    '''
                     queryHog_id[zz,i] = choice + hog_s
                     queryHog_scores[zz,i] = choice_score
                     queryHog_counts[zz,i] = c[int(choice)] if choice_score != -2.0 else -1

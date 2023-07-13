@@ -20,7 +20,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
-from argparse import ArgumentParser, HelpFormatter, _SubParsersAction, FileType
+from argparse import ArgumentParser, HelpFormatter, _SubParsersAction, FileType, ArgumentDefaultsHelpFormatter
 from omamer._runners import mkdb_oma, search, info_db
 from omamer import __version__, __copyright__
 from tables import PerformanceWarning
@@ -136,6 +136,7 @@ mkdb_parser.add_argument(
 
 search_parser = subparsers.add_parser(
     "search",
+    formatter_class=ArgumentDefaultsHelpFormatter,
     help="Search an existing database.",
     description="Search for protein sequences, given in FASTA format, against an existing database.",
 )
@@ -153,10 +154,10 @@ search_parser.add_argument(
     help="Type of OMAmer-score to use. Options are default and sensitive."
 )
 search_parser.add_argument(
-    "--threshold", default=0.05, type=float, help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be."
+    "--threshold", default=0.10, type=float, help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be."
 )
 search_parser.add_argument(
-    "--family_alpha", default=0.05, type=float, help="Significance threshold used when filtering families."
+    "--family_alpha", default=1e-6, type=float, help="Significance threshold used when filtering families."
 )
 search_parser.add_argument(
     "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."

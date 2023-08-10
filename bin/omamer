@@ -147,12 +147,7 @@ search_parser.add_argument(
 search_parser.add_argument(
     "--query", required=True, help="Path to FASTA formatted sequences", type=FileType("r")
 )
-search_parser.add_argument(
-    "--score", 
-    default="default", 
-    choices=["default", "sensitive"], 
-    help="Type of OMAmer-score to use. Options are default and sensitive."
-)
+
 search_parser.add_argument(
     "--threshold", default=0.10, type=float, help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be."
 )
@@ -160,8 +155,14 @@ search_parser.add_argument(
     "--family_alpha", default=1e-6, type=float, help="Significance threshold used when filtering families."
 )
 search_parser.add_argument(
-    "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."
-)
+    "--family_only", action='store_true', help="Set to only place at family level."
+) 
+
+# TODO: reintroduce this? 
+#search_parser.add_argument(
+#    "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."
+#)
+
 search_parser.add_argument(
     "--out",
     help="Path to output (default stdout)",
@@ -184,6 +185,7 @@ search_parser.add_argument(
     choices=["debug", "info", "warning"],
     help="Logging level.",
 )
+
 info_parser = subparsers.add_parser(
     "info",
     help="Show metadata about an omamer database.",

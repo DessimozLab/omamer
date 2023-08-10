@@ -20,7 +20,6 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
 from Bio import SeqIO, SearchIO
-from ete3 import Tree
 from multiprocessing import sharedctypes
 from property_manager import lazy_property, cached_property
 from PySAIS import sais
@@ -73,13 +72,6 @@ class Index(object):
         # performance features
         self.nthreads = nthreads
 
-    # ### useful for validation
-    # def set_species(self, sp_ii):
-    #     self.sp_filter = np.full((len(self.db._sp_tab),), True)
-    #     #self.sp_filter[:] = True
-    #     for i in sp_ii:
-    #         self.sp_filter[i] = False
-
     @property
     def sp_filter(self):
         tax_tab = self.db._tax_tab[:]
@@ -94,17 +86,6 @@ class Index(object):
                 for sp_off in descendant_species:
                     sp_filter[tax_tab['SpeOff'][sp_off]] = True
         return sp_filter
-
-    @property
-    def tax_filter(self):
-        tax_filter = np.full((len(self.db._tax_tab),), False)
-        for hidden_taxon in self.hidden_taxa:
-            htax_off = np.searchsorted(self.db._tax_tab.col('ID'), hidden_taxon.encode('ascii'))
-            tax_filter[htax_off] = True
-            descendant_taxa = get_descendants(htax_off, self.db._tax_tab, self.db._ctax_arr)
-            for htax_off in descendant_taxa:
-                tax_filter[htax_off] = True
-        return tax_filter
 
     ### same as in database class; easy access to data ###
     def _get_node_if_exist(self, node):
@@ -295,8 +276,8 @@ class Index(object):
             sa_filter,
             self.k,
             n,
-            self.db._prot_tab.col("SpeOff"),
-            self.db._prot_tab.col("HOGoff"),
+            self.db._prot_tab.col("SpeOff"),   # need to change (i.e., not store in DB)
+            self.db._prot_tab.col("HOGoff"),   # need to change (i.e., not store in DB)
             self.sp_filter,
         )
 
@@ -404,6 +385,7 @@ class SequenceBuffer(object):
 
 
 class SequenceBufferFasta(SequenceBuffer):
+    # Note: used in omamer2matreex but not in omamer.
     def __init__(self, fasta_file, alphabet_n=21):
         seqs, ids = self.parse_fasta(fasta_file)
         super().__init__(seqs, ids, alphabet_n)
@@ -417,47 +399,3 @@ class SequenceBufferFasta(SequenceBuffer):
                 ids.append(rec.id)
                 seqs.append(str(rec.seq))
         return seqs, ids
-    
-class SequenceBufferDB(SequenceBuffer):
-    '''
-    TO DO:
-     - bypass add_seqs
-    '''
-    def __init__(self, prot_offsets, db, alphabet_n=21):
-        seqs, ids = self.load_from_db(prot_offsets, db._prot_tab, db._seq_buff)
-        super().__init__(seqs, list(ids), alphabet_n)
-    
-    @staticmethod
-    def _get_seq(prot_off, prot_tab, seq_buff):
-        prot_ent = prot_tab[prot_off]
-        seq_off = prot_ent['SeqOff']
-        return seq_buff[seq_off:seq_off + prot_ent['SeqLen'] - 1].tobytes().decode("ascii")
-    
-    def load_from_db(self, prot_offsets, prot_tab, seq_buff):
-        seqs = [self._get_seq(prot_off, prot_tab, seq_buff) for prot_off in prot_offsets]
-        return seqs, prot_offsets
-        
-class QuerySequenceBuffer(SequenceBufferDB):
-    '''
-    mimic old QuerySequenceBuffer
-    '''
-    def __init__(self, db, query_sp, alphabet_n=21, fam_filter=np.array([])):
-        self.query_sp = query_sp if isinstance(query_sp, bytes) else query_sp.encode('ascii')
-        prot_offsets = self.get_query_offsets(db, query_sp, fam_filter)
-        super().__init__(prot_offsets, db, alphabet_n)
-        
-    def get_query_offsets(self, db, query_sp, fam_filter):
-        # select all proteins from species
-        sp_off = np.searchsorted(db._sp_tab.col('ID'), self.query_sp)
-        sp_ent = db._sp_tab[sp_off]
-        prot_off = sp_ent['ProtOff']
-        prot_offsets = np.arange(prot_off, prot_off + sp_ent['ProtNum'], dtype=int)
-        # filter queries by family
-        if fam_filter.size > 0:
-            query_fam_offsets = db._prot_tab.col('FamOff')[prot_offsets]
-            return prot_offsets[fam_filter[query_fam_offsets]]
-        else:
-            return prot_offsets
-
-class SequenceBufferOMA(SequenceBuffer):
-    pass

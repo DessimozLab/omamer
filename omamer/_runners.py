@@ -40,25 +40,12 @@ def mkdb_oma(args):
     LOG.info('Adding sequences')
     db.build_database(oma_db_fn, nwk_fn)
 
-    ## tmp argument of species to include (inverse of hidden taxa)
-    #import numpy as np
-    #hidden_taxa = []
-    #if args.species:
-    #    with open(args.species, 'r') as inf:
-    #        sp_offsets = np.array([int(l.rstrip()) for l in inf.readlines()])
-    #        sp_offsets.sort()
-    #    f = np.full(db._sp_tab.nrows, False)
-    #    f[sp_offsets] = True
-    #    hidden_taxa = list(map(lambda x: x.decode('ascii'), db._sp_tab[:]['ID'][~f]))
-    #elif args.hidden_taxa:
-    #    hidden_taxa=[' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
-
     hidden_taxa = []
     if args.hidden_taxa:
         hidden_taxa = [' '.join(x.split('_')) for x in args.hidden_taxa.split(',')]
 
     LOG.info('Building index')
-    db.ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, nthreads=1, hidden_taxa=hidden_taxa)
+    db.ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa)
     db.ki.build_kmer_table()
     db.add_metadata()
     db.add_hogcounts()
@@ -67,8 +54,8 @@ def mkdb_oma(args):
     LOG.info('Done')
 
 def search(args):
-    from Bio import SeqIO
     from tqdm import tqdm
+    import numba
     import numpy as np
     import os
     import sys
@@ -76,59 +63,30 @@ def search(args):
     from .database import Database
     from .index import Index
     from .merge_search import MergeSearch
+    from .sequence_reader import SequenceReader
 
-    low_mem = False  # need to reintroduce the low memory
-    if not low_mem:
-        # Set number of threads for numba.
-        # TODO: check whether we also need to check multiprocessing param for numpy.
-        import numba
-        nthreads = args.nthreads if args.nthreads > 0 else os.cpu_count()
-        numba.set_num_threads(nthreads)
+    # Set number of threads for numbq
+    nthreads = args.nthreads if args.nthreads > 0 else os.cpu_count()
+    numba.set_num_threads(nthreads)
 
     # reload
     db = Database(args.db)
 
     # setup search
-    ms = MergeSearch(ki=db.ki, nthreads=args.nthreads, low_mem=False, include_extant_genes=args.include_extant_genes)
-
-    if args.score == 'default':
-        score = 'querysize_hogsize_kmerfreq'
-    elif args.score == 'sensitive':
-        score = 'nonparam_naive'
+    ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output
     print_header = (args.out.name != sys.stdout.name)
 
-    # initialise query
-    ids = []
-    seqs = []
-
     pbar = tqdm(desc='Searching')
-    for rec in filter(lambda x: len(x.seq) >= db.ki.k,
-                      SeqIO.parse(args.query, 'fasta')):
-        ids.append(rec.id)
-        seqs.append(str(rec.seq))
-        if len(ids) == args.chunksize:
-            ms.merge_search(
-                seqs=seqs, ids=ids, fasta_file=None, score=score, top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64), alpha=args.family_alpha, sst=args.threshold
-            )
-            pbar.update(len(ids))
-            df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
-            if df.size >0:
-                df.to_csv(args.out, sep='\t', index=False, header=print_header)
-            ids = []
-            seqs = []
-            print_header = False
-
-    # final search
-    if len(ids) > 0:
-        ms.merge_search(
-            seqs=seqs, ids=ids, fasta_file=None, score=score, top_m_fams=100, top_n_fams=1, perm_nr=1, w_size=6, dist='poisson', fam_filter=np.array([], dtype=np.int64), alpha=args.family_alpha, sst=args.threshold
+    for (ids, seqs) in SequenceReader.read(args.query, k=db.ki.k, format='fasta', chunksize=args.chunksize):
+        df = ms.merge_search(
+            seqs=seqs, ids=ids, top_n_fams=10, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only
         )
-        df = ms.output_results(overlap=0, fst=0, sst=args.threshold, ref_taxon=args.reference_taxon)
         pbar.update(len(ids))
-        if df.size >0:
+        if df.size > 0:
             df.to_csv(args.out, sep='\t', index=False, header=print_header)
+            print_header = False
 
     pbar.close()
     db.close()
@@ -136,6 +94,7 @@ def search(args):
 
 def info_db(args):
     from .database import Database
+
     with Database(args.db) as db:
         print("=" * 80)
         for k, v in db.get_metadata().items():

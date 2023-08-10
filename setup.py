@@ -30,7 +30,8 @@ with open('{:s}/__init__.py'.format(name), 'rt') as fp:
             exec(line.rstrip())
 
 # TODO
-requirements = ['biopython', 'ete3', 'fast-fisher', 'numba', 'numpy', 'pandas', 'property_manager', 'pysais', 'scipy', 'tables', 'tqdm']
+requirements = ['biopython', 'ete3', 'fast-fisher', 'numba', 'numpy', 'pandas', 'property_manager', 'scipy', 'tables', 'tqdm']
+extra_requirements = {'build': ['pysais']}
 
 desc = 'OMAmer - tree-driven and alignment-free protein assignment to sub-families'
 
@@ -43,6 +44,7 @@ setup(
     description=desc,
     packages=find_packages(),
     install_requires=requirements,
+    extra_requires=extra_requirements,
     python_requires=">=3.6",
     license='LGPLv3',
     scripts=['bin/omamer'])

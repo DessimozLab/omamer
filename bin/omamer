@@ -157,6 +157,9 @@ search_parser.add_argument(
 search_parser.add_argument(
     "--family_only", action='store_true', help="Set to only place at family level."
 ) 
+search_parser.add_argument(
+    "--top_n_fams", default=1, type=int, help="Number of top level families to place into. By default, placed into only in the best scoring family."
+) 
 
 # TODO: reintroduce this? 
 #search_parser.add_argument(

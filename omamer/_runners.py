@@ -81,7 +81,7 @@ def search(args):
     pbar = tqdm(desc='Searching')
     for (ids, seqs) in SequenceReader.read(args.query, k=db.ki.k, format='fasta', chunksize=args.chunksize):
         df = ms.merge_search(
-            seqs=seqs, ids=ids, top_n_fams=10, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only
+            seqs=seqs, ids=ids, top_n_fams=args.top_n_fams, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only
         )
         pbar.update(len(ids))
         if df.size > 0:

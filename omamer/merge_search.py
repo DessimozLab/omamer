@@ -503,7 +503,7 @@ class MergeSearch(object):
             raise ValueError('HOGProbability not in db')
 
     def merge_search(self, seqs=None, ids=None, fasta_file=None,
-        top_n_fams=10, alpha=0.05, sst=0.05, family_only=False):
+        top_n_fams=1, alpha=0.05, sst=0.05, family_only=False):
         t1 = time()
         if seqs:
             sbuff = SequenceBuffer(seqs=seqs, ids=ids)

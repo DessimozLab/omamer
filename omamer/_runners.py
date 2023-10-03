@@ -48,7 +48,6 @@ def mkdb_oma(args):
     db.ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa)
     db.ki.build_kmer_table(seq_buff)
     db.add_metadata()
-    #db.add_hogcounts()
 
     db.close()
     LOG.info('Done')

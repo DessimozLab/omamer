@@ -19,19 +19,15 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
-from Bio import SeqIO
-from itertools import repeat, chain
-from property_manager import lazy_property
+from collections import defaultdict
+from itertools import repeat
 from tqdm import tqdm
-import collections
-import logging
 import numpy as np
 import os
 import tables
 
 from ._utils import LOG, is_progress_disabled
 from .hierarchy import (
-    get_lca_off,
     get_hog_child_prots,
     get_hog2taxa,
     traverse,
@@ -46,7 +42,9 @@ class Database(object):
     '''
 
     class ProteinTableFormat(tables.IsDescription):
-        ID = tables.StringCol(255, pos=1, dflt=b"")  # todo: replace with a SequenceBuffer
+        # Note, the ID field could be generalised and replaced with a SequenceBuffer,
+        # for now use OMA formatted sequence identifiers. 5CHAR + max 7digit.
+        ID = tables.StringCol(12, pos=1, dflt=b"")
         SpeOff = tables.Int32Col(pos=2)
         HOGoff = tables.UInt32Col(pos=3)
         SeqLen = tables.UInt32Col(pos=4)
@@ -64,7 +62,7 @@ class Database(object):
         HOGtaxaOff = tables.UInt32Col(pos=9)
         HOGtaxaNum = tables.UInt32Col(pos=10)
         LCAtaxOff = tables.UInt32Col(pos=11)
-        NrMemberGenes = tables.Int64Col(pos=12)  # could be removed (30MB)
+        NrMemberGenes = tables.UInt32Col(pos=12)  # could be removed (30MB)
         CompletenessScore = tables.Float64Col(pos=13)  # could be removed (30MB)
         MedianSeqLen = tables.UInt64Col(pos=14)
 
@@ -81,7 +79,7 @@ class Database(object):
         TaxOff = tables.UInt32Col(pos=2)
 
     class TaxonomyTableFormat(tables.IsDescription):
-        ID = tables.StringCol(255, pos=1, dflt=b"")  # todo: replace with a SequenceBuffer
+        ID = tables.StringCol(255, pos=1, dflt=b"")
         TaxID = tables.Int32Col(pos=2)
         ParentOff = tables.Int32Col(pos=3)
         ChildrenOff = tables.Int32Col(pos=4)
@@ -131,100 +129,6 @@ class Database(object):
 
         return self.__getattribute__(attr)
 
-    ### method attributes to facilitate access to data stored in hdf5 file ###
-    #@property
-    #def _prot_tab(self):
-    #    if "/Protein" in self.db:
-    #        return self.db.root.Protein
-    #    else:
-    #        return self.db.create_table(
-    #            "/", "Protein", self.ProteinTableFormat, filters=self._compr
-    #        )
-
-    #@property
-    #def _hog_tab(self):
-    #    return self._db_HOG
-    #    '''
-    #    if "/HOG" in self.db:
-    #        return self.db.root.HOG
-    #    else:
-    #        return self.db.create_table(
-    #            "/", "HOG", self.HOGtableFormat, filters=self._compr
-    #        )
-    #    '''
-
-    #@property
-    #def _fam_tab(self):
-    #    if "/Family" in self.db:
-    #        return self.db.root.Family
-    #    else:
-    #        return self.db.create_table(
-    #            "/", "Family", self.FamilyTableFormat, filters=self._compr
-    #        )
-
-    #@property
-    #def _sp_tab(self):
-    #    if "/Species" in self.db:
-    #        return self.db.root.Species
-    #    else:
-    #        return self.db.create_table(
-    #            "/", "Species", self.SpeciesTableFormat, filters=self._compr
-    #        )
-
-    #@property
-    #def _tax_tab(self):
-    #    if "/Taxonomy" in self.db:
-    #        return self.db.root.Taxonomy
-    #    else:
-    #        return self.db.create_table(
-    #            "/", "Taxonomy", self.TaxonomyTableFormat, filters=self._compr
-    #        )
-
-    ## arrays
-    #@property
-    #def _seq_buff(self):
-    #    if "/SequenceBuffer" in self.db:
-    #        return self.db.root.SequenceBuffer
-    #    else:
-    #        # initiate
-    #        return self.db.create_earray(
-    #            "/", "SequenceBuffer", tables.StringAtom(1), (0,), filters=self._compr
-    #        )
-
-    # The below arrays are of fixed length and created later as carray
-    #@property
-    #def _chog_arr(self):
-    #    if "/ChildrenHOG" in self.db:
-    #        return self.db.root.ChildrenHOG
-    #    else:
-    #        return None
-
-    #@property
-    #def _cprot_arr(self):
-    #    if "/ChildrenProt" in self.db:
-    #        return self.db.root.ChildrenProt
-    #    else:
-    #        return None
-
-    #@property
-    #def _hog_taxa_buff(self):
-    #    return self._db_HOGtaxa
-
-    #@property
-    #def _ctax_arr(self):
-    #    if "/ChildrenTax" in self.db:
-    #        return self.db.root.ChildrenTax
-    #    else:
-    #        return None
-
-    #@property
-    #def _level_arr(self):
-    #    if "/LevelOffsets" in self.db:
-    #        return self.db.root.LevelOffsets
-    #    else:
-    #        return None
-
-    ### functions common to DatabaseFromOMA and DatabaseFromFasta ###
     def initiate_tax_tab(self, stree_path):
         """
 	except SpeOff column
@@ -319,7 +223,7 @@ class Database(object):
 
         def _get_parents(hog_off, hog_num, hogs):
             parents = []
-            parent2child_hogs = collections.defaultdict(list)
+            parent2child_hogs = defaultdict(list)
 
             # sort alphabetically and track their true offsets
             alpha_hogs, alpha_hogs_offs = map(
@@ -419,7 +323,6 @@ class Database(object):
         level_offsets_off = 0
 
         for (fam_id, hogs) in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
-
             ### hogs
             # sort by level
             hogs = sorted(hogs, key=lambda x: len(x.split(b".")))
@@ -518,10 +421,6 @@ class Database(object):
             fam_off += 1
             level_offsets_off += hog_level_offsets_num
 
-        # fill family and HOG tables
-        #self._fam_tab.append(fam_rows)
-        #hog_tab.append(hog_rows)
-        
         # flush the family and HOG tables and then reset autoindex
         fam_tab.flush()
         hog_tab.flush()
@@ -620,7 +519,7 @@ class Database(object):
         (hog_taxa_idx, hog_taxa_buff) = get_hog2taxa(
             self._db_HOG[:],
             self._db_Species[:],
-            self._db_Protein[:],
+            self._db_Protein.col("SpeOff"),
             self._db_ChildrenProt[:],
             self._db_Taxonomy[:],
             self._db_ChildrenHOG[:],
@@ -664,12 +563,12 @@ class Database(object):
         Compute the median sequence length for each HOG
         '''
         def compute_median_seq_len(
-            hog_off, hog_tab, chog_buff, prot_tab, cprot_buff, median_seq_lengths):
+            hog_off, hog_tab, chog_buff, prot_seq_lens, cprot_buff, median_seq_lengths):
 
-            def _compute_median_seq_len(hog_off, parent2seq_lengths, prot_tab, hog_tab2, cprot_buff, median_seq_lengths):
+            def _compute_median_seq_len(hog_off, parent2seq_lengths, prot_seq_lens, hog_tab2, cprot_buff, median_seq_lengths):
 
                 # compute HOG sequence lengths
-                seq_lengths = list(map(lambda x: prot_tab[x]['SeqLen'], get_hog_child_prots(hog_off, hog_tab2, cprot_buff)))
+                seq_lengths = list(map(lambda x: prot_seq_lens[x], get_hog_child_prots(hog_off, hog_tab2, cprot_buff)))
 
                 # merge these with child sequence lentgths (stored in parent2seq_lengths)
                 seq_lengths = seq_lengths + parent2seq_lengths[hog_off] # parent2seq_lengths.get(hog_off, [])
@@ -683,22 +582,22 @@ class Database(object):
 
                 return parent2seq_lengths
 
-            parent2seq_lengths = collections.defaultdict(list)
+            parent2seq_lengths = defaultdict(list)
 
             parent2seq_lengths = traverse(
                 hog_off, hog_tab, chog_buff, parent2seq_lengths, _compute_median_seq_len, None, _compute_median_seq_len,
-                prot_tab=prot_tab, hog_tab2=hog_tab, cprot_buff=cprot_buff, median_seq_lengths=median_seq_lengths)
+                prot_seq_lens=prot_seq_lens, hog_tab2=hog_tab, cprot_buff=cprot_buff, median_seq_lengths=median_seq_lengths)
 
         fam_tab = self._db_Family[:]
         hog_tab = self._db_HOG[:]
         chog_buff = self._db_ChildrenHOG[:]
         cprot_buff = self._db_ChildrenProt[:]
-        prot_tab = self._db_Protein[:]
+        prot_seq_lens = self._db_Protein.col('SeqLen')
 
         median_seq_lengths = np.zeros(hog_tab.size, dtype=np.uint32)
         for hog_off in fam_tab['HOGoff']:
             compute_median_seq_len(
-                hog_off, hog_tab, chog_buff, prot_tab, cprot_buff, median_seq_lengths)
+                hog_off, hog_tab, chog_buff, prot_seq_lens, cprot_buff, median_seq_lengths)
 
         self._db_HOG.modify_column(colname='MedianSeqLen', column=median_seq_lengths)
 
@@ -1017,7 +916,7 @@ class DatabaseFromOMA(Database):
         hog_tab = h5file.root.HogLevel
 
         # containers
-        fam2hogs = collections.defaultdict(set)
+        fam2hogs = defaultdict(set)
         hog2oma_hog = dict()
         hog2tax = dict()
         hog2gene_nr = dict()
@@ -1085,9 +984,6 @@ class DatabaseFromOMA(Database):
     def select_and_filter_OMA_proteins(
         self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_fam_size
     ):
-        """
-        One small diff compared to DatabaseFromFasta is that proteins in protein table are not following the species in species table. This should be fine.
-        """
         genome_tab = h5file.root.Genome[:]
         oma_seq_buffer = h5file.root.Protein.SequenceBuffer
         ent_tab = h5file.root.Protein.Entries
@@ -1095,7 +991,7 @@ class DatabaseFromOMA(Database):
         # temporary mappers and booking for latter
         sp2sp_off = dict(zip(sorted(species), range(len(species))))  # this is to sort the species table
         oma_hog2hog = dict(zip(hog2oma_hog.values(), hog2oma_hog.keys()))
-        hog2protoffs = collections.defaultdict(set)
+        hog2protoffs = defaultdict(set)
 
         LOG.debug(" - select proteins from selected HOGs")
 

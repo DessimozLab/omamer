@@ -34,7 +34,7 @@ def get_root_leaf_offsets(off, parent_arr):
     while parent != -1:
         leaf_root.append(parent)
         parent = parent_arr[parent]
-    return np.array(leaf_root[::-1], dtype=np.uint64)
+    return np.array(leaf_root[::-1], dtype=np.uint32)
 
 @numba.njit
 def get_lca_off(offsets, parent_arr):
@@ -46,12 +46,12 @@ def get_lca_off(offsets, parent_arr):
 
     # lca of one off is itself
     if off_nr == 1:
-        return np.uint64(offsets[0])
+        return np.uint32(offsets[0])
 
     else:
         # gather every root-to-leaf paths and keep track of the shortest one
         root_leaf_paths = []
-        min_path = np.iinfo(np.int64).max
+        min_path = np.iinfo(np.int32).max
         for x in offsets:
             root_leaf = get_root_leaf_offsets(x, parent_arr)
             root_leaf_paths.append(root_leaf)
@@ -60,11 +60,11 @@ def get_lca_off(offsets, parent_arr):
 
         # if one off is root, lca is root
         if min_path == 1:
-            return np.uint64(root_leaf_paths[0][0])
+            return np.uint32(root_leaf_paths[0][0])
 
         else:
             # off from root to leaves and stop at min_path
-            mat = np.zeros((off_nr, min_path), dtype=np.int64)
+            mat = np.zeros((off_nr, min_path), dtype=np.int32)
             for i in range(off_nr):
                 mat[i] = root_leaf_paths[i][:min_path]
             matT = mat.T
@@ -73,7 +73,7 @@ def get_lca_off(offsets, parent_arr):
             i = 0
             while i < min_path and np.unique(matT[i]).size == 1:
                 i += 1
-            return np.uint64(matT[i - 1][0])
+            return np.uint32(matT[i - 1][0])
 
 
 @numba.njit
@@ -110,7 +110,7 @@ def get_descendants(off, tab, c_buff):
     descendants = traverse(off, tab, c_buff, [], append, append, None)
     descendants.remove(off)
 
-    return np.array(descendants, dtype=np.uint64)
+    return np.array(descendants, dtype=np.uint32)
 
 
 def get_leaves(off, tab, c_buff):
@@ -119,9 +119,9 @@ def get_leaves(off, tab, c_buff):
         return list
     
     if tab['ChildrenOff'][off] == -1:
-        return np.array([off], dtype=np.uint64)
+        return np.array([off], dtype=np.uint32)
     else:
-        return np.array(traverse(off, tab, c_buff, [], append, None, None), dtype=np.uint64)
+        return np.array(traverse(off, tab, c_buff, [], append, None, None), dtype=np.uint32)
 
 
 def is_ancestor(off1, off2, parent_arr):
@@ -171,7 +171,7 @@ def is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
 
 
 # functions to precompute HOG taxonomic levels (implied or not)
-def get_hog_taxa(hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_buff):
+def get_hog_taxa(hog_off, sp_tab, prot_sp_off, hog_tab, cprot_buff, tax_tab, chog_buff):
     """
     Compute all HOG taxonomic level induced by child HOGs or member proteins.
     """
@@ -179,9 +179,7 @@ def get_hog_taxa(hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_b
 
     # add taxa induced by member proteins
     cprot_taxa = np.unique(
-        sp_tab[prot_tab[get_hog_child_prots(hog_off, hog_tab, cprot_buff)]["SpeOff"]][
-            "TaxOff"
-        ]
+        sp_tab[prot_sp_off[get_hog_child_prots(hog_off, hog_tab, cprot_buff)]]["TaxOff"]
     )
     for tax_off in cprot_taxa:
         taxa.update(get_root_leaf_offsets(tax_off, tax_tab["ParentOff"]))
@@ -200,7 +198,7 @@ def get_hog_taxa(hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_b
     return taxa
 
 
-def get_hog2taxa(hog_tab, sp_tab, prot_tab, cprot_buff, tax_tab, chog_buff):
+def get_hog2taxa(hog_tab, sp_tab, prot_sp_off, cprot_buff, tax_tab, chog_buff):
     """
     Precompute compact hog2taxa.
     """
@@ -209,7 +207,7 @@ def get_hog2taxa(hog_tab, sp_tab, prot_tab, cprot_buff, tax_tab, chog_buff):
     hog_taxa_buff = []
     for hog_off in range(hog_tab.size):
         taxa = get_hog_taxa(
-            hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_buff
+            hog_off, sp_tab, prot_sp_off, hog_tab, cprot_buff, tax_tab, chog_buff
         )
         buff_off += len(taxa)
         hog_taxa_idx.append(buff_off)

@@ -22,16 +22,13 @@
 from property_manager import lazy_property, cached_property
 import numba
 import numpy as np
-import tables
-import os
 import pandas as pd
-import sys
-from math import sqrt
 from rvlib import Binomial
 from time import time
 
 from ._utils import LOG
-from .index import get_transform, SequenceBuffer
+from .alphabets import get_transform
+from .sequence_buffer import SequenceBuffer
 from .hierarchy import (
     get_root_leaf_offsets,
     get_hog_member_prots,
@@ -142,7 +139,7 @@ def get_fam_level_offsets(fam_ent, level_arr):
     '''
     level_off = fam_ent["LevelOff"]
     level_num = fam_ent["LevelNum"]
-    fam_level_offsets = level_arr[level_off : np.int64(level_off + level_num + 2)]
+    fam_level_offsets = level_arr[level_off : np.int32(level_off + level_num + 2)]
 
     # because specific for a single family, reinitizialize offsets of family levels
     return fam_level_offsets - fam_level_offsets[0]
@@ -239,16 +236,14 @@ def search_seq_kmers(
 def cumulate_counts_1fam(
         hog_cum_counts, fam_level_offsets, hog2parent):
 
-    current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint64)
+    current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint32)
 
     # iterate over level offsets backward
     for i in range(fam_level_offsets.size - 2):
         x = fam_level_offsets[-i - 3 : -i - 1]
 
         # when reaching level, sum all hog counts with their best child count
-        hog_cum_counts[x[0] : x[1]] = np.add(
-            hog_cum_counts[x[0] : x[1]], current_best_child_count[x[0] : x[1]]
-        )
+        hog_cum_counts[x[0] : x[1]] = np.add(hog_cum_counts[x[0]:x[1]], current_best_child_count[x[0]:x[1]])
 
         # update current_best_child_count of the parents of the current hogs
         for j in range(x[0], x[1]):
@@ -257,66 +252,8 @@ def cumulate_counts_1fam(
             # only if parent exists
             if parent_off != -1:
                 c = current_best_child_count[hog2parent[j]]
-                current_best_child_count[hog2parent[j]] = max(
-                    c, hog_cum_counts[j]
-                )
+                current_best_child_count[hog2parent[j]] = max(c, hog_cum_counts[j])
 
-
-'''
-@numba.njit
-def _propagate_counts(hog_count, hog2parent, levels, hog_offset):
-    # propagate down
-    res = hog_count.copy()
-    # root already valid.
-    for i in range(len(levels) - 1):
-        x = levels[i:i+2]
-        for j in range(x[0], x[1]):
-            m = int(j-hog_offset)
-            p = hog2parent[m]
-            if p > -1:
-                res[m] += res[int(p-hog_offset)]
-            
-    return res
-
-@numba.njit(parallel=True, nogil=True)
-def propagate_counts(hog_counts, fam_tab, hog2parent, levels):
-    res = np.zeros_like(hog_counts)
-    # parallel propagation
-    for i in numba.prange(len(fam_tab)):
-        entry = fam_tab[i]
-        hog_s = entry["HOGoff"]
-        hog_e = hog_s+entry["HOGnum"]
-        level_s = int(entry["LevelOff"])
-        level_e = int(level_s+entry["LevelNum"]+1)
-        res[hog_s:hog_e] = _propagate_counts(hog_counts[hog_s:hog_e], hog2parent[hog_s:hog_e], levels[level_s:level_e], hog_s)
-        
-    return res
-
-
-@numba.njit
-def _cumulate_counts(hog_count, hog2parent, hog_offset):
-    # NEW
-    # propagate up by iterating backwards
-    res = hog_count.copy()
-    for i in range(len(hog2parent)-1, -1, -1):
-        j = hog2parent[i]
-        if j >= 0:
-            res[j-hog_offset] += res[i]
-
-    return res
-
-@numba.njit(parallel=True, nogil=True)
-def cumulate_counts(hog_counts, fam_tab, hog2parent):
-    # NEW
-    res = np.zeros_like(hog_counts)
-    # parallel propagation
-    for i in numba.prange(fam_tab.size):
-        s = fam_tab["HOGoff"][i]
-        e = s+fam_tab["HOGnum"][i]
-        res[s:e] = _cumulate_counts(hog_counts[s:e], hog2parent[s:e], s)
-
-    return res
-'''
 
 ## generic score functions
 @numba.njit
@@ -386,7 +323,7 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
      - otherwise, we simply report the HOG root-taxon ('more specific' or 'different lineage').
      - na if not placed
     '''
-    q2closest_taxon = np.zeros(q2hog_off.size, dtype=np.uint64)
+    q2closest_taxon = np.zeros(q2hog_off.size, dtype=np.uint32)
     true_tax_lineage = get_root_leaf_offsets(ref_taxoff, tax_tab['ParentOff'])[::-1]
 
     for i, hog_off in enumerate(q2hog_off):
@@ -436,12 +373,22 @@ class MergeSearch(object):
         return get_transform(self.ki.k, self.ki.alphabet.DIGITS_AA)
 
     @cached_property
-    def table_idx(self):
-        return self.ki._table_idx[:]
+    def kmer_table(self):
+        z = {}
+        t0 = time()
+        z['buff'] = self.ki._table_buff[:]
+        z['idx'] = self.ki._table_idx[:]
+        t1 = time()
+        LOG.debug('Loaded k-mer table ({} seconds)'.format(int(t1-t0)))
+        return z
 
-    @cached_property
-    def table_buff(self):
-        return self.ki._table_buff[:]
+    #@cached_property
+    #def table_idx(self):
+    #    return self.ki._table_idx[:]
+
+    #@cached_property
+    #def table_buff(self):
+    #    return self.ki._table_buff[:]
 
     @cached_property
     def fam_tab(self):
@@ -461,36 +408,16 @@ class MergeSearch(object):
 
     @lazy_property
     def ref_fam_prob(self):
-        if 'FamilyProbability' in self.db.db.root.Index:
-            return self.db.db.root.Index.FamilyProbability[:]
-        else:
-            raise ValueError('FamilyProbability not in db')
+        return self.db.db.root.Index.FamilyProbability[:]
 
     @lazy_property
     def ref_hog_prob(self):
-        if 'HOGProbability' in self.db.db.root.Index:
-            return self.db.db.root.Index.HOGProbability[:]
-        else:
-            raise ValueError('HOGProbability not in db')
+        return self.db.db.root.Index.HOGProbability[:]
 
     def merge_search(self, seqs, ids,
         top_n_fams=1, alpha=1e-6, sst=0.1, family_only=False, ref_taxon=None):
-        t1 = time()
+        t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
-        t2 = time()
-        # switch this to use logging. note: this doesnt load the query sequences
-        print('{} second to load query sequences'.format(int(t2 - t1)))
-
-        # load OMAmer database and tables into memory
-        trans = self.trans
-        table_idx = self.table_idx
-        table_buff = self.table_buff
-        fam_tab = self.fam_tab
-        hog_tab = self.hog_tab
-        level_arr = self.level_arr
-
-        t4 = time()
-        print('{} second to load the k-mer table'.format(int(t4 - t2)))
 
         # allocate result arrays
         family_results = np.zeros((len(sbuff.idx) - 1, top_n_fams),
@@ -503,20 +430,20 @@ class MergeSearch(object):
                                   dtype=np.dtype([('id', np.uint32),
                                                   ('score', np.float64),
                                                   ('count', np.uint32)]))
-        # perform the search 
+        # perform the search. arguments are given like this as we are using numba.
         self._lookup(
             family_results,
             subfam_results,
             sbuff.buff,
             sbuff.idx,
-            trans,
-            table_idx,
-            table_buff,
+            self.trans,
+            self.kmer_table['idx'],
+            self.kmer_table['buff'],
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
-            fam_tab,
-            hog_tab,
-            level_arr,
+            self.fam_tab,
+            self.hog_tab,
+            self.level_arr,
             top_n_fams=top_n_fams,
             ref_fam_prob=self.ref_fam_prob,
             ref_hog_prob=self.ref_hog_prob,
@@ -524,9 +451,10 @@ class MergeSearch(object):
             sst=sst,
             family_only=family_only)
 
-        t5 = time()
-        ts =  t5 - t4
-        print('{} second for the actual search (~ {} query/second)'.format(int(ts), int(sbuff.prot_nr / ts)))
+        t1 = time()
+        td = int(t1-t0)
+        n = len(sbuff.ids)
+        LOG.debug('{} seconds for block of {} sequences (~{} queries/second)'.format(td, n, n//td))
 
         return self.output_results(family_results, subfam_results, sbuff, top_n_fams, ref_taxon)
 

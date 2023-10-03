@@ -19,6 +19,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
+import numba
 import numpy as np
 
 
@@ -101,3 +102,12 @@ class Alphabet(object):
     @property
     def DIGITS_AA(self):
         return self.digits
+
+
+@numba.njit
+def get_transform(k, DIGITS_AA):
+    # k-mer transformation
+    t = np.zeros(k, dtype=np.uint64)
+    for i in numba.prange(k):
+        t[i] = len(DIGITS_AA) ** (k - (i + 1))
+    return t

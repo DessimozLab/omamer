@@ -19,34 +19,18 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 '''
-from Bio import SeqIO, SearchIO
-from multiprocessing import sharedctypes
-from property_manager import lazy_property, cached_property
 from PySAIS import sais
-import ctypes
-import gzip
-import logging 
-import multiprocessing as mp
 import numba
 import numpy as np
-import os
-import tables
 
 from ._utils import LOG
-from .alphabets import Alphabet
+from .alphabets import Alphabet, get_transform
 from .hierarchy import (
     get_lca_off, 
     get_descendants,
     get_leaves
 )
-
-
-@numba.njit
-def get_transform(k, DIGITS_AA):
-    t = np.zeros(k, dtype=np.uint64)
-    for i in numba.prange(k):
-        t[i] = len(DIGITS_AA) ** (k - (i + 1))
-    return t
+from .merge_search import cumulate_counts_1fam
 
 
 class Index(object):
@@ -161,7 +145,7 @@ class Index(object):
             compute lca hogs for a list of hogs and their families
             """
             # as many lca hogs as unique families
-            lca_hogs = np.zeros((np.unique(fam_offsets).size,), dtype=np.int64)
+            lca_hogs = np.zeros((np.unique(fam_offsets).size,), dtype=np.int32)
 
             # keep track of family, the corresponding hogs and the lca hog offset
             curr_fam = fam_offsets[0]
@@ -278,33 +262,13 @@ class Index(object):
             return (fam_occ / idx[-1])
         
         def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
-            @numba.njit
-            def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
-                current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint32)
-
-                # iterate over level offsets backward
-                for i in range(fam_level_offsets.size - 2):
-                    x = fam_level_offsets[-i - 3 : -i - 1]
-
-                    # when reaching level, sum all hog counts with their best child count
-                    hog_cum_counts[x[0] : x[1]] = np.add(hog_cum_counts[x[0] : x[1]], current_best_child_count[x[0] : x[1]])
-
-                    # update current_best_child_count of the parents of the current hogs
-                    for j in range(x[0], x[1]):
-                        parent_off = hog2parent[j]
-
-                        # only if parent exists
-                        if parent_off != -1:
-                            c = current_best_child_count[hog2parent[j]]
-                            current_best_child_count[hog2parent[j]] = max(c, hog_cum_counts[j])
-
             @numba.njit(parallel=True, nogil=True)
             def cumulate_counts_nfams(hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent):
                 hog_cum_counts = hog_counts.copy()
 
                 for i in numba.prange(len(fam_level_off)):
                     s = fam_level_off[i]
-                    e = np.int64(s + fam_level_num[i] + 2)
+                    e = np.int32(s + fam_level_num[i] + 2)
                     fam_level_offsets = level_arr[s:e]
                     cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent)
 
@@ -317,7 +281,7 @@ class Index(object):
 
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db._db_Protein)
-        sa_mask = np.zeros(sa.shape, dtype=np.uint64)
+        sa_mask = np.zeros(sa.shape, dtype=np.uint32)
         sa_filter = np.zeros(sa.shape, dtype=np.bool)
 
         _compute_mask_and_filter(
@@ -391,58 +355,3 @@ class Index(object):
 
         hog_prob = estimate_hog_prob(table_idx, hog_kmer_counts, self.db._db_Family, self.db._db_LevelOffsets, self.db._db_HOG.col('ParentOff'))
         self.db.db.create_carray(idx, 'HOGProbability', obj=hog_prob, filters=self.db._compr)
-
-
-class SequenceBuffer(object):
-    '''
-    makes list of sequences search friendly
-    adapted from Alex
-    TO DO:
-    - sanitize seqs
-    - debug reduced alphabet
-    - (debug __getitem__, which does not work with negative values)
-    '''
-    def __init__(self, seqs, ids, alphabet_n=21):
-        '''
-        args:
-         - seqs: list of sequences
-         - ids: list of corresponding ids
-        '''
-        self.alphabet = Alphabet(n=alphabet_n)
-        self.add_seqs(*seqs)
-        self.ids = (np.array(ids) if ids else np.array(range(len(seqs))))
-
-    def __getstate__():
-        return (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr)
-
-    def __setstate__(state):
-        (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr) = state
-
-    def add_seqs(self, *seqs):
-        self.prot_nr = len(seqs)
-        self.n = self.prot_nr + sum(len(s) for s in seqs)
-
-        self.buff_shr = sharedctypes.RawArray(ctypes.c_uint8, self.n)
-        self.buff[:] = self.alphabet.translate(
-            np.frombuffer((" ".join(seqs) + " ").encode('ascii'), dtype='|S1')).view(np.uint8)
-
-        self.buff_idx_shr = sharedctypes.RawArray(ctypes.c_uint64, self.prot_nr + 1)
-        for i in range(len(seqs)):
-            self.idx[i + 1] = len(seqs[i]) + 1 + self.idx[i]
-    
-    @lazy_property
-    def buff(self):
-        return np.frombuffer(self.buff_shr, dtype=np.uint8).reshape(self.n)
-    
-    @lazy_property
-    def idx(self):
-        return np.frombuffer(self.buff_idx_shr, dtype=np.uint64).reshape(
-            self.prot_nr + 1)
-
-    def __getitem__(self, i):
-        s = int(self.idx[i])
-        e = int(self.idx[i + 1] - 1)
-        return self.buff[s:e].tobytes().decode("ascii")
-
-    def get_seqlen(self, i):
-        return (self.idx[i] - self.idx[i-1])

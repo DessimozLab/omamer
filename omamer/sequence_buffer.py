@@ -41,11 +41,11 @@ class SequenceBuffer(object):
         self.add_seqs(*seqs)
         self.ids = (np.array(ids) if ids else np.array(range(len(seqs))))
 
-    def __getstate__():
-        return (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr)
+    #def __getstate__(self):
+    #    return (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr)
 
-    def __setstate__(state):
-        (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr) = state
+    #def __setstate__(self, state):
+    #    (self.prot_nr, self.n, self.buff_shr, self.buff_idx_shr) = state
 
     def add_seqs(self, *seqs):
         self.prot_nr = len(seqs)

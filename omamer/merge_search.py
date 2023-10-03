@@ -289,7 +289,6 @@ def hog_path_placement(
     fam_hog_scores[0] = (fam_hog_cumcounts[0] - expect_count) / query_nkmer
 
     # loop through hog levels
-    # TODO: change this so that we only go down the greedy path!
     for i in range(1, fam_level_offsets.size - 2):
         x = fam_level_offsets[i : i + 2]
         hog_offsets = np.array(list(range(x[0], x[1])))
@@ -305,6 +304,7 @@ def hog_path_placement(
         # compute expected number of k-mer matches
         expect_count = fam_ref_hog_prob[hog_offsets] * qh_count
         fam_hog_scores[hog_offsets] = (fam_hog_cumcounts[hog_offsets] - expect_count) / qh_count
+
         # store bestpath
         store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores)
 
@@ -368,27 +368,20 @@ class MergeSearch(object):
 
     	self.include_extant_genes = include_extant_genes
 
+    # want to cache these, so that we don't load multiple times when chunking queries
     @cached_property
     def trans(self):
         return get_transform(self.ki.k, self.ki.alphabet.DIGITS_AA)
 
     @cached_property
     def kmer_table(self):
-        z = {}
+        # the kmer table requires caching so that we can use it in numba
         t0 = time()
-        z['buff'] = self.ki._table_buff[:]
-        z['idx'] = self.ki._table_idx[:]
+        z = self.ki.kmer_table
+        z1 = {k: z[k][:] for k in z}
         t1 = time()
         LOG.debug('Loaded k-mer table ({} seconds)'.format(int(t1-t0)))
-        return z
-
-    #@cached_property
-    #def table_idx(self):
-    #    return self.ki._table_idx[:]
-
-    #@cached_property
-    #def table_buff(self):
-    #    return self.ki._table_buff[:]
+        return z1
 
     @cached_property
     def fam_tab(self):
@@ -415,7 +408,7 @@ class MergeSearch(object):
         return self.db.db.root.Index.HOGProbability[:]
 
     def merge_search(self, seqs, ids,
-        top_n_fams=1, alpha=1e-6, sst=0.1, family_only=False, ref_taxon=None):
+        top_n_fams=1, alpha=1e-6, sst=0.1, family_only=False, ref_taxon_off=None):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
 
@@ -452,15 +445,14 @@ class MergeSearch(object):
             family_only=family_only)
 
         t1 = time()
-        td = int(t1-t0)
+        td = max((t1-t0), 1e-3)
         n = len(sbuff.ids)
-        LOG.debug('{} seconds for block of {} sequences (~{} queries/second)'.format(td, n, n//td))
+        LOG.debug('{:.02f} seconds for block of {:d} sequences (~{:.02f} queries/second)'.format(td, n, n/td))
 
-        return self.output_results(family_results, subfam_results, sbuff, top_n_fams, ref_taxon)
+        return self.output_results(family_results, subfam_results, sbuff, top_n_fams, ref_taxon_off)
 
-    def output_results(self, family_results, subfam_results, sbuff, top_n_fams, ref_taxon):
-        HEADER = ['qseqid', 'hogid', 'family_p', 'family_normcount', 'subfamily_score', 'subfamily_count', 'qseqlen', 'subfamily_medianseqlen', 'seq_overlap']
-        # possible extra fields: family_count
+    def output_results(self, family_results, subfam_results, sbuff, top_n_fams, ref_taxon_off):
+        HEADER = ['qseqid', 'hogid', 'family_p', 'family_count', 'family_normcount', 'subfamily_score', 'subfamily_count', 'qseqlen', 'subfamily_medianseqlen', 'seq_overlap']
 
         # Note: missing values are dealt differently by pandas and numpy
 
@@ -473,7 +465,7 @@ class MergeSearch(object):
                                'seq_overlap': family_results['overlap'][i,j],
                                'family_p': family_results['pvalue'][i,j],
                                'subfamily_score': subfam_results['score'][i,j],
-                               #'family_count': family_results['count'][i,j],
+                               'family_count': family_results['count'][i,j],
                                'family_normcount': family_results['normcount'][i,j],
                                'subfamily_count': subfam_results['count'][i,j]}
 
@@ -482,7 +474,7 @@ class MergeSearch(object):
         # cast to pd dtype so that we can use pd.NA...
         df['qseq_offset'] = df['qseq_offset'].astype('UInt32')
         df['hog_offset'] = df['hog_offset'].astype('UInt32')
-        #df['family_count'] = df['family_count'].astype('UInt32')
+        df['family_count'] = df['family_count'].astype('UInt32')
         df['subfamily_count'] = df['subfamily_count'].astype('UInt32')
 
         # set empty as NA
@@ -504,17 +496,13 @@ class MergeSearch(object):
             df.loc[hog_f, 'subfamily_geneset'] = df.loc[hog_f, 'hog_offset'].apply(lambda i: ','.join(map(lambda x: x.decode('ascii'), self.db._db_Protein.col('ID')[get_hog_member_prots(i-1, self.hog_tab, self.db._db_ChildrenHOG[:], self.db._db_ChildrenProt[:])])))
 
         # add the hog id
-        df.loc[hog_f,'hogid'] = df.loc[hog_f,'hog_offset'].apply(lambda i: self.hog_tab['OmaID'][i-1].decode('ascii'))
+        df.loc[hog_f,'hogid'] = df.loc[hog_f,'hog_offset'].apply(lambda i: self.db.get_hog_id(i-1))
 
         # compute taxonomic congruences
-        if ref_taxon:
+        if ref_taxon_off:
             q2hog_off = df.loc[hog_f,'hog_offset'].to_numpy(dtype=np.uint32)
-
-            tax_tab = self.db._db_Taxonomy[:]
-            ref_taxoff = np.searchsorted(tax_tab['ID'], ref_taxon.encode('ascii'))
-
             q2closest_taxon = get_closest_taxa_from_ref(
-                q2hog_off, ref_taxoff, tax_tab, self.hog_tab, self.db._db_ChildrenHOG[:])
+                q2hog_off, ref_taxon_off, tax_tab, self.hog_tab, self.db._db_ChildrenHOG[:])
             HEADER.append('closest_taxa')
             df.loc[hog_f, 'closest_taxa'] = list(map(lambda x: tax_tab['ID'][x].decode('ascii') if x != -1 else pd.NA, q2closest_taxon))
         

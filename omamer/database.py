@@ -21,19 +21,21 @@
 '''
 from collections import defaultdict
 from itertools import repeat
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import numpy as np
 import os
 import tables
 
-from ._utils import LOG, is_progress_disabled
 from .hierarchy import (
     get_hog_child_prots,
     get_hog2taxa,
     traverse,
-    is_ancestor,
 )
 from .index import Index
+from ._utils import LOG, is_progress_disabled
+
+
+PROT_ID_LEN = 12
 
 
 class Database(object):
@@ -44,27 +46,27 @@ class Database(object):
     class ProteinTableFormat(tables.IsDescription):
         # Note, the ID field could be generalised and replaced with a SequenceBuffer,
         # for now use OMA formatted sequence identifiers. 5CHAR + max 7digit.
-        ID = tables.StringCol(12, pos=1, dflt=b"")
+        ID = tables.StringCol(PROT_ID_LEN, pos=1, dflt=b"")
         SpeOff = tables.Int32Col(pos=2)
         HOGoff = tables.UInt32Col(pos=3)
         SeqLen = tables.UInt32Col(pos=4)
 
     class HOGTableFormat(tables.IsDescription):
-        #ID = tables.StringCol(255, pos=1, dflt=b"")
-        OmaID = tables.StringCol(255, pos=1, dflt=b"")  # todo: replace with a SequenceBuffer
-        FamOff = tables.UInt32Col(pos=2)
-        TaxOff = tables.UInt32Col(pos=3)
-        ParentOff = tables.Int32Col(pos=4)
-        ChildrenOff = tables.Int32Col(pos=5)
-        ChildrenNum = tables.Int32Col(pos=6)
-        ChildrenProtOff = tables.Int32Col(pos=7)
-        ChildrenProtNum = tables.Int32Col(pos=8)
-        HOGtaxaOff = tables.UInt32Col(pos=9)
-        HOGtaxaNum = tables.UInt32Col(pos=10)
-        LCAtaxOff = tables.UInt32Col(pos=11)
-        NrMemberGenes = tables.UInt32Col(pos=12)  # could be removed (30MB)
-        CompletenessScore = tables.Float64Col(pos=13)  # could be removed (30MB)
-        MedianSeqLen = tables.UInt64Col(pos=14)
+        IDBufferOff = tables.UInt64Col(pos=1)
+        IDLen = tables.UInt16Col(pos=2)
+        FamOff = tables.UInt32Col(pos=3)
+        TaxOff = tables.UInt32Col(pos=4)
+        ParentOff = tables.Int32Col(pos=5)
+        ChildrenOff = tables.Int32Col(pos=6)
+        ChildrenNum = tables.Int32Col(pos=7)
+        ChildrenProtOff = tables.Int32Col(pos=8)
+        ChildrenProtNum = tables.Int32Col(pos=9)
+        HOGtaxaOff = tables.UInt32Col(pos=10)
+        HOGtaxaNum = tables.UInt32Col(pos=11)
+        LCAtaxOff = tables.UInt32Col(pos=12)
+        NrMemberGenes = tables.UInt32Col(pos=13)
+        CompletenessScore = tables.Float64Col(pos=14)  # not currently used, useful
+        MedianSeqLen = tables.UInt32Col(pos=15)
 
     class FamilyTableFormat(tables.IsDescription):
         ID = tables.UInt32Col(pos=1)
@@ -87,14 +89,13 @@ class Database(object):
         SpeOff = tables.Int32Col(pos=6)
         Level = tables.Int32Col(pos=7)
 
-    def __init__(self, filename, root_taxon=None, mode='r', nthreads=1):
+    def __init__(self, filename, root_taxon=None, mode='r'):
         assert mode in {"r", "w"}, "Databased must only be opened in read or write mode."
         assert (mode != "w" or root_taxon), "A root_taxon must be defined when building the database"
         self.root_taxon = root_taxon
         self.filename = filename
         self.mode = mode
 
-        self.nthreads = nthreads
         self._compr = tables.Filters(complevel=6, complib="blosc", fletcher32=True)
 
         if os.path.isfile(self.filename) and self.mode == "w":
@@ -103,7 +104,7 @@ class Database(object):
         self.db = tables.open_file(self.filename, self.mode, filters=self._compr)
 
         if '/Index' in self.db:
-            self.ki = Index(self, nthreads=self.nthreads)
+            self.ki = Index(self)
 
     def _check_open_writeable(self):
         assert self.mode == "w", "Database must be opened in write mode."
@@ -124,10 +125,16 @@ class Database(object):
             if path in self.db:
                 return self.db.get_node(path)
             else:
-                # TODO: change this to a PathError or something similar
-                raise ValueError('Cannot find table in database ({})'.format(path))
+                raise tables.NoSuchNodeError('Path not found in database ({})'.format(path))
 
         return self.__getattribute__(attr)
+    
+    def get_hog_id(self, i):
+        # extract the hog id from the hog id buffer
+        x = self._db_HOG[i]
+        s = x['IDBufferOff']
+        e = s + x['IDLen']
+        return self._db_HOGIDBuffer[s:e].tobytes().decode('ascii')
 
     def initiate_tax_tab(self, stree_path):
         """
@@ -217,7 +224,7 @@ class Database(object):
         return (tax2taxoff, species)
 
     def update_hog_and_fam_tabs(
-        self, fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog=None, hog2gene_nr=None, hog2completeness=None
+        self, fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, hog2gene_nr, hog2completeness
     ):
         self._check_open_writeable()
 
@@ -317,20 +324,23 @@ class Database(object):
         child_prots = []
         child_hogs_off = 0
         child_prots_off = 0
+        hog2hogoff = {}
 
         # initiate level array
         level_offsets = [0]
         level_offsets_off = 0
+
+        # initialise hog id buffer
+        hog_id_buff = self.db.create_earray('/', 'HOGIDBuffer', tables.StringAtom(1), (0,), filters=self._compr)
 
         for (fam_id, hogs) in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
             ### hogs
             # sort by level
             hogs = sorted(hogs, key=lambda x: len(x.split(b".")))
             hog_num = len(hogs)
-            hog_taxoffs = list(map(lambda x: hog2taxoff[x], hogs))
 
             # parents
-            parents, parent2child_hogs = _get_parents(hog_off, hog_num, hogs)
+            (parents, parent2child_hogs) = _get_parents(hog_off, hog_num, hogs)
 
             # levels
             hog_levels = list(map(lambda x: len(x.split(b".")), hogs))
@@ -360,55 +370,11 @@ class Database(object):
 
             child_prots.extend(tmp_child_prots)
 
-            # OMA hogs
-            oma_hogs = (
-                list(map(lambda x: hog2oma_hog[x], hogs))
-                if hog2oma_hog
-                else repeat(b"", hog_num)
-            )
-
-            # quality measures
-            oma_hog_sizes = (
-                list(map(lambda x: hog2gene_nr[x], hogs))
-                if hog2gene_nr
-                else repeat(-1, hog_num)
-            )
-
-            oma_hog_comps = (
-                list(map(lambda x: hog2completeness[x], hogs))
-                if hog2completeness
-                else repeat(-1, hog_num)
-            )
-
-            #hog_rows.extend(
-            hog_tab.append(
-                list(
-                    zip(
-                        #hogs,
-                        oma_hogs,
-                        repeat(fam_off),
-                        hog_taxoffs,
-                        parents,
-                        child_hogs_offsets,
-                        child_hogs_numbers,
-                        child_prots_offsets,
-                        child_prots_numbers,
-                        repeat(-1),
-                        repeat(-1),
-                        repeat(0),
-                        oma_hog_sizes,
-                        oma_hog_comps,
-                        repeat(0)
-                    )
-                )
-            )
-
-            ### fams
-            #fam_rows.append(
+            # store family information
             fam_tab.append([
                 (
                     fam_id,
-                    hog_taxoffs[0],
+                    hog2taxoff[hogs[0]],
                     hog_off,
                     hog_num,
                     level_offsets_off,
@@ -417,13 +383,30 @@ class Database(object):
                 ]
             )
 
-            hog_off += hog_num
+            # store sub-family information
+            for i in range(len(hogs)):
+                oma_hog_id = hog2oma_hog[hogs[i]]
+                oma_hog_size = hog2gene_nr[hogs[i]]
+                oma_hog_completeness = hog2completeness[hogs[i]]
+                hog_taxoff = hog2taxoff[hogs[i]]
+
+                # write record
+                r = (len(hog_id_buff), len(oma_hog_id), fam_off, hog_taxoff, parents[i], child_hogs_offsets[i], child_hogs_numbers[i], child_prots_offsets[i], child_prots_numbers[i], -1, -1, 0, oma_hog_size, oma_hog_completeness, 0)
+                hog_tab.append([r,])
+
+                hog_id_buff.append(np.frombuffer(oma_hog_id, dtype=tables.StringAtom(1)))
+
+                # store hog2hogoff
+                hog2hogoff[hogs[i]] = hog_off + i
+
             fam_off += 1
             level_offsets_off += hog_level_offsets_num
+            hog_off += hog_num
 
         # flush the family and HOG tables and then reset autoindex
         fam_tab.flush()
         hog_tab.flush()
+        hog_id_buff.flush()
         hog_tab.autoindex = fam_tab.autoindex = True
 
         # create child hog and protein tables
@@ -448,6 +431,7 @@ class Database(object):
             obj=np.array(level_offsets, dtype=np.uint32),
             filters=self._compr,
         )
+        return hog2hogoff
 
     def add_speoff_col(self):
         """
@@ -488,29 +472,19 @@ class Database(object):
 
         self._db_Species.modify_column(colname="TaxOff", column=tax_offsets)
 
-    def update_prot_tab(self, hog2protoffs, hog2oma_hog):
+    def update_prot_tab(self, hog2protoffs, hog2hogoff):
         """
-        add HOGoff and FamOff rows in the protein table
+        add HOGoff column in the protein table
 	"""
         self._check_open_writeable()
 
-        def _get_protoffs2hogoff(hog2protoffs, hog2hogoff):
-            protoff2hogoff = dict()
-            for hog, protoffs in hog2protoffs.items():
-                protoff2hogoff.update(dict(zip(protoffs, repeat(hog2hogoff[hog]))))
-            return protoff2hogoff
-        
-        oma_hog2hog = dict(zip(hog2oma_hog.values(), hog2oma_hog.keys()))
-        hog2hogoff = dict(zip(map(oma_hog2hog.__getitem__, self._db_HOG.col("OmaID")), range(len(self._db_HOG))))
-        protoffs2hogoff = _get_protoffs2hogoff(hog2protoffs, hog2hogoff)
-
-        # get the hogoff column from it and the famoff col
-        hogoff_col = list(zip(*sorted(protoffs2hogoff.items())))[1]
-        #famoff_col = self._hog_tab[np.array(hogoff_col)]["FamOff"]
+        # newer way of doing this
+        hogoff_col = np.zeros(len(self._db_Protein), dtype=np.uint32)
+        for (hog, protoffs) in hog2protoffs.items():
+            hogoff_col[np.array(list(protoffs), dtype=np.uint64)] = hog2hogoff[hog]
 
         # replace the empty columns
         self._db_Protein.modify_column(colname="HOGoff", column=hogoff_col)
-        #self._db_Protein.modify_column(colname="FamOff", column=famoff_col)
 
     def store_hog2taxa(self):
         """
@@ -571,10 +545,9 @@ class Database(object):
                 seq_lengths = list(map(lambda x: prot_seq_lens[x], get_hog_child_prots(hog_off, hog_tab2, cprot_buff)))
 
                 # merge these with child sequence lentgths (stored in parent2seq_lengths)
-                seq_lengths = seq_lengths + parent2seq_lengths[hog_off] # parent2seq_lengths.get(hog_off, [])
+                seq_lengths = seq_lengths + parent2seq_lengths[hog_off]
 
                 # store in parent2seq_lengths
-                #parent_seq_lengths =  parent2seq_lengths.get(hog_tab2['ParentOff']['HOGoff'], [])
                 parent2seq_lengths[hog_tab2['ParentOff'][hog_off]] += seq_lengths
 
                 # store median
@@ -677,9 +650,7 @@ class DatabaseFromOMA(Database):
             self.min_fam_size
         )
 
-        LOG.debug(
-            "add SpeOff and TaxOff columns in taxonomy and species tables, respectively"
-        )
+        LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
         self.add_speoff_col()
         self.add_taxoff_col()
 
@@ -687,11 +658,11 @@ class DatabaseFromOMA(Database):
         hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
 
         LOG.debug("fill family and HOG tables")
-        self.update_hog_and_fam_tabs(fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, hog2gene_nr, hog2completeness)
+        hog2hogoff = self.update_hog_and_fam_tabs(fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, hog2gene_nr, hog2completeness)
 
         # add family and hog offsets
         LOG.debug("complete protein table")
-        self.update_prot_tab(hog2protoffs, hog2oma_hog)
+        self.update_prot_tab(hog2protoffs, hog2hogoff)
 
         LOG.debug("store HOG taxa")
         self.store_hog2taxa()
@@ -787,7 +758,6 @@ class DatabaseFromOMA(Database):
 
                     # but store only if root-HOG passed quality thresholds
                     if curr_oma_roothog_ok:
-
                         _store(
                             fam,
                             curr_oma_hog,
@@ -809,7 +779,6 @@ class DatabaseFromOMA(Database):
                     # but store it only if passes quality thresholds
                     ok = (hog_size >= min_fam_size or hog_comp >= min_fam_completeness) if logic == 'OR' else (hog_size >= min_fam_size and hog_comp >= min_fam_completeness)
                     if ok:
-
                         fam += 1
                         curr_oma_roothog_ok = True
 
@@ -831,7 +800,7 @@ class DatabaseFromOMA(Database):
                     else:
                         curr_oma_roothog_ok = False
 
-            return fam, curr_oma_roothog, curr_oma_roothog_ok
+            return (fam, curr_oma_roothog, curr_oma_roothog_ok)
 
         def _process_oma_fam(
             fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness,
@@ -985,8 +954,12 @@ class DatabaseFromOMA(Database):
         self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_fam_size
     ):
         genome_tab = h5file.root.Genome[:]
-        oma_seq_buffer = h5file.root.Protein.SequenceBuffer
         ent_tab = h5file.root.Protein.Entries
+
+        # load entire sequence buffer into memory if we are computing for more than 100 species
+        oma_seq_buffer = h5file.root.Protein.SequenceBuffer
+        if len(species) > 100:
+            oma_seq_buffer = oma_seq_buffer[:]
 
         # temporary mappers and booking for latter
         sp2sp_off = dict(zip(sorted(species), range(len(species))))  # this is to sort the species table
@@ -995,14 +968,8 @@ class DatabaseFromOMA(Database):
 
         LOG.debug(" - select proteins from selected HOGs")
 
-        # track current species
-        curr_sp = None
-
-        # pointer to sequence in buffer
-        seq_off = 0
-
-        # pointer to protein in protein table
-        prot_off = 0
+        seq_off = 0   # pointer to sequence in buffer
+        prot_off = 0  # pointer to protein in protein table
 
         # store rows for species and protein tables and sequence buffer
         sp_rows = [()] * len(species)  # keep sorted
@@ -1023,22 +990,6 @@ class DatabaseFromOMA(Database):
             if sp in species:
                 sp_off = sp2sp_off[sp]
 
-                # change of species --> store current species
-                if sp != curr_sp:
-                    if curr_sp is not None:
-                        sp_rows[sp2sp_off[curr_sp]] = (
-                            curr_sp,
-                            #curr_prot_off,
-                            #prot_off - curr_prot_off,
-                            0,
-                        )
-
-                        # take advantage to dump sequence buffer
-                        #self._seq_buff.append(seq_buff)
-                        #self._seq_buff.flush()
-                        #seq_buff = []
-                    curr_sp = sp
-
                 # load sub entry table for species
                 entry_off = r["EntryOff"]
                 entry_num = r["TotEntries"]
@@ -1055,36 +1006,24 @@ class DatabaseFromOMA(Database):
                     oma_seq_off = rr["SeqBufferOffset"]
                     seq_len = rr["SeqBufferLength"]
                     seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len]
-                    seq_buffs.append(seq) #.extend(list(seq))
+                    seq_buffs.append(seq)
 
                     # store protein row
                     oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
+                    assert len(oma_id) < PROT_ID_LEN, 'Please check PROT_ID_LEN as {} is longer than {} chars.'.format(oma_id, PROT_ID_LEN)
                     
                     prot_tab.append([(oma_id.encode('ascii'), sp_off, 0, seq_len)])
-                    #prot_rows.append((oma_id.encode('ascii'), sp_off, 0, 0, seq_off, seq_len))
 
                     # track hog and family
                     hog = oma_hog2hog[oma_hog]
-                    fam = int(hog.split(b".")[0].decode("ascii"))
                     hog2protoffs[hog].add(prot_off)
 
                     # update offset of protein sequence in buffer and of protein raw in table
                     seq_off += seq_len
                     prot_off += 1
 
-        prot_tab.flush()
-
-        # end
-        sp_rows[sp2sp_off[curr_sp]] = (
-            curr_sp,
-            #curr_prot_off,
-            #prot_off - curr_prot_off,
-            0,
-        )
-
-        # todo, remove this so that we keep it in memory.
-        #self._seq_buff.append(seq_buff)
-        #self._seq_buff.flush()
+                # store species info
+                sp_rows[sp2sp_off[sp]] = (sp, 0)
 
         # fill species and protein tables
         sp_tab = self.db.create_table(
@@ -1092,13 +1031,13 @@ class DatabaseFromOMA(Database):
             )
         sp_tab.append(sp_rows)
         sp_tab.flush()
-        #self._prot_tab.append(prot_rows)
 
+        prot_tab.flush()
 
+        # cleanup, ensure gc
         del genome_tab, ent_tab, oma_seq_buffer
         
         seq_buff = np.concatenate(seq_buffs)
-
         return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
 
     def add_taxid_col(self, h5file):

@@ -27,7 +27,6 @@ from ._utils import LOG
 from .alphabets import Alphabet, get_transform
 from .hierarchy import (
     get_lca_off, 
-    get_descendants,
     get_leaves
 )
 from .merge_search import cumulate_counts_1fam
@@ -35,7 +34,7 @@ from .merge_search import cumulate_counts_1fam
 
 class Index(object):
     def __init__(
-        self, db, k=6, reduced_alphabet=False, nthreads=1, hidden_taxa=[]
+        self, db, k=6, reduced_alphabet=False, hidden_taxa=[]
     ):
         
         # load database object
@@ -53,9 +52,6 @@ class Index(object):
 
         self.alphabet = Alphabet(n=alphabet_n)
 
-        # performance features
-        self.nthreads = nthreads
-
     @property
     def sp_filter(self):
         tax_tab = self.db._db_Taxonomy[:]
@@ -71,26 +67,10 @@ class Index(object):
                     sp_filter[tax_tab['SpeOff'][sp_off]] = True
         return sp_filter
 
-    ### same as in database class; easy access to data ###
-    def _get_node_if_exist(self, node):
-        if node in self.db.db:
-            return self.db.db.get_node(node)
-
     @property
-    def _table_idx(self):
-        return self._get_node_if_exist('/Index/TableIndex')
-
-    @property
-    def _table_buff(self):
-        return self._get_node_if_exist('/Index/TableBuffer')
-
-    #@property
-    #def _fam_count(self):
-    #    return self._get_node_if_exist('/Index/FamCount')
-
-    #@property
-    #def _hog_count(self):
-    #    return self._get_node_if_exist('/Index/HOGcount')
+    def kmer_table(self):
+        return {'buff': self.db._db_Index_TableBuffer,
+                'idx': self.db._db_Index_TableIndex}
 
     ### main function to build the index ###
     def build_kmer_table(self, seq_buff):
@@ -102,15 +82,12 @@ class Index(object):
         sa = self._build_suffixarray(
             self.alphabet.translate(seq_buff), len(self.db._db_Protein)
         )
-
-        # Set nthreads, note: this only works before numba called first time!
-        numba.config.NUMBA_NUM_THREADS = self.nthreads
-
         self._build_kmer_table(seq_buff, sa)
 
     @staticmethod
     def _build_suffixarray(seqs, n):
         # Build suffix array
+        LOG.debug(" - building suffix array for sequences")
         sa = sais(seqs)
         sa[:n].sort()  # Sort delimiters by position
         return sa
@@ -122,7 +99,7 @@ class Index(object):
         ):
             """
             1. compute a mapper between suffixes and HOGs
-            2. simultaneously, compute suffix filter for species and suffixe < k
+            2. simultaneously, compute suffix filter for species and suffixes < k
             """
             for i in numba.prange(n):
                 # leverages the sorted protein delimiters at the beggining of the sa to get the suffix offsets by protein
@@ -178,7 +155,6 @@ class Index(object):
             hog_parents,
             table_idx,
             table_buff,
-            #fam_kmer_counts,
             hog_kmer_counts,
             k,
             DIGITS_AA,
@@ -226,9 +202,6 @@ class Index(object):
                 )
 
                 ## store kmer counts of fams and lca hogs
-                #fam_kmer_counts[np.unique(fam_offsets)] = (
-                #    fam_kmer_counts[np.unique(fam_offsets)] + 1
-                #)
                 hog_kmer_counts[lca_hog_offsets] = hog_kmer_counts[lca_hog_offsets] + 1
 
                 ## store LCA HOGs in table buffer
@@ -309,7 +282,6 @@ class Index(object):
         # initiate buffer of size sa_mask, which is maximum size if all suffixes are from different HOGs
         table_buff = np.zeros((len(sa_mask)), dtype=np.uint32)
 
-        #fam_kmer_counts = np.zeros(len(self.db._db_Family), dtype=np.uint64)
         hog_kmer_counts = np.zeros(len(self.db._db_HOG), dtype=np.uint64)
         
         h2f = self.db._db_HOG.col("FamOff")
@@ -322,7 +294,6 @@ class Index(object):
             self.db._db_HOG.col("ParentOff"),
             table_idx,
             table_buff,
-            #fam_kmer_counts,
             hog_kmer_counts,
             self.k,
             self.alphabet.DIGITS_AA,
@@ -341,13 +312,6 @@ class Index(object):
         self.db.db.create_carray(
             idx, "TableBuffer", obj=table_buff, filters=self.db._compr
         )
-
-        #self.db.db.create_carray(
-        #    idx, "FamCount", obj=fam_kmer_counts, filters=self.db._compr
-        #)  # for these, I can initialize them before...
-        #self.db.db.create_carray(
-        #    idx, "HOGcount", obj=hog_kmer_counts, filters=self.db._compr
-        #)
 
         # compute the family / hog probability estimates, assuming binomial distns
         fam_prob = estimate_family_prob(table_buff, table_idx, h2f)

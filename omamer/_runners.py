@@ -21,6 +21,7 @@
 '''
 from ._utils import LOG
 
+
 def mkdb_oma(args):
     from .database import DatabaseFromOMA
     from .index import Index
@@ -28,7 +29,6 @@ def mkdb_oma(args):
 
     assert (args.k < 8), "Max k-mer size is 7."
     LOG.info('Create database from OMA build')
-    # todo: remove the oma database dependency / just take the root level.
     db = DatabaseFromOMA(
         args.db, root_taxon=args.root_taxon, min_fam_size=args.min_fam_size, logic=args.logic, min_fam_completeness=args.min_fam_completeness, include_younger_fams=True, mode='w'
     )
@@ -53,20 +53,13 @@ def mkdb_oma(args):
     LOG.info('Done')
 
 def search(args):
-    from tqdm import tqdm
-    import numba
-    import numpy as np
+    from tqdm.auto import tqdm
     import os
     import sys
 
     from .database import Database
-    from .index import Index
     from .merge_search import MergeSearch
     from .sequence_reader import SequenceReader
-
-    # Set number of threads for numbq
-    nthreads = args.nthreads if args.nthreads > 0 else os.cpu_count()
-    numba.set_num_threads(nthreads)
 
     # reload
     db = Database(args.db)
@@ -75,12 +68,22 @@ def search(args):
     ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output
+    args.out = sys.stdout if args.out is None else args.out
     print_header = (args.out.name != sys.stdout.name)
 
+    # find reference taxon if set
+    ref_taxon = args.reference_taxon.encode('ascii') if args.reference_taxon is not None else None
+    if ref_taxon is not None:
+        tax_ids = db._db_Taxonomy.col("ID")
+        ref_taxoff = np.searchsorted(tax_ids, ref_taxon)
+        assert tax_ids[ref_taxoff] == ref_taxon, 'Cannot identify {}'.format(ref_taxon)
+    else:
+        ref_taxoff = None
+
     pbar = tqdm(desc='Searching')
-    for (ids, seqs) in SequenceReader.read(args.query, k=db.ki.k, format='fasta', chunksize=args.chunksize):
+    for (ids, seqs) in SequenceReader.read(args.query, k=db.ki.k, format='fasta', chunksize=args.chunksize, sanitiser=db.ki.alphabet.sanitise_seq):
         df = ms.merge_search(
-            seqs=seqs, ids=ids, top_n_fams=args.top_n_fams, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only, ref_taxon=args.reference_taxon
+            seqs=seqs, ids=ids, top_n_fams=args.top_n_fams, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only, ref_taxon_off=ref_taxoff
         )
         pbar.update(len(ids))
         if df.size > 0:

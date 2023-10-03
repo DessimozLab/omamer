@@ -24,13 +24,14 @@ from Bio import SeqIO
 
 class SequenceReader(object):
     @staticmethod
-    def read(fn, k, format='fasta', chunksize=None):
+    def read(fn, k, format='fasta', chunksize=None, sanitiser=None):
         ids = []
         seqs = []
         for rec in filter(lambda x: (len(x.seq) >= k),
                 SeqIO.parse(fn, format)):
             ids.append(rec.id)
-            seqs.append(str(rec.seq))
+            s = str(rec.seq).upper()
+            seqs.append(sanitiser(s) if sanitiser is not None else s)
 
             if chunksize is not None and len(ids) == chunksize:
                 yield (ids, seqs)

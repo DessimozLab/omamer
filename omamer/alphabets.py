@@ -92,7 +92,7 @@ class Alphabet(object):
         else:
             return self.trans[x.view(np.uint8)].view("|S1")
     
-    def sanitize_seq(self, seq):
+    def sanitise_seq(self, seq):
         return ''.join([x if x in self.chars else 'X' for x in seq])
 
     @property

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -19,8 +19,14 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
-from argparse import ArgumentParser, HelpFormatter, _SubParsersAction, FileType, ArgumentDefaultsHelpFormatter
+"""
+from argparse import (
+    ArgumentParser,
+    HelpFormatter,
+    _SubParsersAction,
+    FileType,
+    ArgumentDefaultsHelpFormatter,
+)
 from omamer._runners import mkdb_oma, search, info_db
 from omamer import __version__, __copyright__
 from tables import PerformanceWarning
@@ -66,14 +72,12 @@ def get_thread_count():
         return mp.cpu_count()
 
 
-if not sys.warnoptions:
-    warnings.simplefilter("ignore", category=PerformanceWarning)
-    # TODO: fix the 0 scores and remove this warning
-    warnings.simplefilter("ignore", category=RuntimeWarning)
-
-desc = 'OMAmer - tree-driven and alignment-free protein assignment to sub-families.'
+desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families."
 parser = ArgumentParser(
-    formatter_class=NoSubparsersMetavarFormatter, prog="omamer", description=desc, epilog=__copyright__
+    formatter_class=NoSubparsersMetavarFormatter,
+    prog="omamer",
+    description=desc,
+    epilog=__copyright__,
 )
 parser.add_argument(
     "--version",
@@ -87,6 +91,7 @@ subparsers = parser.add_subparsers(title="Commands")
 
 mkdb_parser = subparsers.add_parser(
     "mkdb",
+    formatter_class=ArgumentDefaultsHelpFormatter,
     help="Build a database.",
     description="Build a database, by providing an OMA HDF5 database file.",
 )
@@ -98,34 +103,52 @@ mkdb_parser.add_argument(
     "--nthreads",
     default=1,
     type=int,
-    help="Number of threads to use (default {}).".format(1),
+    choices=range(get_thread_count() + 1),
+    help="Number of threads to use",
 )
 mkdb_parser.add_argument(
-    "--min_fam_size", default=6, help="Only root-HOGs with a protein count passing this threshold are used.", type=int
+    "--min_fam_size",
+    default=6,
+    help="Only root-HOGs with a protein count passing this threshold are used.",
+    type=int,
 )
 mkdb_parser.add_argument(
-    "--min_fam_completeness", default=0.0, help="Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level", type=float
+    "--min_fam_completeness",
+    default=0.0,
+    help="Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level",
+    type=float,
 )
 mkdb_parser.add_argument(
-    "--logic", default="AND", help="Logic used between the two above arguments to filter root-HOGs. Options are AND or OR.", choices=["AND", "OR"]
+    "--logic",
+    default="AND",
+    help="Logic used between the two above arguments to filter root-HOGs. Options are AND or OR.",
+    choices=["AND", "OR"],
 )
 mkdb_parser.add_argument(
-    "--root_taxon", default="LUCA", help="HOGs defined at, or descending from, this taxon are uses as root-HOGs."
+    "--root_taxon",
+    default="LUCA",
+    help="HOGs defined at, or descending from, this taxon are uses as root-HOGs.",
 )
 mkdb_parser.add_argument(
-    "--hidden_taxa", default="", help="The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (e.g. Bacteria,Homo_sapiens).", type=str
+    "--hidden_taxa",
+    default="",
+    help="The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (e.g. Bacteria,Homo_sapiens).",
+    type=str,
 )
-#mkdb_parser.add_argument(
+# mkdb_parser.add_argument(
 #    "--species", default="", help="Alternatively to --hidden_taxa, provide a file with species offsets in sp_tab (tmp option for scaling experiment)", type=str
-#)
+# )
 mkdb_parser.add_argument(
-    "--reduced_alphabet", default=False, action="store_true", help="Use reduced alphabet from Linclust paper."
+    "--reduced_alphabet",
+    default=False,
+    action="store_true",
+    help="Use reduced alphabet from Linclust paper.",
 )
+mkdb_parser.add_argument("--k", default=6, help="k-mer length", type=int)
 mkdb_parser.add_argument(
-    "--k", default=6, help="k-mer length", type=int
-)
-mkdb_parser.add_argument(
-    "--oma_path", required=True, help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk)."
+    "--oma_path",
+    required=True,
+    help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk).",
 )
 mkdb_parser.add_argument(
     "--log_level",
@@ -145,34 +168,49 @@ search_parser.add_argument(
     "--db", required=True, help="Path to existing database (including filename)."
 )
 search_parser.add_argument(
-    "--query", required=True, help="Path to FASTA formatted sequences", type=FileType("r")
+    "--query",
+    required=True,
+    help="Path to FASTA formatted sequences",
+    type=FileType("r"),
 )
 
 search_parser.add_argument(
-    "--threshold", default=0.10, type=float, help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be."
+    "--threshold",
+    default=0.10,
+    type=float,
+    help="Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be.",
 )
 search_parser.add_argument(
-    "--family_alpha", default=1e-6, type=float, help="Significance threshold used when filtering families."
+    "--family_alpha",
+    default=1e-6,
+    type=float,
+    help="Significance threshold used when filtering families.",
 )
 search_parser.add_argument(
-    "--family_only", action='store_true', help="Set to only place at family level."
-) 
+    "--family_only", action="store_true", help="Set to only place at family level."
+)
 search_parser.add_argument(
-    "--top_n_fams", default=1, type=int, help="Number of top level families to place into. By default, placed into only in the best scoring family."
-) 
+    "--top_n_fams",
+    default=1,
+    type=int,
+    help="Number of top level families to place into. By default, placed into only in the best scoring family.",
+)
 
-# TODO: reintroduce this? 
-#search_parser.add_argument(
-#    "--reference_taxon", default="", help="The placement is stopped when reaching the reference taxon (must exist in the OMA database)."
-#)
+search_parser.add_argument(
+    "--reference_taxon",
+    help="The placement is stopped when reaching the reference taxon (must exist in the OMA database).",
+)
 
 search_parser.add_argument(
     "--out",
-    help="Path to output (default stdout)",
-    default=sys.stdout,
+    help="Path to output. If not set, defaults to stdout",
     type=FileType("w"),
 )
-search_parser.add_argument('--include_extant_genes', action='store_true', help='Include extant gene IDs as comma separated entry in results.')
+search_parser.add_argument(
+    "--include_extant_genes",
+    action="store_true",
+    help="Include extant gene IDs as comma separated entry in results.",
+)
 search_parser.add_argument(
     "--chunksize", default=10000, type=int, help="Number of queries to process at once."
 )
@@ -180,7 +218,8 @@ search_parser.add_argument(
     "--nthreads",
     default=1,
     type=int,
-    help="Number of threads to use."
+    choices=range(get_thread_count() + 1),
+    help="Number of threads to use",
 )
 search_parser.add_argument(
     "--log_level",
@@ -204,8 +243,21 @@ args = parser.parse_args()
 if hasattr(args, "func"):
     if hasattr(args, "log_level"):
         from omamer._utils import set_log_level, LOG
+
         set_log_level(args.log_level)
 
+    if not sys.warnoptions and not getattr(args, "log_level", "") == "debug":
+        warnings.simplefilter("ignore", category=PerformanceWarning)
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+
+    if hasattr(args, "nthreads"):
+        # set number of threads before we call any other code
+        import numba
+
+        nthreads = args.nthreads if args.nthreads > 0 else get_thread_count()
+        numba.set_num_threads(nthreads)
+
+    # call the relevant runner func
     args.func(args)
 else:
     parser.print_usage()

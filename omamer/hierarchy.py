@@ -1,4 +1,4 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -18,7 +18,7 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 import numba
 import numpy as np
 
@@ -26,9 +26,9 @@ import numpy as np
 ## Generic functions for hierarchical tables (hog_tab and tax_tab)
 @numba.njit
 def get_root_leaf_offsets(off, parent_arr):
-    '''
+    """
     Leverages parent pointers to gather parents until root.
-    '''
+    """
     leaf_root = [off]
     parent = parent_arr[off]
     while parent != -1:
@@ -36,12 +36,13 @@ def get_root_leaf_offsets(off, parent_arr):
         parent = parent_arr[parent]
     return np.array(leaf_root[::-1], dtype=np.uint32)
 
+
 @numba.njit
 def get_lca_off(offsets, parent_arr):
-    '''
+    """
     Compute the last common ancestor (LCA) of an offset list.
      - for HOGs, works if they all come from the same root-HOG
-    '''
+    """
     off_nr = len(offsets)
 
     # lca of one off is itself
@@ -88,17 +89,16 @@ def traverse(off, tab, c_buff, acc, leaf_fun, prefix_fun, postfix_fun, **kwargs)
         prefix_fun(off, acc, **kwargs)
 
     for c in get_children(off, tab, c_buff):
-
         # come back when no more children (could add a stop_fun)
         if tab[c]["ChildrenOff"] == -1:
             if leaf_fun:
                 leaf_fun(c, acc, **kwargs)
         else:
             traverse(c, tab, c_buff, acc, leaf_fun, prefix_fun, postfix_fun, **kwargs)
-            
+
     if postfix_fun:
         postfix_fun(off, acc, **kwargs)
-    
+
     return acc
 
 
@@ -117,17 +117,19 @@ def get_leaves(off, tab, c_buff):
     def append(off, list):
         list.append(off)
         return list
-    
-    if tab['ChildrenOff'][off] == -1:
+
+    if tab["ChildrenOff"][off] == -1:
         return np.array([off], dtype=np.uint32)
     else:
-        return np.array(traverse(off, tab, c_buff, [], append, None, None), dtype=np.uint32)
+        return np.array(
+            traverse(off, tab, c_buff, [], append, None, None), dtype=np.uint32
+        )
 
 
 def is_ancestor(off1, off2, parent_arr):
-    '''
+    """
     Is off1 ancestral to off2?
-    '''
+    """
     return off1 in get_root_leaf_offsets(off2, parent_arr)
 
 
@@ -139,29 +141,33 @@ def get_hog_child_prots(hog_off, hog_tab, cprot_buff):
 
 
 def get_hog_member_prots(hog_off, hog_tab, chog_buff, cprot_buff):
-    '''
+    """
     Collect proteins from HOG and its descendants.
-    '''
+    """
     descendant_hogs = get_descendants(hog_off, hog_tab, chog_buff)
     descendant_prots = list(get_hog_child_prots(hog_off, hog_tab, cprot_buff))
     for dhog_off in descendant_hogs:
-        descendant_prots.extend(list(get_hog_child_prots(dhog_off, hog_tab, cprot_buff)))
+        descendant_prots.extend(
+            list(get_hog_child_prots(dhog_off, hog_tab, cprot_buff))
+        )
     return descendant_prots
 
 
 @numba.njit
 def is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
-    '''
+    """
     Check whether the HOG implies the true taxon.
-    '''
+    """
     implied = False
-    
+
     # the HOG defined on the lineage of the true taxon
-    if np.argwhere(true_tax_lineage == hog_tab['TaxOff'][hog_off]).size == 1:
+    if np.argwhere(true_tax_lineage == hog_tab["TaxOff"][hog_off]).size == 1:
         implied = True
-    
+
     # child HOGs are defined on the lineage of the true taxon
-    child_hog_taxa = np.unique(hog_tab['TaxOff'][get_children(hog_off, hog_tab, chog_buff)])
+    child_hog_taxa = np.unique(
+        hog_tab["TaxOff"][get_children(hog_off, hog_tab, chog_buff)]
+    )
     for tax_off in true_tax_lineage:
         if np.argwhere(child_hog_taxa == tax_off).size == 1:
             implied = False
@@ -212,6 +218,7 @@ def get_hog2taxa(hog_tab, sp_tab, prot_sp_off, cprot_buff, tax_tab, chog_buff):
         buff_off += len(taxa)
         hog_taxa_idx.append(buff_off)
         hog_taxa_buff.extend(taxa)
-    return (np.array(hog_taxa_idx, dtype=np.uint32), np.array(
-        hog_taxa_buff, dtype=np.uint32
-    ))
+    return (
+        np.array(hog_taxa_idx, dtype=np.uint32),
+        np.array(hog_taxa_buff, dtype=np.uint32),
+    )

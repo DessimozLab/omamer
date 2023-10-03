@@ -1,4 +1,4 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -18,7 +18,7 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 from collections import defaultdict
 from itertools import repeat
 from tqdm.auto import tqdm
@@ -39,9 +39,9 @@ PROT_ID_LEN = 12
 
 
 class Database(object):
-    '''
+    """
     Database definition for the OMAmer algorithm.
-    '''
+    """
 
     class ProteinTableFormat(tables.IsDescription):
         # Note, the ID field could be generalised and replaced with a SequenceBuffer,
@@ -89,9 +89,14 @@ class Database(object):
         SpeOff = tables.Int32Col(pos=6)
         Level = tables.Int32Col(pos=7)
 
-    def __init__(self, filename, root_taxon=None, mode='r'):
-        assert mode in {"r", "w"}, "Databased must only be opened in read or write mode."
-        assert (mode != "w" or root_taxon), "A root_taxon must be defined when building the database"
+    def __init__(self, filename, root_taxon=None, mode="r"):
+        assert mode in {
+            "r",
+            "w",
+        }, "Databased must only be opened in read or write mode."
+        assert (
+            mode != "w" or root_taxon
+        ), "A root_taxon must be defined when building the database"
         self.root_taxon = root_taxon
         self.filename = filename
         self.mode = mode
@@ -103,7 +108,7 @@ class Database(object):
 
         self.db = tables.open_file(self.filename, self.mode, filters=self._compr)
 
-        if '/Index' in self.db:
+        if "/Index" in self.db:
             self.ki = Index(self)
 
     def _check_open_writeable(self):
@@ -120,25 +125,27 @@ class Database(object):
 
     def __getattr__(self, attr):
         # make paths in the database accessible as attributes
-        if attr.startswith('_db_'):
-            path = '/' + '/'.join(attr.split('_')[2:])
+        if attr.startswith("_db_"):
+            path = "/" + "/".join(attr.split("_")[2:])
             if path in self.db:
                 return self.db.get_node(path)
             else:
-                raise tables.NoSuchNodeError('Path not found in database ({})'.format(path))
+                raise tables.NoSuchNodeError(
+                    "Path not found in database ({})".format(path)
+                )
 
         return self.__getattribute__(attr)
-    
+
     def get_hog_id(self, i):
         # extract the hog id from the hog id buffer
         x = self._db_HOG[i]
-        s = x['IDBufferOff']
-        e = s + x['IDLen']
-        return self._db_HOGIDBuffer[s:e].tobytes().decode('ascii')
+        s = x["IDBufferOff"]
+        e = s + x["IDLen"]
+        return self._db_HOGIDBuffer[s:e].tobytes().decode("ascii")
 
     def initiate_tax_tab(self, stree_path):
         """
-	except SpeOff column
+        except SpeOff column
         """
         self._check_open_writeable()
 
@@ -154,19 +161,21 @@ class Database(object):
             species = set()
 
             for tl in pruned_stree.traverse():
-                tax = tl.name.encode('ascii')
-                tax2parent[tax] = tl.up.name.encode('ascii') if tl.up else 'root'.encode('ascii')
-                tax2children[tax] = [x.name.encode('ascii') for x in tl.children]
+                tax = tl.name.encode("ascii")
+                tax2parent[tax] = (
+                    tl.up.name.encode("ascii") if tl.up else "root".encode("ascii")
+                )
+                tax2children[tax] = [x.name.encode("ascii") for x in tl.children]
                 tax2level[tax] = tl.get_distance(stree)
                 if tl.is_leaf():
-                    species.add(tl.name.encode('ascii'))
+                    species.add(tl.name.encode("ascii"))
 
             return tax2parent, tax2children, tax2level, species
 
         # create tax table
         tax_tab = self.db.create_table(
-                "/", "Taxonomy", self.TaxonomyTableFormat, filters=self._compr
-            )
+            "/", "Taxonomy", self.TaxonomyTableFormat, filters=self._compr
+        )
 
         # parse species tree
         tax2parent, tax2children, tax2level, species = _parse_stree(
@@ -183,7 +192,6 @@ class Database(object):
 
         children_buffer_off = 0
         for tax in sorted_taxa:
-
             # must not be root
             par_off = (
                 np.searchsorted(sorted_taxa, tax2parent[tax])
@@ -224,7 +232,13 @@ class Database(object):
         return (tax2taxoff, species)
 
     def update_hog_and_fam_tabs(
-        self, fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, hog2gene_nr, hog2completeness
+        self,
+        fam2hogs,
+        hog2taxoff,
+        hog2protoffs,
+        hog2oma_hog,
+        hog2gene_nr,
+        hog2completeness,
     ):
         self._check_open_writeable()
 
@@ -308,13 +322,12 @@ class Database(object):
 
             return children_offsets, children_numbers, children, children_off
 
-        
         hog_tab = self.db.create_table(
-                "/", "HOG", self.HOGTableFormat, filters=self._compr, expectedrows=1e7
-                )
+            "/", "HOG", self.HOGTableFormat, filters=self._compr, expectedrows=1e7
+        )
         fam_tab = self.db.create_table(
-                "/", "Family", self.FamilyTableFormat, filters=self._compr, expectedrows=1e6
-            )
+            "/", "Family", self.FamilyTableFormat, filters=self._compr, expectedrows=1e6
+        )
         hog_tab.autoindex = fam_tab.autoindex = False
 
         # initiate HOG and protein children arrays
@@ -331,9 +344,11 @@ class Database(object):
         level_offsets_off = 0
 
         # initialise hog id buffer
-        hog_id_buff = self.db.create_earray('/', 'HOGIDBuffer', tables.StringAtom(1), (0,), filters=self._compr)
+        hog_id_buff = self.db.create_earray(
+            "/", "HOGIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
+        )
 
-        for (fam_id, hogs) in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
+        for fam_id, hogs in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
             ### hogs
             # sort by level
             hogs = sorted(hogs, key=lambda x: len(x.split(b".")))
@@ -371,15 +386,16 @@ class Database(object):
             child_prots.extend(tmp_child_prots)
 
             # store family information
-            fam_tab.append([
-                (
-                    fam_id,
-                    hog2taxoff[hogs[0]],
-                    hog_off,
-                    hog_num,
-                    level_offsets_off,
-                    hog_level_offsets_num
-                ),
+            fam_tab.append(
+                [
+                    (
+                        fam_id,
+                        hog2taxoff[hogs[0]],
+                        hog_off,
+                        hog_num,
+                        level_offsets_off,
+                        hog_level_offsets_num,
+                    ),
                 ]
             )
 
@@ -391,10 +407,32 @@ class Database(object):
                 hog_taxoff = hog2taxoff[hogs[i]]
 
                 # write record
-                r = (len(hog_id_buff), len(oma_hog_id), fam_off, hog_taxoff, parents[i], child_hogs_offsets[i], child_hogs_numbers[i], child_prots_offsets[i], child_prots_numbers[i], -1, -1, 0, oma_hog_size, oma_hog_completeness, 0)
-                hog_tab.append([r,])
+                r = (
+                    len(hog_id_buff),
+                    len(oma_hog_id),
+                    fam_off,
+                    hog_taxoff,
+                    parents[i],
+                    child_hogs_offsets[i],
+                    child_hogs_numbers[i],
+                    child_prots_offsets[i],
+                    child_prots_numbers[i],
+                    -1,
+                    -1,
+                    0,
+                    oma_hog_size,
+                    oma_hog_completeness,
+                    0,
+                )
+                hog_tab.append(
+                    [
+                        r,
+                    ]
+                )
 
-                hog_id_buff.append(np.frombuffer(oma_hog_id, dtype=tables.StringAtom(1)))
+                hog_id_buff.append(
+                    np.frombuffer(oma_hog_id, dtype=tables.StringAtom(1))
+                )
 
                 # store hog2hogoff
                 hog2hogoff[hogs[i]] = hog_off + i
@@ -435,8 +473,8 @@ class Database(object):
 
     def add_speoff_col(self):
         """
-	to the taxonomy table
-	"""
+        to the taxonomy table
+        """
         # load species and taxa
         species = self._db_Species.col("ID")
         taxa = self._db_Taxonomy.col("ID")
@@ -475,12 +513,12 @@ class Database(object):
     def update_prot_tab(self, hog2protoffs, hog2hogoff):
         """
         add HOGoff column in the protein table
-	"""
+        """
         self._check_open_writeable()
 
         # newer way of doing this
         hogoff_col = np.zeros(len(self._db_Protein), dtype=np.uint32)
-        for (hog, protoffs) in hog2protoffs.items():
+        for hog, protoffs in hog2protoffs.items():
             hogoff_col[np.array(list(protoffs), dtype=np.uint64)] = hog2hogoff[hog]
 
         # replace the empty columns
@@ -533,22 +571,34 @@ class Database(object):
             return parent_hog
 
     def add_median_seqlen_col(self):
-        '''
+        """
         Compute the median sequence length for each HOG
-        '''
+        """
+
         def compute_median_seq_len(
-            hog_off, hog_tab, chog_buff, prot_seq_lens, cprot_buff, median_seq_lengths):
-
-            def _compute_median_seq_len(hog_off, parent2seq_lengths, prot_seq_lens, hog_tab2, cprot_buff, median_seq_lengths):
-
+            hog_off, hog_tab, chog_buff, prot_seq_lens, cprot_buff, median_seq_lengths
+        ):
+            def _compute_median_seq_len(
+                hog_off,
+                parent2seq_lengths,
+                prot_seq_lens,
+                hog_tab2,
+                cprot_buff,
+                median_seq_lengths,
+            ):
                 # compute HOG sequence lengths
-                seq_lengths = list(map(lambda x: prot_seq_lens[x], get_hog_child_prots(hog_off, hog_tab2, cprot_buff)))
+                seq_lengths = list(
+                    map(
+                        lambda x: prot_seq_lens[x],
+                        get_hog_child_prots(hog_off, hog_tab2, cprot_buff),
+                    )
+                )
 
                 # merge these with child sequence lentgths (stored in parent2seq_lengths)
                 seq_lengths = seq_lengths + parent2seq_lengths[hog_off]
 
                 # store in parent2seq_lengths
-                parent2seq_lengths[hog_tab2['ParentOff'][hog_off]] += seq_lengths
+                parent2seq_lengths[hog_tab2["ParentOff"][hog_off]] += seq_lengths
 
                 # store median
                 median_seq_lengths[hog_off] = np.median(seq_lengths)
@@ -558,43 +608,62 @@ class Database(object):
             parent2seq_lengths = defaultdict(list)
 
             parent2seq_lengths = traverse(
-                hog_off, hog_tab, chog_buff, parent2seq_lengths, _compute_median_seq_len, None, _compute_median_seq_len,
-                prot_seq_lens=prot_seq_lens, hog_tab2=hog_tab, cprot_buff=cprot_buff, median_seq_lengths=median_seq_lengths)
+                hog_off,
+                hog_tab,
+                chog_buff,
+                parent2seq_lengths,
+                _compute_median_seq_len,
+                None,
+                _compute_median_seq_len,
+                prot_seq_lens=prot_seq_lens,
+                hog_tab2=hog_tab,
+                cprot_buff=cprot_buff,
+                median_seq_lengths=median_seq_lengths,
+            )
 
         fam_tab = self._db_Family[:]
         hog_tab = self._db_HOG[:]
         chog_buff = self._db_ChildrenHOG[:]
         cprot_buff = self._db_ChildrenProt[:]
-        prot_seq_lens = self._db_Protein.col('SeqLen')
+        prot_seq_lens = self._db_Protein.col("SeqLen")
 
         median_seq_lengths = np.zeros(hog_tab.size, dtype=np.uint32)
-        for hog_off in fam_tab['HOGoff']:
+        for hog_off in fam_tab["HOGoff"]:
             compute_median_seq_len(
-                hog_off, hog_tab, chog_buff, prot_seq_lens, cprot_buff, median_seq_lengths)
+                hog_off,
+                hog_tab,
+                chog_buff,
+                prot_seq_lens,
+                cprot_buff,
+                median_seq_lengths,
+            )
 
-        self._db_HOG.modify_column(colname='MedianSeqLen', column=median_seq_lengths)
+        self._db_HOG.modify_column(colname="MedianSeqLen", column=median_seq_lengths)
 
     def add_metadata(self):
-        '''
-            Store metadata within the database to track the versioning / build time.
-        '''
+        """
+        Store metadata within the database to track the versioning / build time.
+        """
         from . import __version__
         from datetime import datetime
+
         self.db.set_node_attr("/", "omamer_version", __version__)
         self.db.set_node_attr("/", "root_level", self.root_taxon)
         self.db.set_node_attr("/", "create_timestamp", datetime.now().isoformat())
 
     def get_metadata(self):
-        '''
-            Load metadata from the database.
-        '''
+        """
+        Load metadata from the database.
+        """
         attrs = self.db.root._v_attrs
-        meta = {k.replace('_', ' '): attrs[k] for k in attrs._f_list() if k != 'oma_version'}
-        if 'source' in meta:
-            src_version = meta['source'].lower() + "_version"
-            meta['source'] += " / {}".format(attrs[src_version])
+        meta = {
+            k.replace("_", " "): attrs[k] for k in attrs._f_list() if k != "oma_version"
+        }
+        if "source" in meta:
+            src_version = meta["source"].lower() + "_version"
+            meta["source"] += " / {}".format(attrs[src_version])
         if "omamer version" not in meta:
-            meta['omamer version'] = "<= 0.2.3"
+            meta["omamer version"] = "<= 0.2.3"
         meta["k-mer length"] = self.ki.k
         meta["alphabet size"] = self.ki.alphabet.n
         meta["nr species"] = len(self._db_Species)
@@ -606,7 +675,17 @@ class DatabaseFromOMA(Database):
     """
     Used to parse the OMA browser database file
     """
-    def __init__(self, filename, root_taxon, min_fam_size=6, min_fam_completeness=0, logic='AND', include_younger_fams=True, mode='r'):
+
+    def __init__(
+        self,
+        filename,
+        root_taxon,
+        min_fam_size=6,
+        min_fam_completeness=0,
+        logic="AND",
+        include_younger_fams=True,
+        mode="r",
+    ):
         super().__init__(filename, root_taxon, mode=mode)
 
         self.min_fam_size = min_fam_size
@@ -624,7 +703,11 @@ class DatabaseFromOMA(Database):
         try:
             self.oma_version = h5file.get_node_attr("/", "oma_version")
         except AttributeError:
-            raise Exception("Provided file '{}' does not seem to be an OMA HDF5 database".format(oma_h5_path))
+            raise Exception(
+                "Provided file '{}' does not seem to be an OMA HDF5 database".format(
+                    oma_h5_path
+                )
+            )
 
         # build taxonomy table except the SpeOff column
         LOG.debug("initiate taxonomy table")
@@ -632,7 +715,13 @@ class DatabaseFromOMA(Database):
         self.add_taxid_col(h5file)
 
         LOG.debug("select and strip OMA HOGs")
-        (fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness) = self.select_and_strip_OMA_HOGs(h5file)
+        (
+            fam2hogs,
+            hog2oma_hog,
+            hog2tax,
+            hog2gene_nr,
+            hog2completeness,
+        ) = self.select_and_strip_OMA_HOGs(h5file)
 
         LOG.debug("fill sequence buffer, species table and initiate protein table")
         (
@@ -640,14 +729,9 @@ class DatabaseFromOMA(Database):
             hog2protoffs,
             hog2tax,
             hog2oma_hog,
-            seq_buff
+            seq_buff,
         ) = self.select_and_filter_OMA_proteins(
-            h5file,
-            fam2hogs,
-            hog2oma_hog,
-            hog2tax,
-            species,
-            self.min_fam_size
+            h5file, fam2hogs, hog2oma_hog, hog2tax, species, self.min_fam_size
         )
 
         LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
@@ -658,7 +742,14 @@ class DatabaseFromOMA(Database):
         hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
 
         LOG.debug("fill family and HOG tables")
-        hog2hogoff = self.update_hog_and_fam_tabs(fam2hogs, hog2taxoff, hog2protoffs, hog2oma_hog, hog2gene_nr, hog2completeness)
+        hog2hogoff = self.update_hog_and_fam_tabs(
+            fam2hogs,
+            hog2taxoff,
+            hog2protoffs,
+            hog2oma_hog,
+            hog2gene_nr,
+            hog2completeness,
+        )
 
         # add family and hog offsets
         LOG.debug("complete protein table")
@@ -672,7 +763,7 @@ class DatabaseFromOMA(Database):
 
         # close and open in read mode
         h5file.close()
-       
+
         return seq_buff
 
     def add_metadata(self):
@@ -686,7 +777,6 @@ class DatabaseFromOMA(Database):
 
     ### functions to parse OMA database ###
     def select_and_strip_OMA_HOGs(self, h5file):
-
         def _process_oma_hog(
             tax2level,
             curr_oma_taxa,
@@ -705,7 +795,7 @@ class DatabaseFromOMA(Database):
             min_fam_size,
             curr_oma_comps,
             min_fam_completeness,
-            logic
+            logic,
         ):
             """
             - decide whether an OMA HOG should be stored based on current root-HOG and HOG taxa
@@ -719,8 +809,18 @@ class DatabaseFromOMA(Database):
                 return hog2 in self.parse_hogs(hog1)
 
             def _store(
-                fam, curr_oma_hog, curr_oma_roothog, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness,
-                tax, hog_size, hog_comp):
+                fam,
+                curr_oma_hog,
+                curr_oma_roothog,
+                fam2hogs,
+                hog2oma_hog,
+                hog2tax,
+                hog2gene_nr,
+                hog2completeness,
+                tax,
+                hog_size,
+                hog_comp,
+            ):
                 """
                 - compute SPhog HOG id
                 - fill containers
@@ -755,7 +855,6 @@ class DatabaseFromOMA(Database):
 
                 # if the HOG is descendant of current OMA root-HOG, new sub-HOG
                 if _is_descendant(curr_oma_hog, curr_oma_roothog):
-
                     # but store only if root-HOG passed quality thresholds
                     if curr_oma_roothog_ok:
                         _store(
@@ -769,15 +868,24 @@ class DatabaseFromOMA(Database):
                             hog2completeness,
                             hog_tax,
                             hog_size,
-                            hog_comp
+                            hog_comp,
                         )
 
                 # else, new root-HOG (include only root-HOG at root-taxon if include_younger_fams==False)
-                elif (not include_younger_fams and hog_tax == roottax) or include_younger_fams:
+                elif (
+                    not include_younger_fams and hog_tax == roottax
+                ) or include_younger_fams:
                     curr_oma_roothog = curr_oma_hog
 
                     # but store it only if passes quality thresholds
-                    ok = (hog_size >= min_fam_size or hog_comp >= min_fam_completeness) if logic == 'OR' else (hog_size >= min_fam_size and hog_comp >= min_fam_completeness)
+                    ok = (
+                        (hog_size >= min_fam_size or hog_comp >= min_fam_completeness)
+                        if logic == "OR"
+                        else (
+                            hog_size >= min_fam_size
+                            and hog_comp >= min_fam_completeness
+                        )
+                    )
                     if ok:
                         fam += 1
                         curr_oma_roothog_ok = True
@@ -794,7 +902,7 @@ class DatabaseFromOMA(Database):
                             hog2completeness,
                             hog_tax,
                             hog_size,
-                            hog_comp
+                            hog_comp,
                         )
 
                     else:
@@ -803,8 +911,20 @@ class DatabaseFromOMA(Database):
             return (fam, curr_oma_roothog, curr_oma_roothog_ok)
 
         def _process_oma_fam(
-            fam_tab_sort, tax2level, fam, fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness,
-            roottax, include_younger_fams, min_fam_size, min_fam_completeness, logic):
+            fam_tab_sort,
+            tax2level,
+            fam,
+            fam2hogs,
+            hog2oma_hog,
+            hog2tax,
+            hog2gene_nr,
+            hog2completeness,
+            roottax,
+            include_younger_fams,
+            min_fam_size,
+            min_fam_completeness,
+            logic,
+        ):
             """
             apply _process_oma_hog to one OMA family
              - fam_tab_sort: slice of the HogLevel table for one family sorted by HOG ids
@@ -823,7 +943,6 @@ class DatabaseFromOMA(Database):
 
                 # evaluation at new oma HOG
                 if oma_hog != curr_oma_hog:
-
                     fam, curr_oma_roothog, curr_oma_roothog_ok = _process_oma_hog(
                         tax2level,
                         curr_oma_taxa,
@@ -842,7 +961,7 @@ class DatabaseFromOMA(Database):
                         min_fam_size,
                         curr_oma_comps,
                         min_fam_completeness,
-                        logic
+                        logic,
                     )
 
                     # reset for new HOG
@@ -875,7 +994,7 @@ class DatabaseFromOMA(Database):
                 min_fam_size,
                 curr_oma_comps,
                 min_fam_completeness,
-                logic
+                logic,
             )
 
             return fam
@@ -893,12 +1012,14 @@ class DatabaseFromOMA(Database):
 
         # bookeepers for families
         fam = 0
-        curr_fam = hog_tab[0]['Fam']
+        curr_fam = hog_tab[0]["Fam"]
         i = 0
         j = 0
 
-        for hog_ent in tqdm(hog_tab, disable=is_progress_disabled(), mininterval=10, desc='Parsing HOGs'):
-            oma_fam = hog_ent['Fam']
+        for hog_ent in tqdm(
+            hog_tab, disable=is_progress_disabled(), mininterval=10, desc="Parsing HOGs"
+        ):
+            oma_fam = hog_ent["Fam"]
 
             if oma_fam != curr_fam:
                 # load fam table and sort by HOG ids
@@ -919,7 +1040,7 @@ class DatabaseFromOMA(Database):
                     self.include_younger_fams,
                     self.min_fam_size,
                     self.min_fam_completeness,
-                    self.logic
+                    self.logic,
                 )
 
                 # move pointer and update current family
@@ -943,7 +1064,7 @@ class DatabaseFromOMA(Database):
             self.include_younger_fams,
             self.min_fam_size,
             self.min_fam_completeness,
-            self.logic
+            self.logic,
         )
 
         del hog_tab
@@ -962,13 +1083,15 @@ class DatabaseFromOMA(Database):
             oma_seq_buffer = oma_seq_buffer[:]
 
         # temporary mappers and booking for latter
-        sp2sp_off = dict(zip(sorted(species), range(len(species))))  # this is to sort the species table
+        sp2sp_off = dict(
+            zip(sorted(species), range(len(species)))
+        )  # this is to sort the species table
         oma_hog2hog = dict(zip(hog2oma_hog.values(), hog2oma_hog.keys()))
         hog2protoffs = defaultdict(set)
 
         LOG.debug(" - select proteins from selected HOGs")
 
-        seq_off = 0   # pointer to sequence in buffer
+        seq_off = 0  # pointer to sequence in buffer
         prot_off = 0  # pointer to protein in protein table
 
         # store rows for species and protein tables and sequence buffer
@@ -976,12 +1099,21 @@ class DatabaseFromOMA(Database):
         seq_buffs = []
 
         prot_tab = self.db.create_table(
-                "/", "Protein", self.ProteinTableFormat, filters=self._compr, expectedrows=25e6
-            )
+            "/",
+            "Protein",
+            self.ProteinTableFormat,
+            filters=self._compr,
+            expectedrows=25e6,
+        )
 
-        for r in tqdm(genome_tab, disable=is_progress_disabled(), mininterval=1, desc='Parsing genomes'):
-            sp = r['SciName']
-            sp_code = r['UniProtSpeciesCode']
+        for r in tqdm(
+            genome_tab,
+            disable=is_progress_disabled(),
+            mininterval=1,
+            desc="Parsing genomes",
+        ):
+            sp = r["SciName"]
+            sp_code = r["UniProtSpeciesCode"]
 
             # If no scientific name is set in the OMA DB, use the species code.
             sp = sp_code if sp not in species else sp
@@ -1009,10 +1141,16 @@ class DatabaseFromOMA(Database):
                     seq_buffs.append(seq)
 
                     # store protein row
-                    oma_id = '{}{:05d}'.format(sp_code.decode('ascii'), rr['EntryNr'] - entry_off)
-                    assert len(oma_id) < PROT_ID_LEN, 'Please check PROT_ID_LEN as {} is longer than {} chars.'.format(oma_id, PROT_ID_LEN)
-                    
-                    prot_tab.append([(oma_id.encode('ascii'), sp_off, 0, seq_len)])
+                    oma_id = "{}{:05d}".format(
+                        sp_code.decode("ascii"), rr["EntryNr"] - entry_off
+                    )
+                    assert (
+                        len(oma_id) < PROT_ID_LEN
+                    ), "Please check PROT_ID_LEN as {} is longer than {} chars.".format(
+                        oma_id, PROT_ID_LEN
+                    )
+
+                    prot_tab.append([(oma_id.encode("ascii"), sp_off, 0, seq_len)])
 
                     # track hog and family
                     hog = oma_hog2hog[oma_hog]
@@ -1027,8 +1165,8 @@ class DatabaseFromOMA(Database):
 
         # fill species and protein tables
         sp_tab = self.db.create_table(
-                "/", "Species", self.SpeciesTableFormat, filters=self._compr
-            )
+            "/", "Species", self.SpeciesTableFormat, filters=self._compr
+        )
         sp_tab.append(sp_rows)
         sp_tab.flush()
 
@@ -1036,27 +1174,37 @@ class DatabaseFromOMA(Database):
 
         # cleanup, ensure gc
         del genome_tab, ent_tab, oma_seq_buffer
-        
+
         seq_buff = np.concatenate(seq_buffs)
         return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
 
     def add_taxid_col(self, h5file):
-        '''
+        """
         Add the NCBI taxon id from OMA hdf5.
-        '''
+        """
         oma_tax_tab = h5file.root.Taxonomy[:]
         oma_sp_tab = h5file.root.Genome[:]
 
         # quick check that the values are positives
-        if (oma_tax_tab['NCBITaxonId'][0] >= 0) and (oma_sp_tab['NCBITaxonId'][0] >= 0):
+        if (oma_tax_tab["NCBITaxonId"][0] >= 0) and (oma_sp_tab["NCBITaxonId"][0] >= 0):
             taxid_column = []
-            for tax_name in self._db_Taxonomy.col('ID'):
-                if tax_name == b'LUCA':
+            for tax_name in self._db_Taxonomy.col("ID"):
+                if tax_name == b"LUCA":
                     taxid_column.append(-1)
                 else:
                     try:
-                        taxid_column.append(oma_tax_tab['NCBITaxonId'][np.argwhere(oma_tax_tab['Name'] == tax_name)[0][0]])
+                        taxid_column.append(
+                            oma_tax_tab["NCBITaxonId"][
+                                np.argwhere(oma_tax_tab["Name"] == tax_name)[0][0]
+                            ]
+                        )
                     # when the taxon name is a uniprot species code
                     except IndexError:
-                        taxid_column.append(oma_sp_tab['NCBITaxonId'][np.argwhere(oma_sp_tab['UniProtSpeciesCode'] == tax_name)[0][0]])
-            self._db_Taxonomy.modify_column(colname='TaxID', column=taxid_column)
+                        taxid_column.append(
+                            oma_sp_tab["NCBITaxonId"][
+                                np.argwhere(
+                                    oma_sp_tab["UniProtSpeciesCode"] == tax_name
+                                )[0][0]
+                            ]
+                        )
+            self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)

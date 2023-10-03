@@ -1,4 +1,4 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -18,17 +18,16 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 from Bio import SeqIO
 
 
 class SequenceReader(object):
     @staticmethod
-    def read(fn, k, format='fasta', chunksize=None, sanitiser=None):
+    def read(fn, k, format="fasta", chunksize=None, sanitiser=None):
         ids = []
         seqs = []
-        for rec in filter(lambda x: (len(x.seq) >= k),
-                SeqIO.parse(fn, format)):
+        for rec in filter(lambda x: (len(x.seq) >= k), SeqIO.parse(fn, format)):
             ids.append(rec.id)
             s = str(rec.seq).upper()
             seqs.append(sanitiser(s) if sanitiser is not None else s)

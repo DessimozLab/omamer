@@ -1,4 +1,4 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -18,7 +18,7 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 from datetime import date
 
 __packagename__ = "omamer"

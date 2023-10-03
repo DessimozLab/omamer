@@ -1,4 +1,4 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -18,33 +18,27 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 from PySAIS import sais
 import numba
 import numpy as np
 
 from ._utils import LOG
 from .alphabets import Alphabet, get_transform
-from .hierarchy import (
-    get_lca_off, 
-    get_leaves
-)
+from .hierarchy import get_lca_off, get_leaves
 from .merge_search import cumulate_counts_1fam
 
 
 class Index(object):
-    def __init__(
-        self, db, k=6, reduced_alphabet=False, hidden_taxa=[]
-    ):
-        
+    def __init__(self, db, k=6, reduced_alphabet=False, hidden_taxa=[]):
         # load database object
         self.db = db
 
         # load k, alphabet size and hidden taxa
-        if '/Index' in self.db.db:
-            self.k = self.db.db.root.Index._v_attrs['k']
-            alphabet_n = self.db.db.root.Index._v_attrs['alphabet_n']
-            self.hidden_taxa = self.db.db.root.Index._v_attrs['hidden_taxa']
+        if "/Index" in self.db.db:
+            self.k = self.db.db.root.Index._v_attrs["k"]
+            alphabet_n = self.db.db.root.Index._v_attrs["alphabet_n"]
+            self.hidden_taxa = self.db.db.root.Index._v_attrs["hidden_taxa"]
         else:
             self.k = k
             alphabet_n = 21 if not reduced_alphabet else 13
@@ -58,25 +52,33 @@ class Index(object):
         sp_filter = np.full((len(self.db._db_Species),), False)
         for hidden_taxon in self.hidden_taxa:
             descendant_species = get_leaves(
-                np.searchsorted(tax_tab['ID'], hidden_taxon.encode('ascii')), tax_tab, self.db._db_ChildrenTax[:])
+                np.searchsorted(tax_tab["ID"], hidden_taxon.encode("ascii")),
+                tax_tab,
+                self.db._db_ChildrenTax[:],
+            )
             # case where hidden taxon is species
             if descendant_species.size == 0:
-                sp_filter[np.searchsorted(self.db._db_Species.col('ID'), hidden_taxon.encode('ascii'))] = True
+                sp_filter[
+                    np.searchsorted(
+                        self.db._db_Species.col("ID"), hidden_taxon.encode("ascii")
+                    )
+                ] = True
             else:
                 for sp_off in descendant_species:
-                    sp_filter[tax_tab['SpeOff'][sp_off]] = True
+                    sp_filter[tax_tab["SpeOff"][sp_off]] = True
         return sp_filter
 
     @property
     def kmer_table(self):
-        return {'buff': self.db._db_Index_TableBuffer,
-                'idx': self.db._db_Index_TableIndex}
+        return {
+            "buff": self.db._db_Index_TableBuffer,
+            "idx": self.db._db_Index_TableIndex,
+        }
 
     ### main function to build the index ###
     def build_kmer_table(self, seq_buff):
-
-        assert self.db.mode in {'w', 'a'}, "Index must be opened in write mode."
-        assert ('/Index' not in self.db.db), 'Index has already been computed'
+        assert self.db.mode in {"w", "a"}, "Index must be opened in write mode."
+        assert "/Index" not in self.db.db, "Index has already been computed"
 
         # build suffix array with option to translate the sequence buffer first
         sa = self._build_suffixarray(
@@ -160,7 +162,6 @@ class Index(object):
             DIGITS_AA,
             DIGITS_AA_LOOKUP,
         ):
-
             ii = 0  # pointer to sa offset of kk
             kk = 0  # pointer to k-mer (offset in table_idx)
             ii_table_buff = 0  # pointer to offset in table_buff (~rows of k-mer table)
@@ -225,18 +226,20 @@ class Index(object):
         def estimate_family_prob(tab, idx, h2f):
             @numba.njit
             def count_family_occurrence(tab, idx, h2f):
-                c = np.zeros(h2f.max()+1, dtype=np.uint32)
-                for i in range(len(idx)-1):
-                    hogs = tab[idx[i]:idx[i+1]]
-                    c[h2f[hogs]] += (idx[i+1] - idx[i])
+                c = np.zeros(h2f.max() + 1, dtype=np.uint32)
+                for i in range(len(idx) - 1):
+                    hogs = tab[idx[i] : idx[i + 1]]
+                    c[h2f[hogs]] += idx[i + 1] - idx[i]
                 return c
 
             fam_occ = count_family_occurrence(tab, idx, h2f)
-            return (fam_occ / idx[-1])
-        
+            return fam_occ / idx[-1]
+
         def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
             @numba.njit(parallel=True, nogil=True)
-            def cumulate_counts_nfams(hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent):
+            def cumulate_counts_nfams(
+                hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent
+            ):
                 hog_cum_counts = hog_counts.copy()
 
                 for i in numba.prange(len(fam_level_off)):
@@ -248,9 +251,14 @@ class Index(object):
                 return hog_cum_counts
 
             hog_occ = cumulate_counts_nfams(
-                    hog_counts, fam_tab.col('LevelOff'), fam_tab.col('LevelNum'), level_arr[:], hog2parent)
+                hog_counts,
+                fam_tab.col("LevelOff"),
+                fam_tab.col("LevelNum"),
+                level_arr[:],
+                hog2parent,
+            )
 
-            return (hog_occ / idx[-1])
+            return hog_occ / idx[-1]
 
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db._db_Protein)
@@ -283,14 +291,14 @@ class Index(object):
         table_buff = np.zeros((len(sa_mask)), dtype=np.uint32)
 
         hog_kmer_counts = np.zeros(len(self.db._db_HOG), dtype=np.uint64)
-        
+
         h2f = self.db._db_HOG.col("FamOff")
 
         ii_table_buff = _compute_kmer_table(
             sa,
             seq_buff,
             sa_mask,
-            h2f, 
+            h2f,
             self.db._db_HOG.col("ParentOff"),
             table_idx,
             table_buff,
@@ -304,18 +312,30 @@ class Index(object):
         table_buff = table_buff[:ii_table_buff]
 
         LOG.debug(" - write k-mer table")
-        idx = self.db.db.create_group('/', 'Index', 'hog indexes')
-        idx._f_setattr('k', self.k)
-        idx._f_setattr('alphabet_n', self.alphabet.n)
-        idx._f_setattr('hidden_taxa', self.hidden_taxa)
-        self.db.db.create_carray(idx, "TableIndex", obj=table_idx, filters=self.db._compr)
+        idx = self.db.db.create_group("/", "Index", "hog indexes")
+        idx._f_setattr("k", self.k)
+        idx._f_setattr("alphabet_n", self.alphabet.n)
+        idx._f_setattr("hidden_taxa", self.hidden_taxa)
+        self.db.db.create_carray(
+            idx, "TableIndex", obj=table_idx, filters=self.db._compr
+        )
         self.db.db.create_carray(
             idx, "TableBuffer", obj=table_buff, filters=self.db._compr
         )
 
         # compute the family / hog probability estimates, assuming binomial distns
         fam_prob = estimate_family_prob(table_buff, table_idx, h2f)
-        self.db.db.create_carray(idx, 'FamilyProbability', obj=fam_prob, filters=self.db._compr)
+        self.db.db.create_carray(
+            idx, "FamilyProbability", obj=fam_prob, filters=self.db._compr
+        )
 
-        hog_prob = estimate_hog_prob(table_idx, hog_kmer_counts, self.db._db_Family, self.db._db_LevelOffsets, self.db._db_HOG.col('ParentOff'))
-        self.db.db.create_carray(idx, 'HOGProbability', obj=hog_prob, filters=self.db._compr)
+        hog_prob = estimate_hog_prob(
+            table_idx,
+            hog_kmer_counts,
+            self.db._db_Family,
+            self.db._db_LevelOffsets,
+            self.db._db_HOG.col("ParentOff"),
+        )
+        self.db.db.create_carray(
+            idx, "HOGProbability", obj=hog_prob, filters=self.db._compr
+        )

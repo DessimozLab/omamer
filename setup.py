@@ -1,4 +1,4 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
     (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
@@ -18,33 +18,45 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 from setuptools import setup, find_packages
 
 
-name = 'omamer'
+name = "omamer"
 __version__ = None
-with open('{:s}/__init__.py'.format(name), 'rt') as fp:
+with open("{:s}/__init__.py".format(name), "rt") as fp:
     for line in fp:
-        if line.startswith('__version__'):
+        if line.startswith("__version__"):
             exec(line.rstrip())
 
 # TODO
-requirements = ['biopython', 'ete3', 'fast-fisher', 'numba', 'numpy', 'pandas', 'property_manager', 'scipy', 'tables', 'tqdm']
-extra_requirements = {'build': ['pysais']}
+requirements = [
+    "biopython",
+    "ete3",
+    "fast-fisher",
+    "numba",
+    "numpy",
+    "pandas",
+    "property_manager",
+    "scipy",
+    "tables",
+    "tqdm",
+]
+extra_requirements = {"build": ["pysais"]}
 
-desc = 'OMAmer - tree-driven and alignment-free protein assignment to sub-families'
+desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
 
 setup(
     name=name,
     version=__version__,
-    author='Victor Rossier and Alex Warwick Vesztrocy',
-    email='alex@warwickvesztrocy.co.uk',
-    url='https://github.com/DessimozLab/omamer',
+    author="Victor Rossier and Alex Warwick Vesztrocy",
+    email="alex@warwickvesztrocy.co.uk",
+    url="https://github.com/DessimozLab/omamer",
     description=desc,
     packages=find_packages(),
     install_requires=requirements,
     extra_requires=extra_requirements,
     python_requires=">=3.6",
-    license='LGPLv3',
-    scripts=['bin/omamer'])
+    license="LGPLv3",
+    scripts=["bin/omamer"],
+)

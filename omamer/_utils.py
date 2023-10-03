@@ -1,7 +1,8 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
+    (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
+    (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
 
     This file is part of OMAmer.

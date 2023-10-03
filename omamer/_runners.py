@@ -38,7 +38,7 @@ def mkdb_oma(args):
 
     # add sequences from database
     LOG.info('Adding sequences')
-    db.build_database(oma_db_fn, nwk_fn)
+    seq_buff = db.build_database(oma_db_fn, nwk_fn)
 
     hidden_taxa = []
     if args.hidden_taxa:
@@ -46,9 +46,9 @@ def mkdb_oma(args):
 
     LOG.info('Building index')
     db.ki = Index(db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa)
-    db.ki.build_kmer_table()
+    db.ki.build_kmer_table(seq_buff)
     db.add_metadata()
-    db.add_hogcounts()
+    #db.add_hogcounts()
 
     db.close()
     LOG.info('Done')
@@ -81,7 +81,7 @@ def search(args):
     pbar = tqdm(desc='Searching')
     for (ids, seqs) in SequenceReader.read(args.query, k=db.ki.k, format='fasta', chunksize=args.chunksize):
         df = ms.merge_search(
-            seqs=seqs, ids=ids, top_n_fams=args.top_n_fams, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only
+            seqs=seqs, ids=ids, top_n_fams=args.top_n_fams, alpha=args.family_alpha, sst=args.threshold, family_only=args.family_only, ref_taxon=args.reference_taxon
         )
         pbar.update(len(ids))
         if df.size > 0:

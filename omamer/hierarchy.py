@@ -21,7 +21,6 @@
 '''
 import numba
 import numpy as np
-from tqdm import tqdm
 
 
 ## Generic functions for hierarchical tables (hog_tab and tax_tab)
@@ -169,3 +168,52 @@ def is_taxon_implied(true_tax_lineage, hog_off, hog_tab, chog_buff):
             break
 
     return implied
+
+
+# functions to precompute HOG taxonomic levels (implied or not)
+def get_hog_taxa(hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_buff):
+    """
+    Compute all HOG taxonomic level induced by child HOGs or member proteins.
+    """
+    taxa = set()
+
+    # add taxa induced by member proteins
+    cprot_taxa = np.unique(
+        sp_tab[prot_tab[get_hog_child_prots(hog_off, hog_tab, cprot_buff)]["SpeOff"]][
+            "TaxOff"
+        ]
+    )
+    for tax_off in cprot_taxa:
+        taxa.update(get_root_leaf_offsets(tax_off, tax_tab["ParentOff"]))
+
+    # add taxa induced by child HOGs (thus exluding their own taxon)
+    chog_taxa = np.unique(hog_tab[get_children(hog_off, hog_tab, chog_buff)]["TaxOff"])
+    for tax_off in chog_taxa:
+        taxa.update(get_root_leaf_offsets(tax_off, tax_tab["ParentOff"])[:-1])
+
+    # remove taxa older than the HOG root-taxon
+    hog_tax_off = hog_tab[hog_off]["TaxOff"]
+    taxa = taxa.difference(
+        get_root_leaf_offsets(hog_tax_off, tax_tab["ParentOff"])[:-1]
+    )
+
+    return taxa
+
+
+def get_hog2taxa(hog_tab, sp_tab, prot_tab, cprot_buff, tax_tab, chog_buff):
+    """
+    Precompute compact hog2taxa.
+    """
+    buff_off = 0
+    hog_taxa_idx = [buff_off]
+    hog_taxa_buff = []
+    for hog_off in range(hog_tab.size):
+        taxa = get_hog_taxa(
+            hog_off, sp_tab, prot_tab, hog_tab, cprot_buff, tax_tab, chog_buff
+        )
+        buff_off += len(taxa)
+        hog_taxa_idx.append(buff_off)
+        hog_taxa_buff.extend(taxa)
+    return (np.array(hog_taxa_idx, dtype=np.uint32), np.array(
+        hog_taxa_buff, dtype=np.uint32
+    ))

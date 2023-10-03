@@ -236,16 +236,8 @@ def search_seq_kmers(
 
 ## functions to cumulate HOG k-mer counts
 @numba.njit
-def _max(x, y):
-    return max(x, y)
-
-@numba.njit
-def _sum(x, y):
-        return x + y
-
-@numba.njit
 def cumulate_counts_1fam(
-    hog_cum_counts, fam_level_offsets, hog2parent, cum_fun, prop_fun):
+        hog_cum_counts, fam_level_offsets, hog2parent):
 
     current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint64)
 
@@ -254,7 +246,7 @@ def cumulate_counts_1fam(
         x = fam_level_offsets[-i - 3 : -i - 1]
 
         # when reaching level, sum all hog counts with their best child count
-        hog_cum_counts[x[0] : x[1]] = cum_fun(
+        hog_cum_counts[x[0] : x[1]] = np.add(
             hog_cum_counts[x[0] : x[1]], current_best_child_count[x[0] : x[1]]
         )
 
@@ -265,28 +257,10 @@ def cumulate_counts_1fam(
             # only if parent exists
             if parent_off != -1:
                 c = current_best_child_count[hog2parent[j]]
-                current_best_child_count[hog2parent[j]] = prop_fun(
+                current_best_child_count[hog2parent[j]] = max(
                     c, hog_cum_counts[j]
                 )
 
-
-@numba.njit(parallel=True, nogil=True)
-def cumulate_counts_nfams(
-    hog_counts, fam_tab, level_arr, hog2parent, main_fun, cum_fun, prop_fun):
-
-    hog_cum_counts = hog_counts.copy()
-
-    for fam_off in numba.prange(fam_tab.size):
-        entry = fam_tab[fam_off]
-        level_off = entry["LevelOff"]
-        level_num = entry["LevelNum"]
-        fam_level_offsets = level_arr[
-            level_off : np.int64(level_off + level_num + 2)
-        ]
-
-        main_fun(hog_cum_counts, fam_level_offsets, hog2parent, cum_fun, prop_fun)
-
-    return hog_cum_counts
 
 '''
 @numba.njit
@@ -368,9 +342,6 @@ def store_bestpath(hog_offsets, parent_offsets, fam_bestpath, fam_hog_scores):
 @numba.njit
 def hog_path_placement(
     fam_hog_cumcounts, query_nkmer, fam_level_offsets, fam_hog2parent, fam_hog_counts, fam_ref_hog_prob):
-    # NEW USED TO PLACE ON PATH
-    # TODO: switch this so that we compute and STOP going down the levels / place live.
-
     fam_hog_scores = np.zeros(fam_hog_cumcounts.shape, dtype=np.float64)
     fam_bestpath = np.full(fam_hog_cumcounts.shape, False)
     revcum_counts = np.full(fam_hog_cumcounts.shape, query_nkmer, dtype=np.uint16)
@@ -474,19 +445,19 @@ class MergeSearch(object):
 
     @cached_property
     def fam_tab(self):
-        return self.db._fam_tab[:]
+        return self.db._db_Family[:]
 
     @cached_property
     def hog_tab(self):
-        return self.db._hog_tab[:]
+        return self.db._db_HOG[:]
 
     @cached_property
     def tax_tab(self):
-        return self.db._tax_tab[:]
+        return self.db._db_Taxonomy[:]
 
     @cached_property
     def level_arr(self):
-        return self.db._level_arr[:]
+        return self.db._db_LevelOffsets[:]
 
     @lazy_property
     def ref_fam_prob(self):
@@ -502,16 +473,12 @@ class MergeSearch(object):
         else:
             raise ValueError('HOGProbability not in db')
 
-    def merge_search(self, seqs=None, ids=None, fasta_file=None,
-        top_n_fams=1, alpha=0.05, sst=0.05, family_only=False):
+    def merge_search(self, seqs, ids,
+        top_n_fams=1, alpha=1e-6, sst=0.1, family_only=False, ref_taxon=None):
         t1 = time()
-        if seqs:
-            sbuff = SequenceBuffer(seqs=seqs, ids=ids)
-        elif fasta_file:
-            sbuff = SequenceBuffer(fasta_file=fasta_file)
-
+        sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         t2 = time()
-        # switch this to use logging
+        # switch this to use logging. note: this doesnt load the query sequences
         print('{} second to load query sequences'.format(int(t2 - t1)))
 
         # load OMAmer database and tables into memory
@@ -561,74 +528,69 @@ class MergeSearch(object):
         ts =  t5 - t4
         print('{} second for the actual search (~ {} query/second)'.format(int(ts), int(sbuff.prot_nr / ts)))
 
-        return self.output_results(family_results, subfam_results, sbuff, top_n_fams)
+        return self.output_results(family_results, subfam_results, sbuff, top_n_fams, ref_taxon)
 
-    def output_results(self, family_results, subfam_results, sbuff, top_n_fams):
-        #if ref_taxon:
-        #    tax_tab = self.db._tax_tab[:]
-        #    ref_taxoff = np.searchsorted(tax_tab['ID'], ref_taxon.encode('ascii'))
-        #else:
-        #    ref_taxoff = None
-
-        # TODO: enable output of more than one result, probably by outputing all and then removing the duplicate NA,NA,NA lines (or keeping at least one if there are no other results?)
+    def output_results(self, family_results, subfam_results, sbuff, top_n_fams, ref_taxon):
+        HEADER = ['qseqid', 'hogid', 'family_p', 'family_normcount', 'subfamily_score', 'subfamily_count', 'qseqlen', 'subfamily_medianseqlen', 'seq_overlap']
+        # possible extra fields: family_count
 
         # Note: missing values are dealt differently by pandas and numpy
-        header = ['qseqid', 'hogid', 'overlap', 'family-score', 'subfamily-score', 'family-count', 'family-normcount', 'subfamily-count', 'qseqlen', 'subfamily-medianseqlen']
+
         def generate():
             for i in range(0, len(sbuff.idx)-1):
                 for j in range(top_n_fams):
                     if (j == 0) or subfam_results['id'][i,j] > 0:
                         yield {'qseq_offset': i+1,
                                'hog_offset': subfam_results['id'][i,j],
-                               'overlap': family_results['overlap'][i,j],
-                               'family-score': family_results['pvalue'][i,j],
-                               'subfamily-score': subfam_results['score'][i,j],
-                               'family-count': family_results['count'][i,j],
-                               'family-normcount': family_results['normcount'][i,j],
-                               'subfamily-count': subfam_results['count'][i,j]}
+                               'seq_overlap': family_results['overlap'][i,j],
+                               'family_p': family_results['pvalue'][i,j],
+                               'subfamily_score': subfam_results['score'][i,j],
+                               #'family_count': family_results['count'][i,j],
+                               'family_normcount': family_results['normcount'][i,j],
+                               'subfamily_count': subfam_results['count'][i,j]}
 
         df = pd.DataFrame(generate())
         
-        # so to pd dtype so that we can use pd.NA...
+        # cast to pd dtype so that we can use pd.NA...
         df['qseq_offset'] = df['qseq_offset'].astype('UInt32')
         df['hog_offset'] = df['hog_offset'].astype('UInt32')
-        df['family-count'] = df['family-count'].astype('UInt32')
-        df['subfamily-count'] = df['subfamily-count'].astype('UInt32')
+        #df['family_count'] = df['family_count'].astype('UInt32')
+        df['subfamily_count'] = df['subfamily_count'].astype('UInt32')
 
         # set empty as NA
         na_value = 0
         for k in df.keys():
             df.loc[df[k]==na_value, k] = pd.NA
 
-        # TODO: update this within the SequenceBuffer (?)
         # set the query ids
-        decode_if_necessary = lambda x: x.decode('ascii') if isinstance(x, bytes) else x
-        df['qseqid'] = df['qseq_offset'].apply(lambda i: decode_if_necessary(sbuff.ids[i-1]))
-        df['qseqlen'] = df['qseq_offset'].apply(lambda i: (sbuff.idx[i] - sbuff.idx[i-1]))
+        qseq_offsets = df['qseq_offset'].to_numpy(dtype=np.uint32)
+        df['qseqid'] = sbuff.ids[qseq_offsets-1]
+        df['qseqlen'] = sbuff.get_seqlen(qseq_offsets)
 
         # load the hog ids
         hog_f = df['hog_offset'].notna()
-        df.loc[hog_f,'subfamily-medianseqlen'] = df.loc[hog_f,'hog_offset'].apply(lambda i: self.hog_tab['MedianSeqLen'][i-1]).astype('UInt32')
+        df.loc[hog_f,'subfamily_medianseqlen'] = df.loc[hog_f,'hog_offset'].apply(lambda i: self.hog_tab['MedianSeqLen'][i-1]).astype('UInt32')
         if self.include_extant_genes:
             # add extant gene list if necessary
-            chog_buff = self.db._chog_arr[:]
-            cprot_buff = self.db._cprot_arr[:]
-            prot_tab = self.db._prot_tab[:]
-
-            header.append('subfamily-geneset')
-            df.loc[hog_f, 'subfamily-geneset'] = df.loc[hog_f, 'hog_offset'].apply(lambda i: ','.join(map(lambda x: x.decode('ascii'), prot_tab['ID'][get_hog_member_prots(i-1, self.hog_tab, chog_buff, cprot_buff)])))
+            HEADER.append('subfamily_geneset')
+            df.loc[hog_f, 'subfamily_geneset'] = df.loc[hog_f, 'hog_offset'].apply(lambda i: ','.join(map(lambda x: x.decode('ascii'), self.db._db_Protein.col('ID')[get_hog_member_prots(i-1, self.hog_tab, self.db._db_ChildrenHOG[:], self.db._db_ChildrenProt[:])])))
 
         # add the hog id
         df.loc[hog_f,'hogid'] = df.loc[hog_f,'hog_offset'].apply(lambda i: self.hog_tab['OmaID'][i-1].decode('ascii'))
 
-        ## compute taxonomic congruences
-        #if ref_taxon:
-        #    q2closest_taxon = get_closest_taxa_from_ref(
-        #        q2hog_off, ref_taxoff, tax_tab, self.hog_tab, self.db._chog_arr[:])
-        #    c.insert(2, 'closetax')
-        #    r.insert(2, map(lambda x: tax_tab['ID'][x].decode('ascii') if x != -1 else 'na', q2closest_taxon))
+        # compute taxonomic congruences
+        if ref_taxon:
+            q2hog_off = df.loc[hog_f,'hog_offset'].to_numpy(dtype=np.uint32)
+
+            tax_tab = self.db._db_Taxonomy[:]
+            ref_taxoff = np.searchsorted(tax_tab['ID'], ref_taxon.encode('ascii'))
+
+            q2closest_taxon = get_closest_taxa_from_ref(
+                q2hog_off, ref_taxoff, tax_tab, self.hog_tab, self.db._db_ChildrenHOG[:])
+            HEADER.append('closest_taxa')
+            df.loc[hog_f, 'closest_taxa'] = list(map(lambda x: tax_tab['ID'][x].decode('ascii') if x != -1 else pd.NA, q2closest_taxon))
         
-        return df[header]
+        return df[HEADER]
 
     @lazy_property
     def _lookup(self):
@@ -735,16 +697,16 @@ class MergeSearch(object):
                     hog_e = hog_s+entry["HOGnum"]
                    
                     if family_only:
+                        # early exit
                         subfam_results['id'][zz,i] = hog_s + 1
                         continue
 
-                    # TODO: work out whether we actually need to do this...
                     fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
                     # cumulation of counts
                     c = hog_counts[hog_s:hog_e].copy()
-                    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent, _sum, _max)
+                    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
 
                     # new expected count, but using old cumulation
                     (fam_hog_scores, fam_bestpath) = hog_path_placement(

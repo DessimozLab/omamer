@@ -74,14 +74,14 @@ class Index(object):
 
     @property
     def sp_filter(self):
-        tax_tab = self.db._tax_tab[:]
-        sp_filter = np.full((len(self.db._sp_tab),), False)
+        tax_tab = self.db._db_Taxonomy[:]
+        sp_filter = np.full((len(self.db._db_Species),), False)
         for hidden_taxon in self.hidden_taxa:
             descendant_species = get_leaves(
-                np.searchsorted(tax_tab['ID'], hidden_taxon.encode('ascii')), tax_tab, self.db._ctax_arr[:])
+                np.searchsorted(tax_tab['ID'], hidden_taxon.encode('ascii')), tax_tab, self.db._db_ChildrenTax[:])
             # case where hidden taxon is species
             if descendant_species.size == 0:
-                sp_filter[np.searchsorted(self.db._sp_tab.col('ID'), hidden_taxon.encode('ascii'))] = True
+                sp_filter[np.searchsorted(self.db._db_Species.col('ID'), hidden_taxon.encode('ascii'))] = True
             else:
                 for sp_off in descendant_species:
                     sp_filter[tax_tab['SpeOff'][sp_off]] = True
@@ -100,29 +100,29 @@ class Index(object):
     def _table_buff(self):
         return self._get_node_if_exist('/Index/TableBuffer')
 
-    @property
-    def _fam_count(self):
-        return self._get_node_if_exist('/Index/FamCount')
+    #@property
+    #def _fam_count(self):
+    #    return self._get_node_if_exist('/Index/FamCount')
 
-    @property
-    def _hog_count(self):
-        return self._get_node_if_exist('/Index/HOGcount')
+    #@property
+    #def _hog_count(self):
+    #    return self._get_node_if_exist('/Index/HOGcount')
 
     ### main function to build the index ###
-    def build_kmer_table(self):
+    def build_kmer_table(self, seq_buff):
 
         assert self.db.mode in {'w', 'a'}, "Index must be opened in write mode."
         assert ('/Index' not in self.db.db), 'Index has already been computed'
 
         # build suffix array with option to translate the sequence buffer first
         sa = self._build_suffixarray(
-            self.alphabet.translate(self.db._seq_buff[:]), len(self.db._prot_tab)
+            self.alphabet.translate(seq_buff), len(self.db._db_Protein)
         )
 
         # Set nthreads, note: this only works before numba called first time!
         numba.config.NUMBA_NUM_THREADS = self.nthreads
 
-        self._build_kmer_table(sa)
+        self._build_kmer_table(seq_buff, sa)
 
     @staticmethod
     def _build_suffixarray(seqs, n):
@@ -131,7 +131,7 @@ class Index(object):
         sa[:n].sort()  # Sort delimiters by position
         return sa
 
-    def _build_kmer_table(self, sa):
+    def _build_kmer_table(self, seq_buff, sa):
         @numba.njit
         def _compute_mask_and_filter(
             sa, sa_mask, sa_filter, k, n, prot2spoff, prot2hogoff, sp_filter
@@ -194,7 +194,7 @@ class Index(object):
             hog_parents,
             table_idx,
             table_buff,
-            fam_kmer_counts,
+            #fam_kmer_counts,
             hog_kmer_counts,
             k,
             DIGITS_AA,
@@ -241,10 +241,10 @@ class Index(object):
                     hog_offsets, fam_offsets, hog_parents
                 )
 
-                # store kmer counts of fams and lca hogs
-                fam_kmer_counts[np.unique(fam_offsets)] = (
-                    fam_kmer_counts[np.unique(fam_offsets)] + 1
-                )
+                ## store kmer counts of fams and lca hogs
+                #fam_kmer_counts[np.unique(fam_offsets)] = (
+                #    fam_kmer_counts[np.unique(fam_offsets)] + 1
+                #)
                 hog_kmer_counts[lca_hog_offsets] = hog_kmer_counts[lca_hog_offsets] + 1
 
                 ## store LCA HOGs in table buffer
@@ -265,8 +265,58 @@ class Index(object):
             table_idx[kk:] = ii_table_buff
             return ii_table_buff
 
+        def estimate_family_prob(tab, idx, h2f):
+            @numba.njit
+            def count_family_occurrence(tab, idx, h2f):
+                c = np.zeros(h2f.max()+1, dtype=np.uint32)
+                for i in range(len(idx)-1):
+                    hogs = tab[idx[i]:idx[i+1]]
+                    c[h2f[hogs]] += (idx[i+1] - idx[i])
+                return c
+
+            fam_occ = count_family_occurrence(tab, idx, h2f)
+            return (fam_occ / idx[-1])
+        
+        def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
+            @numba.njit
+            def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
+                current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint32)
+
+                # iterate over level offsets backward
+                for i in range(fam_level_offsets.size - 2):
+                    x = fam_level_offsets[-i - 3 : -i - 1]
+
+                    # when reaching level, sum all hog counts with their best child count
+                    hog_cum_counts[x[0] : x[1]] = np.add(hog_cum_counts[x[0] : x[1]], current_best_child_count[x[0] : x[1]])
+
+                    # update current_best_child_count of the parents of the current hogs
+                    for j in range(x[0], x[1]):
+                        parent_off = hog2parent[j]
+
+                        # only if parent exists
+                        if parent_off != -1:
+                            c = current_best_child_count[hog2parent[j]]
+                            current_best_child_count[hog2parent[j]] = max(c, hog_cum_counts[j])
+
+            @numba.njit(parallel=True, nogil=True)
+            def cumulate_counts_nfams(hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent):
+                hog_cum_counts = hog_counts.copy()
+
+                for i in numba.prange(len(fam_level_off)):
+                    s = fam_level_off[i]
+                    e = np.int64(s + fam_level_num[i] + 2)
+                    fam_level_offsets = level_arr[s:e]
+                    cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent)
+
+                return hog_cum_counts
+
+            hog_occ = cumulate_counts_nfams(
+                    hog_counts, fam_tab.col('LevelOff'), fam_tab.col('LevelNum'), level_arr[:], hog2parent)
+
+            return (hog_occ / idx[-1])
+
         LOG.debug(" - filter suffix array and compute its HOG mask")
-        n = len(self.db._prot_tab)
+        n = len(self.db._db_Protein)
         sa_mask = np.zeros(sa.shape, dtype=np.uint64)
         sa_filter = np.zeros(sa.shape, dtype=np.bool)
 
@@ -276,8 +326,8 @@ class Index(object):
             sa_filter,
             self.k,
             n,
-            self.db._prot_tab.col("SpeOff"),   # need to change (i.e., not store in DB)
-            self.db._prot_tab.col("HOGoff"),   # need to change (i.e., not store in DB)
+            self.db._db_Protein.col("SpeOff"),
+            self.db._db_Protein.col("HOGoff"),
             self.sp_filter,
         )
 
@@ -289,24 +339,26 @@ class Index(object):
 
         LOG.debug(" - compute k-mer table")
         table_idx = np.zeros(
-            (len(self.alphabet.DIGITS_AA) ** self.k + 1), dtype=np.uint64
+            (len(self.alphabet.DIGITS_AA) ** self.k + 1), dtype=np.uint32
         )
 
         # initiate buffer of size sa_mask, which is maximum size if all suffixes are from different HOGs
-        table_buff = np.zeros((len(sa_mask)), dtype=np.uint64)
+        table_buff = np.zeros((len(sa_mask)), dtype=np.uint32)
 
-        fam_kmer_counts = np.zeros(len(self.db._fam_tab), dtype=np.uint64)
-        hog_kmer_counts = np.zeros(len(self.db._hog_tab), dtype=np.uint64)
+        #fam_kmer_counts = np.zeros(len(self.db._db_Family), dtype=np.uint64)
+        hog_kmer_counts = np.zeros(len(self.db._db_HOG), dtype=np.uint64)
+        
+        h2f = self.db._db_HOG.col("FamOff")
 
         ii_table_buff = _compute_kmer_table(
             sa,
-            self.db._seq_buff[:],
+            seq_buff,
             sa_mask,
-            self.db._hog_tab.col("FamOff"),
-            self.db._hog_tab.col("ParentOff"),
+            h2f, 
+            self.db._db_HOG.col("ParentOff"),
             table_idx,
             table_buff,
-            fam_kmer_counts,
+            #fam_kmer_counts,
             hog_kmer_counts,
             self.k,
             self.alphabet.DIGITS_AA,
@@ -325,12 +377,21 @@ class Index(object):
         self.db.db.create_carray(
             idx, "TableBuffer", obj=table_buff, filters=self.db._compr
         )
-        self.db.db.create_carray(
-            idx, "FamCount", obj=fam_kmer_counts, filters=self.db._compr
-        )  # for these, I can initialize them before...
-        self.db.db.create_carray(
-            idx, "HOGcount", obj=hog_kmer_counts, filters=self.db._compr
-        )
+
+        #self.db.db.create_carray(
+        #    idx, "FamCount", obj=fam_kmer_counts, filters=self.db._compr
+        #)  # for these, I can initialize them before...
+        #self.db.db.create_carray(
+        #    idx, "HOGcount", obj=hog_kmer_counts, filters=self.db._compr
+        #)
+
+        # compute the family / hog probability estimates, assuming binomial distns
+        fam_prob = estimate_family_prob(table_buff, table_idx, h2f)
+        self.db.db.create_carray(idx, 'FamilyProbability', obj=fam_prob, filters=self.db._compr)
+
+        hog_prob = estimate_hog_prob(table_idx, hog_kmer_counts, self.db._db_Family, self.db._db_LevelOffsets, self.db._db_HOG.col('ParentOff'))
+        self.db.db.create_carray(idx, 'HOGProbability', obj=hog_prob, filters=self.db._compr)
+
 
 class SequenceBuffer(object):
     '''
@@ -383,19 +444,5 @@ class SequenceBuffer(object):
         e = int(self.idx[i + 1] - 1)
         return self.buff[s:e].tobytes().decode("ascii")
 
-
-class SequenceBufferFasta(SequenceBuffer):
-    # Note: used in omamer2matreex but not in omamer.
-    def __init__(self, fasta_file, alphabet_n=21):
-        seqs, ids = self.parse_fasta(fasta_file)
-        super().__init__(seqs, ids, alphabet_n)
-        
-    def parse_fasta(self, fasta_file):
-        ids = []
-        seqs = []
-        func = open if not fasta_file.endswith('.gz') else gzip.open
-        with func(fasta_file, 'rt') as fp:
-            for rec in SeqIO.parse(fp, "fasta"):
-                ids.append(rec.id)
-                seqs.append(str(rec.seq))
-        return seqs, ids
+    def get_seqlen(self, i):
+        return (self.idx[i] - self.idx[i-1])

@@ -34,7 +34,6 @@ requirements = [
     "alive_progress",
     "biopython",
     "ete3",
-    "fast-fisher",
     "numba",
     "numpy",
     "pandas",

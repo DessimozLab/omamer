@@ -233,6 +233,7 @@ def _format_info_db(db):
 def info_db(args):
     from .database import Database
     from ._utils import print_line
+    import sys
 
     with Database(args.db) as db:
         print_line(80, file=sys.stdout)
@@ -291,7 +292,7 @@ def goodbye(args, time_taken, search_rate):
         print_message(" - results written to: {}".format(args.out.name))
     print_message(f" - total {time_taken:.02f} seconds")
     print_message(f" - search phase only {search_rate:.02f} queries/s")
-    print_message("")
+    print_message("\n\nNote: family p-values are stated in negative log units.")
     print_line(80)
     print_message(
         f"\nThank you for using OMAmer. If you use OMAmer in your research, please cite:\n\n{citation}\n\n"

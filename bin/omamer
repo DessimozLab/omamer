@@ -193,9 +193,10 @@ search_parser.add_argument(
     "-fo",
     "--family_only",
     action="store_true",
-    help="Set to only place at family level.",
+    help="Set to only place at family level. Note: subfamily_medianseqlen in results is for the family level.",
 )
 search_parser.add_argument(
+    "-n",
     "--top_n_fams",
     default=1,
     type=int,

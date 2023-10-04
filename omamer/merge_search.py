@@ -478,24 +478,47 @@ class MergeSearch(object):
         )
 
         return self.output_results(
-            family_results, subfam_results, sbuff, top_n_fams, ref_taxon_off
+            family_results,
+            subfam_results,
+            sbuff,
+            top_n_fams,
+            ref_taxon_off,
+            family_only,
         )
 
     def output_results(
-        self, family_results, subfam_results, sbuff, top_n_fams, ref_taxon_off
+        self,
+        family_results,
+        subfam_results,
+        sbuff,
+        top_n_fams,
+        ref_taxon_off,
+        family_only,
     ):
-        HEADER = [
-            "qseqid",
-            "hogid",
-            "family_p",
-            "family_count",
-            "family_normcount",
-            "subfamily_score",
-            "subfamily_count",
-            "qseqlen",
-            "subfamily_medianseqlen",
-            "qseq_overlap",
-        ]
+        if not family_only:
+            HEADER = [
+                "qseqid",
+                "hogid",
+                "family_p",
+                "family_count",
+                "family_normcount",
+                "subfamily_score",
+                "subfamily_count",
+                "qseqlen",
+                "subfamily_medianseqlen",
+                "qseq_overlap",
+            ]
+        else:
+            HEADER = [
+                "qseqid",
+                "hogid",
+                "family_p",
+                "family_count",
+                "family_normcount",
+                "qseqlen",
+                "subfamily_medianseqlen",
+                "qseq_overlap",
+            ]
 
         # Note: missing values are dealt differently by pandas and numpy
 

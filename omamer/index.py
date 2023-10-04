@@ -96,7 +96,7 @@ class Index(object):
         return sa
 
     def _build_kmer_table(self, seq_buff, sa):
-        @numba.njit
+        @numba.njit(parallel=True, nogil=True)
         def _compute_mask_and_filter(
             sa, sa_mask, sa_filter, k, n, prot2spoff, prot2hogoff, sp_filter
         ):
@@ -175,13 +175,14 @@ class Index(object):
                     kk1 += int(DIGITS_AA_LOOKUP[kmer[i]] * trans[i])
 
                 ## find offset of new k-mer in sa (jj)
-                # first in windows of 100s
-                jj = min(ii + 100, len(sa))
+                # first in windows of 50s
+                # THIS MAY NEED TO BE INCREASED OVER TIME AND IS OPTIMISED FOR THE LUCA DB
+                jj = min(ii + 50, len(sa))
                 while (jj < len(sa)) and _same_kmer(seq_buff, sa, kmer, jj, k):
-                    jj = min(jj + 100, len(sa))
+                    jj = min(jj + 50, len(sa))
 
                 # then, refine with binary search
-                lo = max(ii, (jj - 100) + 1)
+                lo = max(ii, (jj - 50) + 1)
                 hi = jj
                 while lo < hi:
                     m = int(np.floor((lo + hi) / 2))

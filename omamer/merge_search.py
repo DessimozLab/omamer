@@ -386,12 +386,8 @@ class MergeSearch(object):
     @cached_property
     def kmer_table(self):
         # the kmer table requires caching so that we can use it in numba
-        t0 = time()
         z = self.ki.kmer_table
-        z1 = {k: z[k][:] for k in z}
-        t1 = time()
-        LOG.debug("Loaded k-mer table ({} seconds)".format(int(t1 - t0)))
-        return z1
+        return {k: z[k][:] for k in z}
 
     @cached_property
     def fam_tab(self):
@@ -411,11 +407,11 @@ class MergeSearch(object):
 
     @lazy_property
     def ref_fam_prob(self):
-        return self.db.db.root.Index.FamilyProbability[:]
+        return self.db._db_Index_FamilyProbability[:]
 
     @lazy_property
     def ref_hog_prob(self):
-        return self.db.db.root.Index.HOGProbability[:]
+        return self.db._db_Index_HOGProbability[:]
 
     def merge_search(
         self,
@@ -449,6 +445,7 @@ class MergeSearch(object):
                 [("id", np.uint32), ("score", np.float64), ("count", np.uint32)]
             ),
         )
+
         # perform the search. arguments are given like this as we are using numba.
         self._lookup(
             family_results,
@@ -497,7 +494,7 @@ class MergeSearch(object):
             "subfamily_count",
             "qseqlen",
             "subfamily_medianseqlen",
-            "seq_overlap",
+            "qseq_overlap",
         ]
 
         # Note: missing values are dealt differently by pandas and numpy
@@ -509,7 +506,7 @@ class MergeSearch(object):
                         yield {
                             "qseq_offset": i + 1,
                             "hog_offset": subfam_results["id"][i, j],
-                            "seq_overlap": family_results["overlap"][i, j],
+                            "qseq_overlap": family_results["overlap"][i, j],
                             "family_p": family_results["pvalue"][i, j],
                             "subfamily_score": subfam_results["score"][i, j],
                             "family_count": family_results["count"][i, j],

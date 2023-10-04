@@ -63,13 +63,42 @@ def mkdb_oma(args):
 
 
 def search(args):
-    from tqdm.auto import tqdm
-    import os
+    from alive_progress import alive_bar
+    from ._utils import print_message, print_line  # , AutoLogger_stderr
     import sys
 
-    from .database import Database
-    from .merge_search import MergeSearch
-    from .sequence_reader import SequenceReader
+    if args.out is None:
+        args.out = sys.stdout
+    # else:
+    #    AutoLogger_stderr(args.out.name + '.log')
+
+    # display welcome info
+    welcome()
+
+    print_message("")
+    with alive_bar(
+        title="Loading required libraries",
+        bar=None,
+        monitor=False,
+        stats=False,
+        elapsed=False,
+        receipt_text=1,
+        file=sys.stderr,
+    ) as bar:
+        from datetime import datetime
+        from time import time
+        import os
+
+        from . import __version__
+        from .database import Database
+        from .merge_search import MergeSearch
+        from .sequence_reader import SequenceReader
+
+        bar.text(" [DONE]")
+
+    print_run_data(args)
+
+    t0 = time()
 
     # reload
     db = Database(args.db)
@@ -78,7 +107,6 @@ def search(args):
     ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output
-    args.out = sys.stdout if args.out is None else args.out
     print_header = args.out.name != sys.stdout.name
 
     # find reference taxon if set
@@ -94,41 +122,186 @@ def search(args):
     else:
         ref_taxoff = None
 
-    pbar = tqdm(desc="Searching")
-    for ids, seqs in SequenceReader.read(
-        args.query,
-        k=db.ki.k,
-        format="fasta",
-        chunksize=args.chunksize,
-        sanitiser=db.ki.alphabet.sanitise_seq,
-    ):
-        df = ms.merge_search(
-            seqs=seqs,
-            ids=ids,
-            top_n_fams=args.top_n_fams,
-            alpha=args.family_alpha,
-            sst=args.threshold,
-            family_only=args.family_only,
-            ref_taxon_off=ref_taxoff,
-        )
-        pbar.update(len(ids))
-        if df.size > 0:
-            df.to_csv(args.out, sep="\t", index=False, header=print_header)
-            print_header = False
+    _ensure_data_loaded(ms)
 
-    pbar.close()
+    search_times = []
+
+    search_pbar_kwargs = {
+        "title": "Searching - ",
+        "unit": " queries",
+        "disable": args.silent,
+        "file": sys.stderr,
+    }
+    if not os.isatty(0):
+        # non-interactive mode, attempt to give some feedback in log files
+        search_pbar_kwargs["refresh_secs"] = 5
+        search_pbar_kwargs["force_tty"] = True
+        search_pbar_kwargs["bar"] = search_pbar_kwargs["spinner"] = False
+
+    print_message("")
+    with alive_bar(**search_pbar_kwargs) as pbar:
+        for ids, seqs in SequenceReader.read(
+            args.query,
+            k=db.ki.k,
+            format="fasta",
+            chunksize=args.chunksize,
+            sanitiser=db.ki.alphabet.sanitise_seq,
+        ):
+            t_search0 = time()
+            df = ms.merge_search(
+                seqs=seqs,
+                ids=ids,
+                top_n_fams=args.top_n_fams,
+                alpha=args.family_alpha,
+                sst=args.threshold,
+                family_only=args.family_only,
+                ref_taxon_off=ref_taxoff,
+            )
+            t_search1 = time()
+
+            pbar(len(ids))
+
+            if df.size > 0:
+                if print_header:
+                    # write the top header
+                    print("!omamer-version: {}".format(__version__), file=args.out)
+                    print(
+                        "!date-run: {}".format(datetime.fromtimestamp(t0).isoformat()),
+                        file=args.out,
+                    )
+                    print("!db-path: {}".format(db.filename), file=args.out)
+
+                    # could enable an option to include metadata from db in results file
+                    # for (k, v) in _format_info_db(db):
+                    #    print('!db-info-{}: {}'.format('_'.join(k.split(' ')), v), file=args.out)
+                df.to_csv(args.out, sep="\t", index=False, header=print_header)
+                print_header = False
+            search_times.append((len(ids), t_search1 - t_search0))
+
     db.close()
+
+    search_rate = sum(map(lambda x: x[0], search_times)) / sum(
+        map(lambda x: x[1], search_times)
+    )
+    goodbye(args, time() - t0, search_rate)
+
+
+def _ensure_data_loaded(ms):
+    from alive_progress import alive_bar
+    import sys
+
+    from ._utils import print_message, print_line
+
+    # ensure that the data is loaded, gives progress messages unless silenced.
+    print_message("\nLoading data required for OMAmer search from database...")
+
+    def _load(attr, title):
+        with alive_bar(
+            title=" - {}".format(title),
+            bar=None,
+            monitor=False,
+            stats=False,
+            elapsed="({elapsed})",
+            receipt_text=1,
+            file=sys.stderr,
+        ) as bar:
+            getattr(ms, attr)
+            bar.text("[DONE]")
+
+    ms.trans
+    _load("tax_tab", "taxonomy information")
+    _load("fam_tab", "family information")
+    _load("hog_tab", "sub-family information")
+    _load("level_arr", "family hierarchy")
+    _load("kmer_table", "k-mer index")
+    _load("ref_fam_prob", "family probability estimates")
+    _load("ref_hog_prob", "sub-family probability estimates")
+
+    print_message("\nFinished loading required data\n")
+    print_line(80)
+
+
+def _format_info_db(db):
+    for k, v in db.get_metadata().items():
+        if isinstance(v, list):
+            if len(v) == 0:
+                v = ["-"]
+            v = ",".join(v)
+        yield (k, v)
 
 
 def info_db(args):
     from .database import Database
+    from ._utils import print_line
 
     with Database(args.db) as db:
-        print("=" * 80)
-        for k, v in db.get_metadata().items():
-            if isinstance(v, list):
-                if len(v) == 0:
-                    v = ["-"]
-                v = ",".join(v)
+        print_line(80, file=sys.stdout)
+        for k, v in _format_info_db(db):
             print(f"  {k:23s}:{v!s:>40}")
-        print("=" * 80)
+        print_line(80, file=sys.stdout)
+
+
+# welcome / goodbye messages for omamer search
+def welcome():
+    from . import __version__
+    from ._utils import print_line, print_message
+
+    welcome_message = """
+   _____ _____ _____
+  |     |     |  _  |_____ ___ ___
+  |  |  | | | |     |     | -_|  _|
+  |_____|_|_|_|__|__|_|_|_|___|_|   v{}
+
+  OMAmer is licensed under the GNU Lesser General Public License 3.0 (LGPL-3.0).
+    """.format(
+        __version__
+    )
+
+    print_line(80)
+    print_message(welcome_message)
+    print_line(80)
+
+
+def print_run_data(args):
+    from . import __version__
+    from ._utils import print_line, print_message
+    import platform
+
+    print_message("")
+    print_line(80)
+    print_message("\nRunning OMAmer on {}, using:".format(platform.node()))
+    print_message(" - database: {}".format(args.db))
+    print_message(" - query: {}".format(args.query.name))
+    print_message(" - version: {}".format(__version__))
+    print_message("")
+    print_line(80)
+
+
+def goodbye(args, time_taken, search_rate):
+    import sys
+
+    from ._utils import print_line, print_message
+
+    citation = "Victor Rossier, Alex Warwick Vesztrocy, Marc Robinson-Rechavi, Christophe Dessimoz, OMAmer: tree-driven and alignment-free protein assignment to subfamilies outperforms closest sequence approaches, Bioinformatics, Volume 37, Issue 18, September 2021, Pages 2866-2873, https://doi.org/10.1093/bioinformatics/btab219"
+
+    print_message("")
+    print_line(80)
+    print_message("\nOMAmer search complete:")
+    if args.out.name != sys.stdout.name:
+        print_message(" - results written to: {}".format(args.out.name))
+    print_message(f" - total {time_taken:.02f} seconds")
+    print_message(f" - search phase only {search_rate:.02f} queries/s")
+    print_message("")
+    print_line(80)
+    print_message(
+        f"\nThank you for using OMAmer. If you use OMAmer in your research, please cite:\n\n{citation}\n\n"
+    )
+    print_message(
+        "OMAmer uses data from the OMA browser. Results can be interpretted further using:"
+    )
+    print_message(" - OMA browser website (https://omabrowser.org)")
+    print_message(
+        " - PyOMADB, the Python OMA API client (https://github.com/DessimozLab/pyomadb)"
+    )
+    print_message("")
+    print_line(80)

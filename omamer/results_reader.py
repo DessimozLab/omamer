@@ -20,44 +20,23 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from setuptools import setup, find_packages
+import pandas as pd
+
+from ._utils import auto_open
 
 
-name = "omamer"
-__version__ = None
-with open("{:s}/__init__.py".format(name), "rt") as fp:
-    for line in fp:
-        if line.startswith("__version__"):
-            exec(line.rstrip())
+def results_reader(filename):
+    # read the metadata first
+    metadata = {}
+    with auto_open(filename, "rt") as fp:
+        for x in fp:
+            if x.startswith("!"):
+                x = x[1:].rstrip().split(": ")
+                k = x[0]
+                v = ": ".join(x[1:])
+                metadata[k] = v
+            else:
+                break
 
-requirements = [
-    "alive_progress",
-    "biopython",
-    "ete3",
-    "fast-fisher",
-    "numba",
-    "numpy",
-    "pandas",
-    "property_manager",
-    "scipy",
-    "tables",
-    "tqdm",
-]
-extra_requirements = {"build": ["pysais"]}
-
-desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
-
-setup(
-    name=name,
-    version=__version__,
-    author="Victor Rossier and Alex Warwick Vesztrocy",
-    email="alex@warwickvesztrocy.co.uk",
-    url="https://github.com/DessimozLab/omamer",
-    description=desc,
-    packages=find_packages(),
-    install_requires=requirements,
-    extra_requires=extra_requirements,
-    python_requires=">=3.6",
-    license="LGPLv3",
-    scripts=["bin/omamer"],
-)
+    df = pd.read_csv(auto_open(filename), sep="\t", comment="!")
+    return (df, metadata)

@@ -645,8 +645,9 @@ class Database(object):
         """
         Store metadata within the database to track the versioning / build time.
         """
-        from . import __version__
         from datetime import datetime
+
+        from . import __version__
 
         self.db.set_node_attr("/", "omamer_version", __version__)
         self.db.set_node_attr("/", "root_level", self.root_taxon)

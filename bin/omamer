@@ -98,9 +98,10 @@ mkdb_parser = subparsers.add_parser(
 )
 mkdb_parser.set_defaults(func=mkdb_oma)
 mkdb_parser.add_argument(
-    "--db", required=True, help="Path to new database (including filename)."
+    "-d", "--db", required=True, help="Path to new database (including filename)."
 )
 mkdb_parser.add_argument(
+    "-nt",
     "--nthreads",
     default=1,
     type=int,
@@ -166,9 +167,10 @@ search_parser = subparsers.add_parser(
 )
 search_parser.set_defaults(func=search)
 search_parser.add_argument(
-    "--db", required=True, help="Path to existing database (including filename)."
+    "-d", "--db", required=True, help="Path to existing database (including filename)."
 )
 search_parser.add_argument(
+    "-q",
     "--query",
     required=True,
     help="Path to FASTA formatted sequences",
@@ -188,7 +190,10 @@ search_parser.add_argument(
     help="Significance threshold used when filtering families.",
 )
 search_parser.add_argument(
-    "--family_only", action="store_true", help="Set to only place at family level."
+    "-fo",
+    "--family_only",
+    action="store_true",
+    help="Set to only place at family level.",
 )
 search_parser.add_argument(
     "--top_n_fams",
@@ -203,6 +208,7 @@ search_parser.add_argument(
 )
 
 search_parser.add_argument(
+    "-o",
     "--out",
     help="Path to output. If not set, defaults to stdout",
     type=FileType("w"),
@@ -213,9 +219,14 @@ search_parser.add_argument(
     help="Include extant gene IDs as comma separated entry in results.",
 )
 search_parser.add_argument(
-    "--chunksize", default=10000, type=int, help="Number of queries to process at once."
+    "-c",
+    "--chunksize",
+    default=10000,
+    type=int,
+    help="Number of queries to process at once.",
 )
 search_parser.add_argument(
+    "-nt",
     "--nthreads",
     default=1,
     type=int,
@@ -228,6 +239,8 @@ search_parser.add_argument(
     choices=["debug", "info", "warning"],
     help="Logging level.",
 )
+search_parser.add_argument("--silent", action="store_true", help="Silence output")
+
 
 info_parser = subparsers.add_parser(
     "info",
@@ -236,7 +249,10 @@ info_parser = subparsers.add_parser(
 )
 info_parser.set_defaults(func=info_db)
 info_parser.add_argument(
-    "--db", required=True, help="Path to an existing database (including filename)."
+    "-d",
+    "--db",
+    required=True,
+    help="Path to an existing database (including filename).",
 )
 
 
@@ -246,6 +262,11 @@ if hasattr(args, "func"):
         from omamer._utils import set_log_level, LOG
 
         set_log_level(args.log_level)
+
+    if hasattr(args, "silent"):
+        from omamer._utils import set_if_silent
+
+        set_if_silent(args.silent)
 
     if not sys.warnoptions and not getattr(args, "log_level", "") == "debug":
         warnings.simplefilter("ignore", category=PerformanceWarning)
@@ -257,6 +278,10 @@ if hasattr(args, "func"):
 
         nthreads = args.nthreads if args.nthreads > 0 else get_thread_count()
         numba.set_num_threads(nthreads)
+
+        os.environ["MKL_NUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = os.environ[
+            "OMP_NUM_THREADS"
+        ] = str(nthreads)
 
     # call the relevant runner func
     args.func(args)

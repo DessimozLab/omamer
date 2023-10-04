@@ -101,7 +101,7 @@ mkdb_parser.add_argument(
     "-d", "--db", required=True, help="Path to new database (including filename)."
 )
 mkdb_parser.add_argument(
-    "-nt",
+    "-t",
     "--nthreads",
     default=1,
     type=int,
@@ -227,7 +227,7 @@ search_parser.add_argument(
     help="Number of queries to process at once.",
 )
 search_parser.add_argument(
-    "-nt",
+    "-t",
     "--nthreads",
     default=1,
     type=int,

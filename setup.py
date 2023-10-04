@@ -39,6 +39,7 @@ requirements = [
     "numpy",
     "pandas",
     "property_manager",
+    "rvlib",
     "scipy",
     "tables",
     "tqdm",

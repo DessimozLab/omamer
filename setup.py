@@ -43,7 +43,7 @@ requirements = [
     "tables",
     "tqdm",
 ]
-extra_requirements = {"build": ["pysais"]}
+extra_requirements = {"build": ["filehash", "pysais"]}
 
 desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
 

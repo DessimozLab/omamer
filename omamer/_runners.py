@@ -64,13 +64,11 @@ def mkdb_oma(args):
 
 def search(args):
     from alive_progress import alive_bar
-    from ._utils import print_message, print_line  # , AutoLogger_stderr
+    from ._utils import print_message, print_line
     import sys
 
     if args.out is None:
         args.out = sys.stdout
-    # else:
-    #    AutoLogger_stderr(args.out.name + '.log')
 
     # display welcome info
     welcome()
@@ -173,8 +171,9 @@ def search(args):
 
                     # include some of the db metadata
                     db_info = dict(_format_info_db(db))
-                    for k in ['source', 'root level']:
-                        print('!db-info-{}: {}'.format('_'.join(k.split(' ')), db_info[k]), file=args.out)
+                    for k in ['source', 'root level', 'database hash']:
+                        if k in db_info:
+                            print('!db-info-{}: {}'.format('_'.join(k.split(' ')), db_info[k]), file=args.out)
                 df.to_csv(args.out, sep="\t", index=False, header=print_header)
                 print_header = False
             search_times.append((len(ids), t_search1 - t_search0))

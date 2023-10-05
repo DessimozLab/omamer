@@ -672,6 +672,21 @@ class Database(object):
         meta["hidden taxa"] = self.ki.hidden_taxa
         return meta
 
+    def add_md5_hash(self):
+        # generate unique hash for the database
+        self._check_open_writeable()
+        
+        # temporarily close the database
+        self.db.close()
+
+        from filehash import FileHash
+        md5hasher = Filehash('md5')
+        md5 = md5hasher.hash_file(self.filename)
+
+        # reopen the database and save the hash
+        self.db = tables.open_file(self.filename, 'a', filters=self._compr)
+        self.db.set_node_attr("/", "database_hash", md5)
+
 
 class DatabaseFromOMA(Database):
     """

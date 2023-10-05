@@ -37,6 +37,8 @@ from .hierarchy import (
     get_children,
 )
 
+import warnings
+warnings.filterwarnings("ignore")
 
 # ----
 # stats functions
@@ -45,6 +47,7 @@ def binom_neglogccdf(x, n, p):
     """
     Use rvlib to compute p-value
     """
+    print('params', n, p, x)
     return -1.0 * Binomial(n, p).logccdf(x - 1)
 
 
@@ -200,7 +203,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
     fam_highloc = np.full(fam_tab.size, -1, dtype=np.int32)
 
     # iterate unique k-mers
-    for m in numba.prange(r1.shape[0]):
+    for m in range(r1.shape[0]):
         kmer = r1[m]
         loc = p1[m]
 

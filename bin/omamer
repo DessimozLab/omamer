@@ -116,13 +116,13 @@ mkdb_parser.add_argument(
 )
 mkdb_parser.add_argument(
     "--min_fam_completeness",
-    default=0.0,
+    default=0.5,
     help="Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level",
     type=float,
 )
 mkdb_parser.add_argument(
     "--logic",
-    default="AND",
+    default="OR",
     help="Logic used between the two above arguments to filter root-HOGs. Options are AND or OR.",
     choices=["AND", "OR"],
 )

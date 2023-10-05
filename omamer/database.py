@@ -1202,26 +1202,27 @@ class DatabaseFromOMA(Database):
         oma_tax_tab = h5file.root.Taxonomy[:]
         oma_sp_tab = h5file.root.Genome[:]
 
+        # unsure why there was this check. for jul23 we use -ve for GTDB
         # quick check that the values are positives
-        if (oma_tax_tab["NCBITaxonId"][0] >= 0) and (oma_sp_tab["NCBITaxonId"][0] >= 0):
-            taxid_column = []
-            for tax_name in self._db_Taxonomy.col("ID"):
-                if tax_name == b"LUCA":
-                    taxid_column.append(-1)
-                else:
-                    try:
-                        taxid_column.append(
-                            oma_tax_tab["NCBITaxonId"][
-                                np.argwhere(oma_tax_tab["Name"] == tax_name)[0][0]
-                            ]
-                        )
-                    # when the taxon name is a uniprot species code
-                    except IndexError:
-                        taxid_column.append(
-                            oma_sp_tab["NCBITaxonId"][
-                                np.argwhere(
-                                    oma_sp_tab["UniProtSpeciesCode"] == tax_name
-                                )[0][0]
-                            ]
-                        )
-            self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)
+        #if (oma_tax_tab["NCBITaxonId"][0] >= 0) and (oma_sp_tab["NCBITaxonId"][0] >= 0):
+        taxid_column = []
+        for tax_name in self._db_Taxonomy.col("ID"):
+            if tax_name == b"LUCA":
+                taxid_column.append(0)#-1)  # 0 is unused.
+            else:
+                try:
+                    taxid_column.append(
+                        oma_tax_tab["NCBITaxonId"][
+                            np.argwhere(oma_tax_tab["Name"] == tax_name)[0][0]
+                        ]
+                    )
+                # when the taxon name is a uniprot species code
+                except IndexError:
+                    taxid_column.append(
+                        oma_sp_tab["NCBITaxonId"][
+                            np.argwhere(
+                                oma_sp_tab["UniProtSpeciesCode"] == tax_name
+                            )[0][0]
+                        ]
+                    )
+        self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)

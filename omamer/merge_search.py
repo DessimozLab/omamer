@@ -568,6 +568,7 @@ class MergeSearch(object):
         df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(
             lambda i: self.db.get_hog_id(i - 1)
         )
+        df.loc[~hog_f, "hogid"] = "na"
         # add the hog level
         df.loc[hog_f, "hoglevel"] = df.loc[hog_f, "hog_offset"].apply(
             lambda i: self.tax_tab[self.hog_tab[i - 1]["TaxOff"]]["ID"].decode("ascii")

@@ -171,8 +171,10 @@ def search(args):
                     )
                     print("!db-path: {}".format(db.filename), file=args.out)
 
-                    # could enable an option to include metadata from db in results file
-                    # for (k, v) in _format_info_db(db):
+                    # include some of the db metadata
+                    #to_include = {'source', 'root level'}
+                    #db_info = _format_info_db(db)
+                    #for k in ['source', 'root_level']
                     #    print('!db-info-{}: {}'.format('_'.join(k.split(' ')), v), file=args.out)
                 df.to_csv(args.out, sep="\t", index=False, header=print_header)
                 print_header = False

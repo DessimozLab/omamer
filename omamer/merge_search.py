@@ -492,6 +492,7 @@ class MergeSearch(object):
         HEADER = [
             "qseqid",
             "hogid",
+            "hoglevel",
             "family_p",
             "family_count",
             "family_normcount",
@@ -566,6 +567,10 @@ class MergeSearch(object):
         # add the hog id
         df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(
             lambda i: self.db.get_hog_id(i - 1)
+        )
+        # add the hog level
+        df.loc[hog_f, "hoglevel"] = df.loc[hog_f, "hog_offset"].apply(
+            lambda i: self.db._db_Taxonomy[self.db._db_HOG[i-1]["TaxOff"]["ID"]
         )
 
         # compute taxonomic congruences

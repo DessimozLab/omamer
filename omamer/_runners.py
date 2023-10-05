@@ -172,10 +172,9 @@ def search(args):
                     print("!db-path: {}".format(db.filename), file=args.out)
 
                     # include some of the db metadata
-                    #to_include = {'source', 'root level'}
-                    #db_info = _format_info_db(db)
-                    #for k in ['source', 'root_level']
-                    #    print('!db-info-{}: {}'.format('_'.join(k.split(' ')), v), file=args.out)
+                    db_info = dict(_format_info_db(db))
+                    for k in ['source', 'root level']:
+                        print('!db-info-{}: {}'.format('_'.join(k.split(' ')), db_info[k]), file=args.out)
                 df.to_csv(args.out, sep="\t", index=False, header=print_header)
                 print_header = False
             search_times.append((len(ids), t_search1 - t_search0))

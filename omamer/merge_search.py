@@ -570,7 +570,7 @@ class MergeSearch(object):
         )
         # add the hog level
         df.loc[hog_f, "hoglevel"] = df.loc[hog_f, "hog_offset"].apply(
-            lambda i: self.db._db_Taxonomy[self.db._db_HOG[i-1]["TaxOff"]["ID"]
+            lambda i: self.tax_tab[self.hog_tab[i - 1]["TaxOff"]]["ID"]
         )
 
         # compute taxonomic congruences
@@ -579,14 +579,16 @@ class MergeSearch(object):
             q2closest_taxon = get_closest_taxa_from_ref(
                 q2hog_off,
                 ref_taxon_off,
-                tax_tab,
+                self.tax_tab,
                 self.hog_tab,
                 self.db._db_ChildrenHOG[:],
             )
             HEADER.append("closest_taxa")
             df.loc[hog_f, "closest_taxa"] = list(
                 map(
-                    lambda x: tax_tab["ID"][x].decode("ascii") if x != -1 else pd.NA,
+                    lambda x: self.tax_tab["ID"][x].decode("ascii")
+                    if x != -1
+                    else pd.NA,
                     q2closest_taxon,
                 )
             )

@@ -570,7 +570,7 @@ class MergeSearch(object):
         )
         # add the hog level
         df.loc[hog_f, "hoglevel"] = df.loc[hog_f, "hog_offset"].apply(
-            lambda i: self.tax_tab[self.hog_tab[i - 1]["TaxOff"]]["ID"]
+            lambda i: self.tax_tab[self.hog_tab[i - 1]["TaxOff"]]["ID"].decode("ascii")
         )
 
         # compute taxonomic congruences

@@ -37,8 +37,6 @@ from .hierarchy import (
     get_children,
 )
 
-import warnings
-warnings.filterwarnings("ignore")
 
 # ----
 # stats functions
@@ -47,7 +45,6 @@ def binom_neglogccdf(x, n, p):
     """
     Use rvlib to compute p-value
     """
-    print('params', n, p, x)
     return -1.0 * Binomial(n, p).logccdf(x - 1)
 
 

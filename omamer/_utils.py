@@ -83,27 +83,3 @@ def print_message(x, no_newline=None, file=None):
     file = file if file is not None else sys.stderr
     if not SILENT:
         print(x, file=file, end="\n" if no_newline is not True else "", flush=True)
-
-
-## this should clone python-land (no c / fortran print statements)
-# class AutoLogger_stderr(TextIOWrapper):
-#    def __init__(self, log_name):
-#        super().__init__(sys.stderr)
-#        self.log_file = open(log_name, 'wt')
-#        self.stderr = sys.stderr
-#        sys.stderr = self
-#
-#    def __getattr__(self, x):
-#        return getattr(self.stderr, x)
-#
-#    def write(self, x):
-#        self.log_file.write(x)
-#        self.stderr.write(x)
-#
-#    def flush(self):
-#        self.log_file.flush()
-#        self.stderr.flush()
-#
-#    def __del__(self):
-#        sys.stderr = self.stderr
-#        self.log_file.close()

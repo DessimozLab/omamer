@@ -698,8 +698,8 @@ class DatabaseFromOMA(Database):
         filename,
         root_taxon,
         min_fam_size=6,
-        min_fam_completeness=0,
-        logic="AND",
+        min_fam_completeness=0.5,
+        logic="OR",
         include_younger_fams=True,
         mode="r",
     ):

@@ -34,6 +34,7 @@ requirements = [
     "alive_progress",
     "biopython",
     "ete3",
+    "filehash",
     "numba",
     "numpy",
     "pandas",
@@ -43,7 +44,7 @@ requirements = [
     "tables",
     "tqdm",
 ]
-extra_requirements = {"build": ["filehash", "pysais"]}
+extra_requirements = {"build": ["pysais"]}
 
 desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
 

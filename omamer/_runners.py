@@ -30,6 +30,10 @@ def mkdb_oma(args):
 
     assert args.k < 8, "Max k-mer size is 7."
     LOG.info("Create database from OMA build")
+    LOG.info("arguments for build:")
+    for (k, v) in vars(args).items():
+        LOG.info(" - {}: {}".format(k, v))
+
     db = DatabaseFromOMA(
         args.db,
         root_taxon=args.root_taxon,

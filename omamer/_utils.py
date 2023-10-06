@@ -83,3 +83,10 @@ def print_message(x, no_newline=None, file=None):
     file = file if file is not None else sys.stderr
     if not SILENT:
         print(x, file=file, end="\n" if no_newline is not True else "", flush=True)
+
+
+def compute_file_md5(fn):
+    from filehash import FileHash
+
+    md5hasher = FileHash('md5')
+    return md5hasher.hash_file(fn)

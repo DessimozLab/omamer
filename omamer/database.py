@@ -33,7 +33,7 @@ from .hierarchy import (
     traverse,
 )
 from .index import Index
-from ._utils import LOG, is_progress_disabled
+from ._utils import LOG, is_progress_disabled, compute_file_md5
 
 
 PROT_ID_LEN = 12
@@ -679,9 +679,7 @@ class Database(object):
         # temporarily close the database
         self.db.close()
 
-        from filehash import FileHash
-        md5hasher = Filehash('md5')
-        md5 = md5hasher.hash_file(self.filename)
+        md5 = compute_file_md5(self.filename)
 
         # reopen the database and save the hash
         self.db = tables.open_file(self.filename, 'a', filters=self._compr)

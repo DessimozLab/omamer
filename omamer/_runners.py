@@ -61,6 +61,7 @@ def mkdb_oma(args):
     )
     db.ki.build_kmer_table(seq_buff)
     db.add_metadata()
+    db.add_md5_hash()
 
     db.close()
     LOG.info("Done")
@@ -92,6 +93,7 @@ def search(args):
         import os
 
         from . import __version__
+        from ._utils import compute_file_md5
         from .database import Database
         from .merge_search import MergeSearch
         from .sequence_reader import SequenceReader
@@ -167,6 +169,7 @@ def search(args):
                 if print_header:
                     # write the top header
                     print("!omamer-version: {}".format(__version__), file=args.out)
+                    print("!query-md5: {}".format(compute_file_md5(args.query.name)), file=args.out)
                     print(
                         "!date-run: {}".format(datetime.fromtimestamp(t0).isoformat()),
                         file=args.out,

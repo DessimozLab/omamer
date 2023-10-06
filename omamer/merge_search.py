@@ -20,11 +20,12 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+from numba.tests.support import captured_stdout
 from property_manager import lazy_property, cached_property
 import numba
 import numpy as np
 import pandas as pd
-from rvlib import Binomial
+from rvlib.univariate import binom_logccdf
 from time import time
 
 from ._utils import LOG
@@ -40,12 +41,12 @@ from .hierarchy import (
 
 # ----
 # stats functions
-@numba.njit
+@numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
     Use rvlib to compute p-value
     """
-    return -1.0 * Binomial(n, p).logccdf(x - 1)
+    return -1.0 * binom_logccdf(n, p, x - 1)
 
 
 # ----
@@ -65,7 +66,7 @@ def fam_res_compare(x1, x2):
             return -1 if (x1["overlap"] > x2["overlap"]) else 1
         else:
             if x1["pvalue"] != x2["pvalue"]:
-                # greater first
+                # greater first. note, we use neglog units
                 return -1 if (x1["pvalue"] > x2["pvalue"]) else 1
     # equal. take whichever.
     return 0

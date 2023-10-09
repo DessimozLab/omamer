@@ -181,7 +181,7 @@ def search(args):
                     for k in ['source', 'root level', 'database hash']:
                         if k in db_info:
                             print('!db-info-{}: {}'.format('_'.join(k.split(' ')), db_info[k]), file=args.out)
-                df.to_csv(args.out, sep="\t", index=False, header=print_header)
+                df.to_csv(args.out, sep="\t", index=False, header=print_header, na_rep="N/A")
                 print_header = False
             search_times.append((len(ids), t_search1 - t_search0))
 

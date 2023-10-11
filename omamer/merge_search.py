@@ -20,13 +20,14 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+from Rmath4 import pbinom
 from numba.tests.support import captured_stdout
 from property_manager import lazy_property, cached_property
+from time import time
 import numba
 import numpy as np
 import pandas as pd
-from rvlib.univariate import binom_logccdf
-from time import time
+
 
 from ._utils import LOG
 from .alphabets import get_transform
@@ -39,14 +40,21 @@ from .hierarchy import (
 )
 
 
+# maximum neglogp to set
+MAX_LOGP = 20000
+
+
 # ----
 # stats functions
 @numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
-    Use rvlib to compute p-value
+    Use pbinom from RMath4
     """
-    return -1.0 * binom_logccdf(n, p, x - 1)
+    # bdtrc does not support high precision (so for v small p fails)
+    # bdtrc supports (float64, long, float64)
+    #return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
+    return -1.0 * pbinom(x - 1, n, p, 0, 1)
 
 
 # ----
@@ -657,7 +665,7 @@ class MergeSearch(object):
                 # 1. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
-                    qres["pvalue"][i] = max(
+                    qres["pvalue"][i] = min(MAX_LOGP,max(
                         0.0,
                         (
                             binom_neglogccdf(
@@ -665,7 +673,7 @@ class MergeSearch(object):
                             )
                             - correction_factor
                         ),
-                    )
+                    ))
 
                 # 2. Filtering
                 # - a. filter to significant families (on p-value)

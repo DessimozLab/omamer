@@ -110,10 +110,11 @@ class Database(object):
             LOG.warning("Overwriting database file ({})".format(self.filename))
 
         self.db = tables.open_file(self.filename, self.mode, filters=self._compr)
-        self._check_db_version()
 
         if "/Index" in self.db:
             self.ki = Index(self)
+        if self.mode == "r":
+            self._check_db_version()
 
     def _check_db_version(self):
         # check that the database version is the same minor version as us.

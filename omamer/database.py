@@ -22,11 +22,13 @@
 """
 from collections import defaultdict
 from itertools import repeat
+from packaging.version import parse as parse_version
 from tqdm.auto import tqdm
 import numpy as np
 import os
 import tables
 
+from . import __version__
 from .hierarchy import (
     get_hog_child_prots,
     get_hog2taxa,
@@ -108,9 +110,33 @@ class Database(object):
             LOG.warning("Overwriting database file ({})".format(self.filename))
 
         self.db = tables.open_file(self.filename, self.mode, filters=self._compr)
+        self._check_db_version()
 
         if "/Index" in self.db:
             self.ki = Index(self)
+
+    def _check_db_version(self):
+        # check that the database version is the same minor version as us.
+        db_version = parse_version(self.get_metadata()["omamer version"])
+        my_version = parse_version(__version__)
+        if (db_version.major == my_version.major) and (
+            db_version.minor == my_version.minor
+        ):
+            pass
+        elif (db_version.major == my_version.major) and (
+            db_version.minor < my_version.minor
+        ):
+            LOG.warning(
+                "Database version mismatch: DB {} / OMAmer {}".format(
+                    db_version, my_version
+                )
+            )
+        else:
+            raise RuntimeError(
+                "Database major version mismatch: DB {} / OMAmer {}".format(
+                    db_version, my_version
+                )
+            )
 
     def _check_open_writeable(self):
         assert self.mode == "w", "Database must be opened in write mode."
@@ -675,14 +701,14 @@ class Database(object):
     def add_md5_hash(self):
         # generate unique hash for the database
         self._check_open_writeable()
-        
+
         # temporarily close the database
         self.db.close()
 
         md5 = compute_file_md5(self.filename)
 
         # reopen the database and save the hash
-        self.db = tables.open_file(self.filename, 'a', filters=self._compr)
+        self.db = tables.open_file(self.filename, "a", filters=self._compr)
         self.db.set_node_attr("/", "database_hash", md5)
 
 
@@ -1202,11 +1228,11 @@ class DatabaseFromOMA(Database):
 
         # unsure why there was this check. for jul23 we use -ve for GTDB
         # quick check that the values are positives
-        #if (oma_tax_tab["NCBITaxonId"][0] >= 0) and (oma_sp_tab["NCBITaxonId"][0] >= 0):
+        # if (oma_tax_tab["NCBITaxonId"][0] >= 0) and (oma_sp_tab["NCBITaxonId"][0] >= 0):
         taxid_column = []
         for tax_name in self._db_Taxonomy.col("ID"):
             if tax_name == b"LUCA":
-                taxid_column.append(0)#-1)  # 0 is unused.
+                taxid_column.append(0)  # -1)  # 0 is unused.
             else:
                 try:
                     taxid_column.append(
@@ -1218,9 +1244,9 @@ class DatabaseFromOMA(Database):
                 except IndexError:
                     taxid_column.append(
                         oma_sp_tab["NCBITaxonId"][
-                            np.argwhere(
-                                oma_sp_tab["UniProtSpeciesCode"] == tax_name
-                            )[0][0]
+                            np.argwhere(oma_sp_tab["UniProtSpeciesCode"] == tax_name)[
+                                0
+                            ][0]
                         ]
                     )
         self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)

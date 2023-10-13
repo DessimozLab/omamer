@@ -88,5 +88,5 @@ def print_message(x, no_newline=None, file=None):
 def compute_file_md5(fn):
     from filehash import FileHash
 
-    md5hasher = FileHash('md5')
+    md5hasher = FileHash("md5")
     return md5hasher.hash_file(fn)

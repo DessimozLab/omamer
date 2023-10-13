@@ -53,7 +53,7 @@ def binom_neglogccdf(x, n, p):
     """
     # bdtrc does not support high precision (so for v small p fails)
     # bdtrc supports (float64, long, float64)
-    #return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
+    # return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
     return -1.0 * pbinom(x - 1, n, p, 0, 1)
 
 
@@ -665,15 +665,20 @@ class MergeSearch(object):
                 # 1. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
-                    qres["pvalue"][i] = min(MAX_LOGP,max(
-                        0.0,
-                        (
-                            binom_neglogccdf(
-                                qres["count"][i], len(r1), ref_fam_prob[qres["id"][i]]
-                            )
-                            - correction_factor
+                    qres["pvalue"][i] = min(
+                        MAX_LOGP,
+                        max(
+                            0.0,
+                            (
+                                binom_neglogccdf(
+                                    qres["count"][i],
+                                    len(r1),
+                                    ref_fam_prob[qres["id"][i]],
+                                )
+                                - correction_factor
+                            ),
                         ),
-                    ))
+                    )
 
                 # 2. Filtering
                 # - a. filter to significant families (on p-value)

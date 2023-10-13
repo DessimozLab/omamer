@@ -20,6 +20,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+
+
 def main():
     from argparse import (
         ArgumentParser,
@@ -35,10 +37,8 @@ def main():
     import sys
     import warnings
 
-
     from . import __version__, __copyright__
     from ._runners import mkdb_oma, search, info_db
-
 
     class NoSubparsersMetavarFormatter(HelpFormatter):
         def _format_action(self, action):
@@ -66,14 +66,12 @@ def main():
             else:
                 yield from super()._iter_indented_subactions(action)
 
-
     def get_thread_count():
         if hasattr(os, "sched_getaffinity"):
             #  works for schedulers, e.g., slurm
             return len(os.sched_getaffinity(0))
         else:
             return mp.cpu_count()
-
 
     desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families."
     parser = ArgumentParser(
@@ -169,7 +167,10 @@ def main():
     )
     search_parser.set_defaults(func=search)
     search_parser.add_argument(
-        "-d", "--db", required=True, help="Path to existing database (including filename)."
+        "-d",
+        "--db",
+        required=True,
+        help="Path to existing database (including filename).",
     )
     search_parser.add_argument(
         "-q",
@@ -244,7 +245,6 @@ def main():
     )
     search_parser.add_argument("--silent", action="store_true", help="Silence output")
 
-
     info_parser = subparsers.add_parser(
         "info",
         help="Show metadata about an omamer database.",
@@ -257,7 +257,6 @@ def main():
         required=True,
         help="Path to an existing database (including filename).",
     )
-
 
     args = parser.parse_args()
     if hasattr(args, "func"):
@@ -282,9 +281,9 @@ def main():
             nthreads = args.nthreads if args.nthreads > 0 else get_thread_count()
             numba.set_num_threads(nthreads)
 
-            os.environ["MKL_NUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = os.environ[
-                "OMP_NUM_THREADS"
-            ] = str(nthreads)
+            os.environ["MKL_NUM_THREADS"] = os.environ[
+                "NUMEXPR_NUM_THREADS"
+            ] = os.environ["OMP_NUM_THREADS"] = str(nthreads)
 
         # call the relevant runner func
         args.func(args)

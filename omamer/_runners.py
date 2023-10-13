@@ -169,7 +169,10 @@ def search(args):
                 if print_header:
                     # write the top header
                     print("!omamer-version: {}".format(__version__), file=args.out)
-                    print("!query-md5: {}".format(compute_file_md5(args.query.name)), file=args.out)
+                    print(
+                        "!query-md5: {}".format(compute_file_md5(args.query.name)),
+                        file=args.out,
+                    )
                     print(
                         "!date-run: {}".format(datetime.fromtimestamp(t0).isoformat()),
                         file=args.out,
@@ -178,10 +181,17 @@ def search(args):
 
                     # include some of the db metadata
                     db_info = dict(_format_info_db(db))
-                    for k in ['source', 'root level', 'database hash']:
+                    for k in ["source", "root level", "database hash"]:
                         if k in db_info:
-                            print('!db-info-{}: {}'.format('_'.join(k.split(' ')), db_info[k]), file=args.out)
-                df.to_csv(args.out, sep="\t", index=False, header=print_header, na_rep="N/A")
+                            print(
+                                "!db-info-{}: {}".format(
+                                    "_".join(k.split(" ")), db_info[k]
+                                ),
+                                file=args.out,
+                            )
+                df.to_csv(
+                    args.out, sep="\t", index=False, header=print_header, na_rep="N/A"
+                )
                 print_header = False
             search_times.append((len(ids), t_search1 - t_search0))
 

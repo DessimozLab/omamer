@@ -294,6 +294,10 @@ def print_run_data(args):
     print_message("")
     print_line(80)
 
+    # temporary removal for 2.0.0 release
+    if args.reference_taxon is not None:
+        raise RuntimeError("reference_taxon is not supported in release 2.0.0")
+
 
 def goodbye(args, time_taken, search_rate):
     import sys

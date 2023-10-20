@@ -112,16 +112,16 @@ Required arguments: ``--db``, ``--oma_path``
                        [--log_level {debug,info,warning}]
                    
 ## Arguments
+<!-- todo: add short flags -->
 | Flag                 | Default                | Description |
 |:--------------------|:----------------------|:-----------|
 | [``--db``](#markdown-header--db)||Path to new database (including filename)
 | [``--nthreads``](#markdown-header--nthreads)|1|Number of threads to use
 | [``--min_fam_size``](#markdown-header--min_fam_size)|6|Only root-HOGs with a protein count passing this threshold are used.
-| [``--min_fam_completeness``](#markdown-header--min_hog_size)|0.0|Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level.
-| [``--logic``](#markdown-header--min_hog_size)|AND|Logic used between the two above arguments to filter root-HOGs. Options are "AND" or "OR".
+| [``--min_fam_completeness``](#markdown-header--min_fam_completeness)|0.5|Only root-HOGs passing this threshold are used. The completeness of a HOG is defined as the number of observed species divided by the expected number of species at the HOG taxonomic level.
+| [``--logic``](#markdown-header--logic)|OR|Logic used between the two above arguments to filter root-HOGs. Options are "AND" or "OR".
 | [``--root_taxon``](#markdown-header--root_taxon)|LUCA|HOGs defined at, or descending from, this taxon are uses as root-HOGs.
 | [``--hidden_taxa``](#markdown-header--hidden_taxa)||The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (_e.g._ Bacteria,Homo_sapiens).
-| [``--species``](#markdown-header--species)||Temporary option
 | [``--reduced_alphabet``](#markdown-header--reduced_alphabet)||Use reduced alphabet from Linclust paper
 | [``--k``](#markdown-header--k)|6|_k_-mer length
 | [``--oma_path``](#markdown-header--oma_path)||Path to a directory with both OmaServer.h5 and speciestree.nwk

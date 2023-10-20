@@ -44,14 +44,13 @@ Required arguments: ``--db``, ``--query``
 | | [``--family_alpha``](#markdown-header--family_alpha) | 1e-6 | Significance threshold used when filtering families.
 | [``-fo``](#markdown-header-fo) | [``--family_only``](#markdown-header--family_only) | False | If set, only place at the family level. Useful for certain analysis. Note: `subfamily_medianseqlen` in the results is for the family level.
 | [``-n``](#markdown-header-n) | [``--family_only``](#markdown-header--top_n_fams) | 1 | Number of top level families to place into. By default, placed into only the best scoring family.
-<!--| | [``--reference_taxon``](#markdown-header--reference_taxon) || The placement is stopped when reaching a HOG with the reference taxon (must exist in the OMA database).  This is a complementary option to vary the specificity of predicted HOGs.-->
 | [``-o``](#markdown-header-o) | [``--out``](#markdown-header--db) | stdout | Path to output. If not set, defaults to stdout.
 | | [``--include_extant_genes``](#markdown-header--include_extant_genes)||Include extant gene IDs as comma separated entry in results
 | [``-c``](#markdown-header-c) | [``--chunksize``](#markdown-header--chunksize) |10000| Number of queries to process at once.
 | [``-t``](#markdown-header-t) | [``--nthreads``](#markdown-header--db) |1|Number of threads to use
 | | [``--log_level``](#markdown-header--db) |info| Logging level (options debug, info, warning)
 | | [``--silent``](#markdown-header--silent) || Set to silence the output.
-
+<!--| | [``--reference_taxon``](#markdown-header--reference_taxon) || The placement is stopped when reaching a HOG with the reference taxon (must exist in the OMA database).  This is a complementary option to vary the specificity of predicted HOGs.-->
 # Output
 
 Output is in the form of a tab-seperated value file (TSV), with metadata added to the header using ``!<tag>: <value>``. A parser can be imported for further analysis in python as ``from omamer.results_reader import results_reader``.

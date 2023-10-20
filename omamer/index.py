@@ -20,7 +20,6 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from PySAIS import sais
 import numba
 import numpy as np
 
@@ -91,6 +90,10 @@ class Index(object):
     def _build_suffixarray(seqs, n):
         # Build suffix array
         LOG.debug(" - building suffix array for sequences")
+
+        from PySAIS import sais
+        # import sais here, otherwise we need it for search-time dependency
+
         sa = sais(seqs)
         sa[:n].sort()  # Sort delimiters by position
         return sa

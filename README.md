@@ -14,7 +14,7 @@ Note: Python 3.12 is currently not supported, until the `numba` package is updat
 Pre-built databases are available for the latest OMA release from the [download section on the OMA Browser website](https://omabrowser.org/oma/current).
 
  - LUCA: https://omabrowser.org/All/LUCA.h5
- - _Metazoa: https://omabrowser.org/All/Metazoa.h5
+ - _Metazoa_: https://omabrowser.org/All/Metazoa.h5
  - _Viridiplantae_: https://omabrowser.org/All/Viridiplantae.h5
  - _Saccharomyceta_: https://omabrowser.org/All/Saccharomyceta.h5 
  - _Primates_: https://omabrowser.org/All/Primates.h5

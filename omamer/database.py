@@ -68,7 +68,7 @@ class Database(object):
         HOGtaxaNum = tables.UInt32Col(pos=11)
         LCAtaxOff = tables.UInt32Col(pos=12)
         NrMemberGenes = tables.UInt32Col(pos=13)
-        CompletenessScore = tables.Float64Col(pos=14)  # not currently used, useful
+        CompletenessScore = tables.Float64Col(pos=14)  # not used in search, but potentially useful 
         MedianSeqLen = tables.UInt32Col(pos=15)
 
     class FamilyTableFormat(tables.IsDescription):

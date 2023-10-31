@@ -130,6 +130,11 @@ Required arguments: ``--db``, ``--oma_path``
 
 # Change log
 
+#### Version 2.0.1
+ - remove dependency for filehash library
+ - return better error message if build dependencies are not met, but trying to building an omamer database
+ - minor fixes
+
 #### Version 2.0.0
  - Major update of database format and search code to improve overall memory useage. Most standard runs with LUCA-level database will run on a machine with 16GB RAM.
  - Update to the scoring algorithm for root-level HOG / family assignments, to allow for significance testing. This estimates a binomial distribution for each family, so that we can compute the probability of matching at least as many k-mers as we have observed by chance, for each family that has a match to a given query.

@@ -20,9 +20,9 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from io import TextIOWrapper
 import bz2
 import gzip
+import lzma
 import logging
 import os
 import sys
@@ -34,7 +34,8 @@ SILENT = False
 
 # File opening. This is based on the example on SO here:
 # http://stackoverflow.com/a/26986344
-fmagic = {b"\x1f\x8b\x08": gzip.open, b"\x42\x5a\x68": bz2.BZ2File}
+fmagic = {b"\x1f\x8b\x08": gzip.open, b"\x42\x5a\x68": bz2.BZ2File,
+          b"\xfd\x37\x7a\x58\x5a\x00": lzma.open}
 
 
 def auto_open(fn, *args):
@@ -66,7 +67,7 @@ def set_log_level(x):
 
 def set_if_silent(x):
     if x is True:
-        SILENT = TRUE
+        SILENT = True
 
 
 def is_progress_disabled():

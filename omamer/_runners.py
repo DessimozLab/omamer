@@ -28,6 +28,8 @@ def mkdb_oma(args):
     from .index import Index
     import os
 
+    _ensure_db_build_dependencies_available()
+
     assert args.k < 8, "Max k-mer size is 7."
     LOG.info("Create database from OMA build")
     LOG.info("arguments for build:")
@@ -201,6 +203,15 @@ def search(args):
         map(lambda x: x[1], search_times)
     )
     goodbye(args, time() - t0, search_rate)
+
+
+def _ensure_db_build_dependencies_available():
+    try:
+        from pysais import sais
+    except ImportError:
+        LOG.error("To build OMAmer databases, pysais must be installed. Please ensure you installed omamer with the 'build' extra, e.g. `pip install omamer[build]`")
+        import sys
+        sys.exit(1)
 
 
 def _ensure_data_loaded(ms):

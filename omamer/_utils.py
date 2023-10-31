@@ -86,7 +86,13 @@ def print_message(x, no_newline=None, file=None):
 
 
 def compute_file_md5(fn):
-    from filehash import FileHash
+    from hashlib import md5
 
-    md5hasher = FileHash("md5")
-    return md5hasher.hash_file(fn)
+    chunk_size = 4096
+    md5hasher = md5()
+    with open(fn, 'rb', buffering=4096) as fh:
+        buffer = fh.read(chunk_size)
+        while len(buffer) > 0:
+            md5hasher.update(buffer)
+            buffer = fh.read(chunk_size)
+    return md5hasher.hexdigest()

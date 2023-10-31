@@ -34,7 +34,6 @@ requirements = [
     "alive_progress",
     "biopython",
     "ete3",
-    "filehash",
     "numba",
     "numpy",
     "pandas>2.0.0",

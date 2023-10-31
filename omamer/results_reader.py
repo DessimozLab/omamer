@@ -20,10 +20,23 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from datetime import date
+import pandas as pd
 
-__packagename__ = "omamer"
-__version__ = "2.0.0"
-__copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>".format(
-    date.today().year
-)
+from ._utils import auto_open
+
+
+def results_reader(filename):
+    # read the metadata first
+    metadata = {}
+    with auto_open(filename, "rt") as fp:
+        for x in fp:
+            if x.startswith("!"):
+                x = x[1:].rstrip().split(": ")
+                k = x[0]
+                v = ": ".join(x[1:])
+                metadata[k] = v
+            else:
+                break
+
+    df = pd.read_csv(auto_open(filename), sep="\t", comment="!")
+    return (df, metadata)

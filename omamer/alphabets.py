@@ -1,7 +1,8 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
+    (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
+    (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
 
     This file is part of OMAmer.
@@ -18,7 +19,8 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
+import numba
 import numpy as np
 
 
@@ -29,14 +31,14 @@ class Alphabet(object):
 
     def setup(self):
         if self.n == 21:
-            chars = set('ACDEFGHIKLMNPQRSTVWXY')
+            chars = set("ACDEFGHIKLMNPQRSTVWXY")
             digits = np.frombuffer(b"ACDEFGHIKLMNPQRSTVWXY", dtype=np.uint8)
             lookup = np.zeros(np.max(digits) + 1, dtype=np.uint8)
             lookup[digits] = np.arange(len(digits))
             trans = None
         elif self.n == 13:
             # Reduced from Linclust merges (A, S, T), (D, N), (E, Q), (F, Y), (I, V), (K, R) and (L, M)
-            chars = set('ACDEFGHIKLPWX')
+            chars = set("ACDEFGHIKLPWX")
             digits = np.frombuffer(b"ACDEFGHIKLPWX", dtype=np.uint8)
             lookup = np.zeros(ord(b"Y") + 1, dtype=np.uint8)
             lookup[digits] = np.arange(len(digits))
@@ -90,9 +92,9 @@ class Alphabet(object):
             return x
         else:
             return self.trans[x.view(np.uint8)].view("|S1")
-    
-    def sanitize_seq(self, seq):
-        return ''.join([x if x in self.chars else 'X' for x in seq])
+
+    def sanitise_seq(self, seq):
+        return "".join([x if x in self.chars else "X" for x in seq])
 
     @property
     def DIGITS_AA_LOOKUP(self):
@@ -101,3 +103,12 @@ class Alphabet(object):
     @property
     def DIGITS_AA(self):
         return self.digits
+
+
+@numba.njit
+def get_transform(k, DIGITS_AA):
+    # k-mer transformation
+    t = np.zeros(k, dtype=np.uint64)
+    for i in numba.prange(k):
+        t[i] = len(DIGITS_AA) ** (k - (i + 1))
+    return t

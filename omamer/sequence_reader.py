@@ -20,10 +20,22 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from datetime import date
+from Bio import SeqIO
 
-__packagename__ = "omamer"
-__version__ = "2.0.0"
-__copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>".format(
-    date.today().year
-)
+
+class SequenceReader(object):
+    @staticmethod
+    def read(fp, k, format="fasta", chunksize=None, sanitiser=None):
+        ids = []
+        seqs = []
+        for rec in filter(lambda x: (len(x.seq) >= k), SeqIO.parse(fp, format)):
+            ids.append(rec.id)
+            s = str(rec.seq).upper()
+            seqs.append(sanitiser(s) if sanitiser is not None else s)
+
+            if chunksize is not None and len(ids) == chunksize:
+                yield (ids, seqs)
+                ids = []
+                seqs = []
+
+        yield (ids, seqs)

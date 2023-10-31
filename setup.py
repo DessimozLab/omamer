@@ -1,7 +1,8 @@
-'''
+"""
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2019-2020 Victor Rossier <victor.rossier@unil.ch> and
+    (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
+    (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
 
     This file is part of OMAmer.
@@ -18,31 +19,47 @@
 
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 from setuptools import setup, find_packages
 
 
-name = 'omamer'
+name = "omamer"
 __version__ = None
-with open('{:s}/__init__.py'.format(name), 'rt') as fp:
+with open("{:s}/__init__.py".format(name), "rt") as fp:
     for line in fp:
-        if line.startswith('__version__'):
+        if line.startswith("__version__"):
             exec(line.rstrip())
 
-# TODO
-requirements = ['biopython', 'ete3', 'numba', 'numpy', 'pandas', 'property_manager', 'pysais', 'scipy', 'tables', 'tqdm']
+requirements = [
+    "alive_progress",
+    "biopython",
+    "ete3",
+    "filehash",
+    "numba",
+    "numpy",
+    "pandas>2.0.0",
+    "property_manager",
+    "Rmath4",
+    "scipy",
+    "tables",
+    "tqdm",
+]
+extra_requirements = {"build": ["pysais"]}
 
-desc = 'OMAmer - tree-driven and alignment-free protein assignment to sub-families'
+desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
 
 setup(
     name=name,
     version=__version__,
-    author='Victor Rossier and Alex Warwick Vesztrocy',
-    email='alex@warwickvesztrocy.co.uk',
-    url='https://github.com/DessimozLab/omamer',
+    author="Victor Rossier and Alex Warwick Vesztrocy",
+    email="alex@warwickvesztrocy.co.uk",
+    url="https://github.com/DessimozLab/omamer",
     description=desc,
     packages=find_packages(),
     install_requires=requirements,
-    python_requires=">=3.6",
-    license='LGPLv3',
-    scripts=['bin/omamer'])
+    extras_require=extra_requirements,
+    python_requires=">=3.8",
+    license="LGPLv3",
+    #scripts=["bin/omamer"],
+    entry_points={'console_scripts': ['omamer = omamer.main:main']}
+)

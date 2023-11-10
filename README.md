@@ -130,6 +130,11 @@ Required arguments: ``--db``, ``--oma_path``
 
 # Change log
 
+#### Version 2.0.2
+- changed method for hiding taxa in build process. Now takes a file containing taxa to hide on separate lines.
+- checks and improved feedback for root taxon and requested taxa to hide.
+- root taxon set by default to the root level in speciestree.nwk (previously hard-coded to default to LUCA)
+
 #### Version 2.0.1
  - remove dependency for filehash library
  - return better error message if build dependencies are not met, but trying to building an omamer database

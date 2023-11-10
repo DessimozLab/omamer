@@ -20,6 +20,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+from property_manager import lazy_property
 import numba
 import numpy as np
 
@@ -46,26 +47,36 @@ class Index(object):
 
         self.alphabet = Alphabet(n=alphabet_n)
 
-    @property
+    @lazy_property
     def sp_filter(self):
-        tax_tab = self.db._db_Taxonomy[:]
         sp_filter = np.full((len(self.db._db_Species),), False)
-        for hidden_taxon in self.hidden_taxa:
-            descendant_species = get_leaves(
-                np.searchsorted(tax_tab["ID"], hidden_taxon.encode("ascii")),
-                tax_tab,
-                self.db._db_ChildrenTax[:],
-            )
-            # case where hidden taxon is species
-            if descendant_species.size == 0:
-                sp_filter[
-                    np.searchsorted(
-                        self.db._db_Species.col("ID"), hidden_taxon.encode("ascii")
-                    )
-                ] = True
-            else:
-                for sp_off in descendant_species:
-                    sp_filter[tax_tab["SpeOff"][sp_off]] = True
+        if len(self.hidden_taxa) > 0:
+            tax_tab = self.db._db_Taxonomy[:]
+            child_tax = self.db._db_ChildrenTax[:]
+
+            if len(self.hidden_taxa) > 0:
+                LOG.debug(' - creating species filter to hide declared taxa')
+
+            for hidden_taxon in self.hidden_taxa:
+                LOG.debug('   - identifying: {}'.format(hidden_taxon))
+                taxon = np.argwhere(tax_tab["ID"] == hidden_taxon.encode("ascii")).flatten()
+                if len(taxon) == 0:
+                    raise ValueError("Can't find {} in taxonomy.".format(hidden_taxon))
+                elif len(taxon) > 1:
+                    raise ValueError("Ambiguous taxon {}.".format(hidden_taxon))
+
+                tax_ii = taxon[0]
+                sp_ii = tax_tab[tax_ii]['SpeOff']
+
+                if sp_ii >= 0:
+                    # leaf (i.e., extant species listed)
+                    LOG.debug('     - hiding {}'.format(self.db._db_Species[sp_ii]['ID'].decode('ascii')))
+                    sp_filter[sp_ii] = True
+                else:
+                    # filter all leaves below declared taxon
+                    for sp_jj in tax_tab["SpeOff"][get_leaves(tax_ii, tax_tab, child_tax)]:
+                        LOG.debug('     - hiding {}'.format(self.db._db_Species[sp_jj]['ID'].decode('ascii')))
+                        sp_filter[sp_jj] = True
         return sp_filter
 
     @property

@@ -128,14 +128,14 @@ def main():
     )
     mkdb_parser.add_argument(
         "--root_taxon",
-        default="LUCA",
-        help="HOGs defined at, or descending from, this taxon are uses as root-HOGs.",
+        required=False,
+        help="HOGs defined at, or descending from, this taxon are uses as root-HOGs. Default is the top level in species tree.",
     )
     mkdb_parser.add_argument(
         "--hidden_taxa",
-        default="",
-        help="The proteins from these taxa are removed before the database computation. Usage: a list of comma-separated taxa (scientific name) with underscore replacing spaces (e.g. Bacteria,Homo_sapiens).",
-        type=str,
+        required=False,
+        help="Optional -- path to a file giving a list of taxa to hide the proteins during index creation only. HOGs will still exist in the database, but it will not be possible to place to them. Names must match EXACTLY to those in the given newick species tree.",
+        type=FileType("r"),
     )
     # mkdb_parser.add_argument(
     #    "--species", default="", help="Alternatively to --hidden_taxa, provide a file with species offsets in sp_tab (tmp option for scaling experiment)", type=str

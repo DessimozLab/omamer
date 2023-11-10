@@ -26,6 +26,8 @@ from ._utils import LOG
 def mkdb_oma(args):
     from .database import DatabaseFromOMA
     from .index import Index
+    
+    from ete3 import Tree
     import os
 
     _ensure_db_build_dependencies_available()
@@ -35,10 +37,37 @@ def mkdb_oma(args):
     LOG.info("arguments for build:")
     for (k, v) in vars(args).items():
         LOG.info(" - {}: {}".format(k, v))
+    
+    oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
+    nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
+
+    # check if root_taxon in tree
+    t = Tree(nwk_fn, format=1, quoted_node_names=True)
+    if args.root_taxon is not None:
+        pruned_t = t.search_nodes(name=args.root_taxon)
+        if len(pruned_t) == 0:
+            raise ValueError("Unable to find {} as root taxon".format(args.root_taxon))
+        elif len(pruned_t) > 1:
+            raise ValueError("Ambiguous root taxon {} ({})".format(args.root_taxon, ", ".join(map(lambda x: x.name, pruned_t))))
+        t = pruned_t[0]
+    root_taxon = t.name
+
+    if args.hidden_taxa:
+        # load and check for hidden taxa
+        hidden_taxa = list(map(lambda x: x.rstrip(), args.hidden_taxa))
+       
+        for ht in hidden_taxa:
+            r = t.search_nodes(name=ht)
+            if len(r) == 0:
+                raise ValueError("Unable to find {} as hidden taxon".format(ht))
+            elif len(r) > 1:
+                raise ValueError("Ambiguous hidden taxon {} ({})".format(ht, ", ".join(map(lambda x: x.name, r))))
+    else:
+        hidden_taxa = []
 
     db = DatabaseFromOMA(
         args.db,
-        root_taxon=args.root_taxon,
+        root_taxon=root_taxon,
         min_fam_size=args.min_fam_size,
         logic=args.logic,
         min_fam_completeness=args.min_fam_completeness,
@@ -46,21 +75,15 @@ def mkdb_oma(args):
         mode="w",
     )
 
-    oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
-    nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
-
     # add sequences from database
-    LOG.info("Adding sequences")
+    LOG.info("Loading sequences")
     seq_buff = db.build_database(oma_db_fn, nwk_fn)
-
-    hidden_taxa = []
-    if args.hidden_taxa:
-        hidden_taxa = [" ".join(x.split("_")) for x in args.hidden_taxa.split(",")]
 
     LOG.info("Building index")
     db.ki = Index(
         db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa
     )
+    db.ki.sp_filter
     db.ki.build_kmer_table(seq_buff)
     db.add_metadata()
     db.add_md5_hash()
@@ -207,7 +230,7 @@ def search(args):
 
 def _ensure_db_build_dependencies_available():
     try:
-        from pysais import sais
+        from PySAIS import sais
     except ImportError:
         LOG.error("To build OMAmer databases, pysais must be installed. Please ensure you installed omamer with the 'build' extra, e.g. `pip install omamer[build]`")
         import sys

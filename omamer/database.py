@@ -696,6 +696,7 @@ class Database(object):
         meta["k-mer length"] = self.ki.k
         meta["alphabet size"] = self.ki.alphabet.n
         meta["nr species"] = len(self._db_Species)
+        meta["nr indexed species"] = (len(self._db_Species) - np.sum(self.ki.sp_filter))
         meta["hidden taxa"] = self.ki.hidden_taxa
         return meta
 

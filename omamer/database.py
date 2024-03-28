@@ -20,6 +20,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+from Bio import SeqIO
 from collections import defaultdict
 from itertools import repeat
 from packaging.version import parse as parse_version
@@ -29,16 +30,14 @@ import os
 import tables
 
 from . import __version__
+from .alphabets import Alphabet
 from .hierarchy import (
     get_hog_child_prots,
     get_hog2taxa,
     traverse,
 )
 from .index import Index
-from ._utils import LOG, is_progress_disabled, compute_file_md5
-
-
-PROT_ID_LEN = 12
+from ._utils import LOG, is_progress_disabled, compute_file_md5, auto_open
 
 
 class Database(object):
@@ -49,10 +48,12 @@ class Database(object):
     class ProteinTableFormat(tables.IsDescription):
         # Note, the ID field could be generalised and replaced with a SequenceBuffer,
         # for now use OMA formatted sequence identifiers. 5CHAR + max 7digit.
-        ID = tables.StringCol(PROT_ID_LEN, pos=1, dflt=b"")
-        SpeOff = tables.Int32Col(pos=2)
-        HOGoff = tables.UInt32Col(pos=3)
-        SeqLen = tables.UInt32Col(pos=4)
+        # ID = tables.StringCol(PROT_ID_LEN, pos=1, dflt=b"")
+        IDBufferOff = tables.UInt64Col(pos=1)
+        IDLen = tables.UInt16Col(pos=2)
+        SpeOff = tables.Int32Col(pos=3)
+        HOGoff = tables.UInt32Col(pos=4)
+        SeqLen = tables.UInt32Col(pos=5)
 
     class HOGTableFormat(tables.IsDescription):
         IDBufferOff = tables.UInt64Col(pos=1)
@@ -68,7 +69,7 @@ class Database(object):
         HOGtaxaNum = tables.UInt32Col(pos=11)
         LCAtaxOff = tables.UInt32Col(pos=12)
         NrMemberGenes = tables.UInt32Col(pos=13)
-        CompletenessScore = tables.Float64Col(pos=14)  # not used in search, but potentially useful 
+        CompletenessScore = tables.Float64Col(pos=14)  # not used in search, but potentially useful
         MedianSeqLen = tables.UInt32Col(pos=15)
 
     class FamilyTableFormat(tables.IsDescription):
@@ -171,6 +172,17 @@ class Database(object):
         e = s + x["IDLen"]
         return self._db_HOGIDBuffer[s:e].tobytes().decode("ascii")
 
+    def get_prot_id(self, i):
+        if "ID" not in self._db_Protein.colinstances:
+            # extract the protein id from the protein id buffer
+            x = self._db_Protein[i]
+            s = x["IDBufferOff"]
+            e = s + x["IDLen"]
+            return self._db_ProteinIDBuffer[s:e].tobytes().decode("ascii")
+        else:
+            # backwards compatability, as 2.3.0 introduced the above ID storage
+            return self._db_Protein[i]["ID"].decode("ascii")
+
     def initiate_tax_tab(self, stree_path):
         """
         except SpeOff column
@@ -180,6 +192,7 @@ class Database(object):
         def _parse_stree(stree_path, roottax):
             from ete3 import Tree
 
+            LOG.debug("parsing species tree {}".format(stree_path))
             stree = Tree(stree_path, format=1, quoted_node_names=True)
             pruned_stree = [x for x in stree.traverse() if x.name == roottax][0]
 
@@ -187,6 +200,7 @@ class Database(object):
             tax2children = {}
             tax2level = {}
             species = set()
+            nspecies_below = {}
 
             for tl in pruned_stree.traverse():
                 tax = tl.name.encode("ascii")
@@ -197,8 +211,10 @@ class Database(object):
                 tax2level[tax] = tl.get_distance(stree)
                 if tl.is_leaf():
                     species.add(tl.name.encode("ascii"))
+                else:
+                    nspecies_below[tl.name.encode("ascii")] = sum(1 for _ in tl.iter_leaves())
 
-            return tax2parent, tax2children, tax2level, species
+            return (tax2parent, tax2children, tax2level, species, nspecies_below)
 
         # create tax table
         tax_tab = self.db.create_table(
@@ -206,7 +222,7 @@ class Database(object):
         )
 
         # parse species tree
-        tax2parent, tax2children, tax2level, species = _parse_stree(
+        tax2parent, tax2children, tax2level, species, nspecies_below = _parse_stree(
             stree_path, self.root_taxon
         )
 
@@ -257,7 +273,7 @@ class Database(object):
             filters=self._compr,
         )
 
-        return (tax2taxoff, species)
+        return (tax2taxoff, species, nspecies_below)
 
     def update_hog_and_fam_tabs(
         self,
@@ -476,12 +492,17 @@ class Database(object):
         hog_tab.autoindex = fam_tab.autoindex = True
 
         # create child hog and protein tables
-        self.db.create_carray(
-            "/",
-            "ChildrenHOG",
-            obj=np.array(child_hogs, dtype=np.uint32),
-            filters=self._compr,
-        )
+        if len(child_hogs) == 0:
+            # TODO: check what else would break. this could be used if someone wanted to build a
+            # database for flat OGs.
+            LOG.warning("No nesting structure in HOGs defined in OrthoXML.")
+        else:
+            self.db.create_carray(
+                "/",
+                "ChildrenHOG",
+                obj=np.array(child_hogs, dtype=np.uint32),
+                filters=self._compr,
+            )
         self.db.create_carray(
             "/",
             "ChildrenProt",
@@ -689,7 +710,7 @@ class Database(object):
             k.replace("_", " "): attrs[k] for k in attrs._f_list() if k != "oma_version"
         }
         if "source" in meta:
-            src_version = meta["source"].lower() + "_version"
+            src_version = "_".join(meta["source"].lower().split(" ")) + "_version"
             meta["source"] += " / {}".format(attrs[src_version])
         if "omamer version" not in meta:
             meta["omamer version"] = "<= 0.2.3"
@@ -715,111 +736,7 @@ class Database(object):
 
 
 class DatabaseFromOMA(Database):
-    """
-    Used to parse the OMA browser database file
-    """
-
-    def __init__(
-        self,
-        filename,
-        root_taxon,
-        min_fam_size=6,
-        min_fam_completeness=0.5,
-        logic="OR",
-        include_younger_fams=True,
-        mode="r",
-    ):
-        super().__init__(filename, root_taxon, mode=mode)
-
-        self.min_fam_size = min_fam_size
-        self.min_fam_completeness = min_fam_completeness
-        self.logic = logic
-        self.include_younger_fams = include_younger_fams
-        self.oma_version = ""
-
-    ### main function ###
-    def build_database(self, oma_h5_path, stree_path):
-        self._check_open_writeable()
-
-        # load OMA h5 file
-        h5file = tables.open_file(oma_h5_path, mode="r")
-        try:
-            self.oma_version = h5file.get_node_attr("/", "oma_version")
-        except AttributeError:
-            raise Exception(
-                "Provided file '{}' does not seem to be an OMA HDF5 database".format(
-                    oma_h5_path
-                )
-            )
-
-        # build taxonomy table except the SpeOff column
-        LOG.debug("initiate taxonomy table")
-        tax2taxoff, species = self.initiate_tax_tab(stree_path)
-        self.add_taxid_col(h5file)
-
-        LOG.debug("select and strip OMA HOGs")
-        (
-            fam2hogs,
-            hog2oma_hog,
-            hog2tax,
-            hog2gene_nr,
-            hog2completeness,
-        ) = self.select_and_strip_OMA_HOGs(h5file)
-
-        LOG.debug("fill sequence buffer, species table and initiate protein table")
-        (
-            fam2hogs,
-            hog2protoffs,
-            hog2tax,
-            hog2oma_hog,
-            seq_buff,
-        ) = self.select_and_filter_OMA_proteins(
-            h5file, fam2hogs, hog2oma_hog, hog2tax, species, self.min_fam_size
-        )
-
-        LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
-        self.add_speoff_col()
-        self.add_taxoff_col()
-
-        # mapper HOG to taxon offset
-        hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
-
-        LOG.debug("fill family and HOG tables")
-        hog2hogoff = self.update_hog_and_fam_tabs(
-            fam2hogs,
-            hog2taxoff,
-            hog2protoffs,
-            hog2oma_hog,
-            hog2gene_nr,
-            hog2completeness,
-        )
-
-        # add family and hog offsets
-        LOG.debug("complete protein table")
-        self.update_prot_tab(hog2protoffs, hog2hogoff)
-
-        LOG.debug("store HOG taxa")
-        self.store_hog2taxa()
-
-        # compute the median sequence length of each HOG
-        self.add_median_seqlen_col()
-
-        # close and open in read mode
-        h5file.close()
-
-        return seq_buff
-
-    def add_metadata(self):
-        super().add_metadata()
-        self.db.set_node_attr("/", "source", "OMA")
-        self.db.set_node_attr("/", "oma_version", self.oma_version)
-        self.db.set_node_attr("/", "min_fam_size", self.min_fam_size)
-        self.db.set_node_attr("/", "min_fam_completeness", self.min_fam_completeness)
-        self.db.set_node_attr("/", "filter_logic", self.logic)
-        self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
-
-    ### functions to parse OMA database ###
-    def select_and_strip_OMA_HOGs(self, h5file):
+    def select_and_strip_OMA_HOGs(self, hog_tab):
         def _process_oma_hog(
             tax2level,
             curr_oma_taxa,
@@ -982,7 +899,12 @@ class DatabaseFromOMA(Database):
             curr_oma_sizes = []
 
             for r in fam_tab_sort:
-                oma_hog, oma_tax, hog_completeness, hog_gene_nr = r[1], r[2], r[3], r[5]
+                # replacing this with named dtype for fowards compatibility
+                oma_hog = r["ID"]
+                oma_tax = r["Level"]
+                hog_completeness = r["CompletenessScore"]
+                hog_gene_nr = r["NrMemberGenes"]
+                # oma_hog, oma_tax, hog_completeness, hog_gene_nr = r[1], r[2], r[3], r[5]
 
                 # evaluation at new oma HOG
                 if oma_hog != curr_oma_hog:
@@ -1044,7 +966,7 @@ class DatabaseFromOMA(Database):
 
         #
         tax2level = dict(zip(self._db_Taxonomy[:]["ID"], self._db_Taxonomy[:]["Level"]))
-        hog_tab = h5file.root.HogLevel
+        # hog_tab = h5file.root.HogLevel
 
         # containers
         fam2hogs = defaultdict(set)
@@ -1110,9 +1032,430 @@ class DatabaseFromOMA(Database):
             self.logic,
         )
 
-        del hog_tab
+        # todo: compute the number of proteins that we need to load in the select_and_filter_OMA_proteins
 
         return fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness
+
+
+class DatabaseFromOrthoXML(DatabaseFromOMA):
+    """
+    Used to parse the data from OrthoXML and FASTA sequences
+    """
+
+    def __init__(
+        self,
+        filename,
+        root_taxon,
+        min_fam_size=6,
+        min_fam_completeness=0.5,
+        logic="OR",
+        include_younger_fams=True,
+        mode="r",
+    ):
+        super().__init__(filename, root_taxon, mode=mode)
+
+        self.min_fam_size = min_fam_size
+        self.min_fam_completeness = min_fam_completeness
+        self.logic = logic
+        self.include_younger_fams = include_younger_fams
+
+    def setup_hogparser(self, oxml_path):
+        from .HOGParser import HOGParser
+
+        LOG.debug("loading species table from orthoxml")
+        self.oxml_path = oxml_path
+        self.hog_parser = HOGParser(oxml_path)
+
+    def parse_oxml(self, nspecies_below):
+        from .HOGParser import is_orthologGroup_node
+
+        def generate_hog_tab(hog):
+            # this is more memory intensive (we cache the results)
+            # -- generate m for the hog
+            def ortholog_info(node):
+                loft_id = node.attrib["og"].split(".")[1:]
+                # NOTE: this is not efficient, to be replaced
+                genes = list(hog.geneRefs(node))
+                nmembers = len(genes)
+                nspecies_represented = len(
+                    set(
+                        map(
+                            lambda g: self.hog_parser.species.get_species(
+                                int(g.attrib["id"])
+                            ).name,
+                            genes,
+                        )
+                    )
+                )
+                hog_level = hog.get_properties(node)["TaxRange"].encode("ascii")
+                if hog_level not in nspecies_below:
+                    # filtered
+                    return None
+                completeness = nspecies_represented / nspecies_below[hog_level]
+
+                return (
+                    hog.fam,  # Fam
+                    ".".join(["HOG:{:07d}".format(hog.fam)] + loft_id).encode(
+                        "ascii"
+                    ),  # ID
+                    hog_level,  # Level
+                    completeness,  # CompletenessScore
+                    nmembers,  # NrMemberGenes
+                    (node == hog.struct),  # IsRoot
+                )
+
+            if is_orthologGroup_node(hog.struct):
+                yield ortholog_info(hog.struct)
+
+            for n in filter(is_orthologGroup_node, hog.struct.findall(".//*")):
+                yield ortholog_info(n)
+
+        def generate_prot_tab(hog):
+            for g in hog.geneRefs():
+                loft_id = g.attrib["og"].split(".")[1:]
+                sp = self.hog_parser.species.get_species(int(g.attrib["id"]))
+                yield (
+                    self.hog_parser.species.get_xref(
+                        int(g.attrib["id"]), xref_type="protId", sp=sp
+                    ),
+                    sp.name.encode("ascii"),
+                    ".".join(["HOG:{:07d}".format(hog.fam)] + loft_id).encode("ascii"),
+                )
+
+        # load hog parser (using hogprop hogparser)
+        hogs = []
+        entries = []
+        LOG.debug("loading hog structure and membership from orthoxml")
+        for hog in tqdm(self.hog_parser.HOGs(auto_clean=True), desc="Parsing HOGs"):
+            hogs += list(filter(lambda x: x is not None, generate_hog_tab(hog)))
+            entries += list(generate_prot_tab(hog))
+
+        import pandas as pd
+
+        hog_tab = pd.DataFrame(
+            hogs,
+            columns=[
+                "Fam",
+                "ID",
+                "Level",
+                "CompletenessScore",
+                "NrMemberGenes",
+                "IsRoot",
+            ],
+        )
+        ent_tab = pd.DataFrame(entries, columns=["protId", "species", "hogid"])
+
+        # perform post filtering on the protein table.
+        # set index as the protein id so that we can look up the hog id.
+        ent_tab = ent_tab[ent_tab["hogid"].isin(set(hog_tab["ID"]))].set_index("protId")
+
+        return (hog_tab.to_records(), ent_tab)
+
+    ### main function ###
+    def build_database(self, oxml_path, fasta_paths, stree_path):
+        self._check_open_writeable()
+
+        # build taxonomy table except the SpeOff column
+        LOG.debug("initiate taxonomy table")
+        tax2taxoff, species, nspecies_below = self.initiate_tax_tab(stree_path)
+
+        self.setup_hogparser(oxml_path)
+        self.add_taxid_col()
+
+        LOG.debug("build hog_table from orthoxml")
+        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+
+        LOG.debug("select and strip OMA HOGs")
+        (
+            fam2hogs,
+            hog2oma_hog,
+            hog2tax,
+            hog2gene_nr,
+            hog2completeness,
+        ) = self.select_and_strip_OMA_HOGs(hog_tab)
+
+        LOG.debug("fill sequence buffer, species table and initiate protein table")
+        (
+            fam2hogs,
+            hog2protoffs,
+            hog2tax,
+            hog2oma_hog,
+            seq_buff,
+        ) = self.select_and_filter_OMA_proteins(
+            ent_tab,
+            fasta_paths,
+            fam2hogs,
+            hog2oma_hog,
+            hog2tax,
+            species,
+            self.min_fam_size,
+        )
+
+        LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
+        self.add_speoff_col()
+        self.add_taxoff_col()
+
+        # mapper HOG to taxon offset
+        hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
+
+        LOG.debug("fill family and HOG tables")
+        hog2hogoff = self.update_hog_and_fam_tabs(
+            fam2hogs,
+            hog2taxoff,
+            hog2protoffs,
+            hog2oma_hog,
+            hog2gene_nr,
+            hog2completeness,
+        )
+
+        # add family and hog offsets
+        LOG.debug("complete protein table")
+        self.update_prot_tab(hog2protoffs, hog2hogoff)
+
+        LOG.debug("store HOG taxa")
+        self.store_hog2taxa()
+
+        # compute the median sequence length of each HOG
+        self.add_median_seqlen_col()
+
+        return seq_buff
+
+    def add_metadata(self):
+        super().add_metadata()
+        self.db.set_node_attr("/", "source", "OMA standalone")
+        self.db.set_node_attr("/", "oma_standalone_version", self.oxml_path)
+        self.db.set_node_attr("/", "min_fam_size", self.min_fam_size)
+        self.db.set_node_attr("/", "min_fam_completeness", self.min_fam_completeness)
+        self.db.set_node_attr("/", "filter_logic", self.logic)
+        self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
+
+    def select_and_filter_OMA_proteins(
+        self,
+        ent_tab,
+        fasta_paths,
+        fam2hogs,
+        hog2oma_hog,
+        hog2tax,
+        species,
+        min_fam_size,
+    ):
+        # temporary mappers and booking for latter
+        sp2sp_off = dict(
+            zip(sorted(species), range(len(species)))
+        )  # this is to sort the species table
+        oma_hog2hog = dict(zip(hog2oma_hog.values(), hog2oma_hog.keys()))
+        hog2protoffs = defaultdict(set)
+
+        LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
+
+        prot_off = 0  # pointer to protein in protein table
+
+        # store rows for species and protein tables and sequence buffer
+        seq_buffs = []
+
+        prot_tab = self.db.create_table(
+            "/",
+            "Protein",
+            self.ProteinTableFormat,
+            filters=self._compr,
+            expectedrows=25e6,
+        )
+
+        prot_id_buff = self.db.create_earray(
+            "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
+        )
+
+        sanitiser = Alphabet(n=21).sanitise_seq
+
+        # go over all fasta records
+        for fasta_fn in fasta_paths:
+            with auto_open(fasta_fn, "rt") as fp:
+                for rec in tqdm(
+                    SeqIO.parse(fp, "fasta"),
+                    desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
+                ):
+                    if rec.description in ent_tab.index:
+                        # this seems to be most common, full header is used in standalone orthoXML
+                        prot_id = rec.description
+                    elif rec.id in ent_tab.index:
+                        # otherwise we might only see the first part of the id.
+                        prot_id = rec.id
+                    else:
+                        # otherwise we can't do anything...
+                        continue
+
+                    # get hog id, skip if we have filtered it out
+                    r = ent_tab.loc[prot_id]
+                    hog_id = r["hogid"]
+                    sp = r["species"]
+                    # (hog_id, sp) = entry_mapping[prot_id]
+                    if hog_id not in oma_hog2hog:
+                        continue
+
+                    # check if the species of the sequence should be loaded
+                    if sp in species:
+                        # store
+                        sp_off = sp2sp_off[sp]
+                        seq = sanitiser(str(rec.seq)) + " "  # add the padding
+                        seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
+                        seq_len = len(seq)
+                        seq_buffs.append(seq)
+
+                        # store protein information
+                        prot_id = prot_id.encode("ascii")
+                        prot_tab.append(
+                            [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
+                        )
+
+                        # store protein id
+                        prot_id_buff.append(
+                            np.frombuffer(prot_id, dtype=tables.StringAtom(1))
+                        )
+
+                        # track hog and family
+                        hog = oma_hog2hog[hog_id]
+                        hog2protoffs[hog].add(prot_off)
+
+                        # update offset of protein row in table
+                        prot_off += 1
+
+        # store species info
+        sp_rows = [()] * len(species)  # keep sorted
+        for sp in sp2sp_off:
+            sp_rows[sp2sp_off[sp]] = (sp, 0)
+
+        # fill species and protein tables
+        sp_tab = self.db.create_table(
+            "/", "Species", self.SpeciesTableFormat, filters=self._compr
+        )
+        sp_tab.append(sp_rows)
+        sp_tab.flush()
+
+        prot_tab.flush()
+
+        seq_buff = np.concatenate(seq_buffs)
+        return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
+
+    def add_taxid_col(self):
+        """
+        Add the NCBI taxon id from orthoxml
+        """
+        taxid_column = []
+        i = -100
+        for tax_name in self._db_Taxonomy.col("ID"):
+            sp = self.hog_parser.species[tax_name]
+            if sp is not None and hasattr(sp, "NCBITaxID"):
+                taxid_column.append(sp.NCBITaxID)
+            else:
+                taxid_column.append(i)
+                i -= 1
+
+        self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)
+
+
+class DatabaseFromOMABrowser(DatabaseFromOMA):
+    """
+    Used to parse the OMA browser database file
+    """
+
+    def __init__(
+        self,
+        filename,
+        root_taxon,
+        min_fam_size=6,
+        min_fam_completeness=0.5,
+        logic="OR",
+        include_younger_fams=True,
+        mode="r",
+    ):
+        super().__init__(filename, root_taxon, mode=mode)
+
+        self.min_fam_size = min_fam_size
+        self.min_fam_completeness = min_fam_completeness
+        self.logic = logic
+        self.include_younger_fams = include_younger_fams
+        self.oma_version = ""
+
+    ### main function ###
+    def build_database(self, oma_h5_path, stree_path):
+        self._check_open_writeable()
+
+        # load OMA h5 file
+        h5file = tables.open_file(oma_h5_path, mode="r")
+        try:
+            self.oma_version = h5file.get_node_attr("/", "oma_version")
+        except AttributeError:
+            raise Exception(
+                "Provided file '{}' does not seem to be an OMA HDF5 database".format(
+                    oma_h5_path
+                )
+            )
+
+        # build taxonomy table except the SpeOff column
+        LOG.debug("initiate taxonomy table")
+        tax2taxoff, species, nspecies_below = self.initiate_tax_tab(stree_path)
+        self.add_taxid_col(h5file)
+
+        LOG.debug("select and strip OMA HOGs")
+        (
+            fam2hogs,
+            hog2oma_hog,
+            hog2tax,
+            hog2gene_nr,
+            hog2completeness,
+        ) = self.select_and_strip_OMA_HOGs(hog_tab=h5file.root.HogLevel)
+
+        LOG.debug("fill sequence buffer, species table and initiate protein table")
+        (
+            fam2hogs,
+            hog2protoffs,
+            hog2tax,
+            hog2oma_hog,
+            seq_buff,
+        ) = self.select_and_filter_OMA_proteins(
+            h5file, fam2hogs, hog2oma_hog, hog2tax, species, self.min_fam_size
+        )
+
+        LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
+        self.add_speoff_col()
+        self.add_taxoff_col()
+
+        # mapper HOG to taxon offset
+        hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
+
+        LOG.debug("fill family and HOG tables")
+        hog2hogoff = self.update_hog_and_fam_tabs(
+            fam2hogs,
+            hog2taxoff,
+            hog2protoffs,
+            hog2oma_hog,
+            hog2gene_nr,
+            hog2completeness,
+        )
+
+        # add family and hog offsets
+        LOG.debug("complete protein table")
+        self.update_prot_tab(hog2protoffs, hog2hogoff)
+
+        LOG.debug("store HOG taxa")
+        self.store_hog2taxa()
+
+        # compute the median sequence length of each HOG
+        self.add_median_seqlen_col()
+
+        # close and open in read mode
+        h5file.close()
+
+        return seq_buff
+
+    def add_metadata(self):
+        super().add_metadata()
+        self.db.set_node_attr("/", "source", "OMA")
+        self.db.set_node_attr("/", "oma_version", self.oma_version)
+        self.db.set_node_attr("/", "min_fam_size", self.min_fam_size)
+        self.db.set_node_attr("/", "min_fam_completeness", self.min_fam_completeness)
+        self.db.set_node_attr("/", "filter_logic", self.logic)
+        self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
 
     def select_and_filter_OMA_proteins(
         self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_fam_size
@@ -1134,7 +1477,6 @@ class DatabaseFromOMA(Database):
 
         LOG.debug(" - select proteins from selected HOGs")
 
-        seq_off = 0  # pointer to sequence in buffer
         prot_off = 0  # pointer to protein in protein table
 
         # store rows for species and protein tables and sequence buffer
@@ -1147,6 +1489,10 @@ class DatabaseFromOMA(Database):
             self.ProteinTableFormat,
             filters=self._compr,
             expectedrows=25e6,
+        )
+
+        prot_id_buff = self.db.create_earray(
+            "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
         )
 
         for r in tqdm(
@@ -1187,20 +1533,20 @@ class DatabaseFromOMA(Database):
                     oma_id = "{}{:05d}".format(
                         sp_code.decode("ascii"), rr["EntryNr"] - entry_off
                     )
-                    assert (
-                        len(oma_id) < PROT_ID_LEN
-                    ), "Please check PROT_ID_LEN as {} is longer than {} chars.".format(
-                        oma_id, PROT_ID_LEN
+                    prot_tab.append(
+                        [(len(prot_id_buff), len(oma_id), sp_off, 0, seq_len)]
                     )
 
-                    prot_tab.append([(oma_id.encode("ascii"), sp_off, 0, seq_len)])
+                    # store protein id
+                    prot_id_buff.append(
+                        np.frombuffer(oma_id, dtype=tables.StringAtom(1))
+                    )
 
                     # track hog and family
                     hog = oma_hog2hog[oma_hog]
                     hog2protoffs[hog].add(prot_off)
 
-                    # update offset of protein sequence in buffer and of protein raw in table
-                    seq_off += seq_len
+                    # update offset of protein row in table
                     prot_off += 1
 
                 # store species info

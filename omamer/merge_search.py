@@ -560,18 +560,13 @@ class MergeSearch(object):
             df.loc[hog_f, "subfamily_geneset"] = df.loc[hog_f, "hog_offset"].apply(
                 lambda i: ",".join(
                     map(
-                        lambda x: x.decode("ascii"),
-                        self.db._db_Protein.col("ID")[
-                            get_hog_member_prots(
-                                i - 1,
-                                self.hog_tab,
+                        self.db.get_prot_id,
+                        get_hog_member_prots(
+                            i-1,
+                            self.hog_tab,
                                 self.db._db_ChildrenHOG[:],
                                 self.db._db_ChildrenProt[:],
-                            )
-                        ],
-                    )
-                )
-            )
+                            ))))
 
         # add the hog id
         df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(

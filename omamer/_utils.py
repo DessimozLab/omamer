@@ -38,6 +38,11 @@ fmagic = {b"\x1f\x8b\x08": gzip.open, b"\x42\x5a\x68": bz2.BZ2File,
           b"\xfd\x37\x7a\x58\x5a\x00": lzma.open}
 
 
+def check_file_exists(*fns):
+    for fn in fns:
+        assert os.path.isfile(fn), 'File not found {}'.format(fn)
+
+
 def auto_open(fn, *args):
     """
     Opens files based on their "magic bytes". Supports bz2 and gzip. If it

@@ -20,13 +20,13 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from ._utils import LOG
+from ._utils import LOG, check_file_exists
 
 
 def mkdb_oma(args):
-    from .database import DatabaseFromOMA
+    from .database import DatabaseFromOMA, DatabaseFromOrthoXML
     from .index import Index
-    
+
     from ete3 import Tree
     import os
 
@@ -37,9 +37,53 @@ def mkdb_oma(args):
     LOG.info("arguments for build:")
     for (k, v) in vars(args).items():
         LOG.info(" - {}: {}".format(k, v))
-    
-    oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
-    nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
+
+    # work out mode
+    browser_db_mode = (args.oma_path is not None)
+
+    if browser_db_mode:
+        Database = DatabaseFromOMA
+
+        # check directories and find files
+        if not os.path.isdir(args.oma_path):
+            raise ValueError('Can\'t find OMA PATH: {}'.format(args.oma_path))
+        if os.path.isdir(os.path.join(args.oma_path, 'data')):
+            # assume given root browser directory.
+            args.oma_path = os.path.join(args.oma_path, 'data')
+
+        oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
+        check_file_exists(oma_db_fn)
+        nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
+        check_file_exists(nwk_fn)
+
+    else:
+        if args.orthoxml is None or args.species_tree is None or len(args.sequences) == 0:
+            raise ValueError('Must pass either browser database (--oma_path) or all files for OrthoXML build (--orthoxml --species_tree --sequences)')
+
+        # orthoxml mode
+        Database = DatabaseFromOrthoXML
+
+        # find files
+        oxml_fn = args.orthoxml
+        check_file_exists(oxml_fn)
+        nwk_fn = args.species_tree
+        check_file_exists(nwk_fn)
+        if len(args.fasta) == 1 and os.path.listdir(args.fasta):
+            # possibility to pass as a directory
+            fasta_fns = list(
+                filter(
+                    lambda x: x.endswith(".fa"),
+                    map(
+                        lambda x: os.path.join(args.fasta_fns, x),
+                        os.listdir(args.fasta)
+                    ),
+                )
+            )
+        else:
+            # check these exist? could do in argparse
+            fasta_fns = args.fasta
+            check_file_exists(fasta_fns)
+
 
     # check if root_taxon in tree
     t = Tree(nwk_fn, format=1, quoted_node_names=True)
@@ -55,7 +99,7 @@ def mkdb_oma(args):
     if args.hidden_taxa:
         # load and check for hidden taxa
         hidden_taxa = list(map(lambda x: x.rstrip(), args.hidden_taxa))
-       
+
         for ht in hidden_taxa:
             r = t.search_nodes(name=ht)
             if len(r) == 0:
@@ -65,7 +109,7 @@ def mkdb_oma(args):
     else:
         hidden_taxa = []
 
-    db = DatabaseFromOMA(
+    db = Database(
         args.db,
         root_taxon=root_taxon,
         min_fam_size=args.min_fam_size,
@@ -77,7 +121,10 @@ def mkdb_oma(args):
 
     # add sequences from database
     LOG.info("Loading sequences")
-    seq_buff = db.build_database(oma_db_fn, nwk_fn)
+    if browser_db_mode:
+        seq_buff = db.build_database(oma_db_fn, nwk_fn)
+    elif orthxml_mode:
+        seq_buff = db.build_database(oxml_fn, fasta_fns, nwk_fn)
 
     LOG.info("Building index")
     db.ki = Index(

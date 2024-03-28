@@ -38,4 +38,5 @@ class SequenceReader(object):
                 ids = []
                 seqs = []
 
-        yield (ids, seqs)
+        if len(ids) > 0:
+            yield (ids, seqs)

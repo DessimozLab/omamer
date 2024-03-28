@@ -130,6 +130,10 @@ Required arguments: ``--db``, ``--oma_path``
 
 # Change log
 
+#### Version 2.0.3
+- fixes issue #30
+- update github action to latest versions
+
 #### Version 2.0.2
 - changed method for hiding taxa in build process. Now takes a file containing taxa to hide on separate lines.
 - checks and improved feedback for root taxon and requested taxa to hide.

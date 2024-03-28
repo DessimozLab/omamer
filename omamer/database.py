@@ -1539,7 +1539,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
                     # store protein id
                     prot_id_buff.append(
-                        np.frombuffer(oma_id, dtype=tables.StringAtom(1))
+                        np.frombuffer(oma_id.encode("ascii"), dtype=tables.StringAtom(1))
                     )
 
                     # track hog and family

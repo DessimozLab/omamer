@@ -68,20 +68,20 @@ def mkdb_oma(args):
         check_file_exists(oxml_fn)
         nwk_fn = args.species_tree
         check_file_exists(nwk_fn)
-        if len(args.fasta) == 1 and os.path.listdir(args.fasta):
+        if len(args.sequences) == 1 and os.path.listdir(args.sequences):
             # possibility to pass as a directory
             fasta_fns = list(
                 filter(
                     lambda x: x.endswith(".fa"),
                     map(
-                        lambda x: os.path.join(args.fasta_fns, x),
-                        os.listdir(args.fasta)
+                        lambda x: os.path.join(args.sequences, x),
+                        os.listdir(args.sequences)
                     ),
                 )
             )
         else:
             # check these exist? could do in argparse
-            fasta_fns = args.fasta
+            fasta_fns = args.sequences
             check_file_exists(fasta_fns)
 
 

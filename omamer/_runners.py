@@ -24,7 +24,7 @@ from ._utils import LOG, check_file_exists
 
 
 def mkdb_oma(args):
-    from .database import DatabaseFromOMA, DatabaseFromOrthoXML
+    from .database import DatabaseFromOMABrowser, DatabaseFromOrthoXML
     from .index import Index
 
     from ete3 import Tree
@@ -42,7 +42,7 @@ def mkdb_oma(args):
     browser_db_mode = (args.oma_path is not None)
 
     if browser_db_mode:
-        Database = DatabaseFromOMA
+        Database = DatabaseFromOMABrowser
 
         # check directories and find files
         if not os.path.isdir(args.oma_path):
@@ -53,8 +53,8 @@ def mkdb_oma(args):
 
         oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
         check_file_exists(oma_db_fn)
-        nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
-        check_file_exists(nwk_fn)
+        nwk = os.path.join(args.oma_path, "speciestree.nwk")
+        check_file_exists(nwk)
 
     else:
         if args.orthoxml is None or args.species_tree is None or len(args.sequences) == 0:
@@ -64,29 +64,12 @@ def mkdb_oma(args):
         Database = DatabaseFromOrthoXML
 
         # find files
-        oxml_fn = args.orthoxml
-        check_file_exists(oxml_fn)
-        nwk_fn = args.species_tree
-        check_file_exists(nwk_fn)
-        if len(args.sequences) == 1 and os.path.listdir(args.sequences):
-            # possibility to pass as a directory
-            fasta_fns = list(
-                filter(
-                    lambda x: x.endswith(".fa"),
-                    map(
-                        lambda x: os.path.join(args.sequences, x),
-                        os.listdir(args.sequences)
-                    ),
-                )
-            )
-        else:
-            # check these exist? could do in argparse
-            fasta_fns = args.sequences
-            check_file_exists(fasta_fns)
-
+        oxml_fn = args.orthoxml.name
+        fasta_fns = list(map(lambda x: x.name, args.sequences))
+        nwk = args.species_tree.name
 
     # check if root_taxon in tree
-    t = Tree(nwk_fn, format=1, quoted_node_names=True)
+    t = Tree(nwk, format=1, quoted_node_names=True)
     if args.root_taxon is not None:
         pruned_t = t.search_nodes(name=args.root_taxon)
         if len(pruned_t) == 0:
@@ -122,9 +105,9 @@ def mkdb_oma(args):
     # add sequences from database
     LOG.info("Loading sequences")
     if browser_db_mode:
-        seq_buff = db.build_database(oma_db_fn, nwk_fn)
-    elif orthxml_mode:
-        seq_buff = db.build_database(oxml_fn, fasta_fns, nwk_fn)
+        seq_buff = db.build_database(oma_db_fn, nwk)
+    else:
+        seq_buff = db.build_database(oxml_fn, fasta_fns, nwk)
 
     LOG.info("Building index")
     db.ki = Index(

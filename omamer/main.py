@@ -154,15 +154,18 @@ def main():
     mkdb_parser.add_argument(
         "--orthoxml",
         help="Path to OrthoXML file containing HOGs. [OXMLBUILD]",
+        type=FileType("r")
     )
     mkdb_parser.add_argument(
         "--species_tree",
         help="Path to newick file containing species tree. [OXMLBUILD]",
+        type=FileType("r")
     )
     mkdb_parser.add_argument(
         "--sequences",
         nargs='*',
-        help="Path to folder containing sequence files, or list of paths to sequence files. [OXMLBUILD]"
+        help="Paths to sequence files (1 or multiple, only for non-browser build). [OXMLBUILD]",
+        type=FileType("r")
     )
     mkdb_parser.add_argument(
         "--log_level",

@@ -43,7 +43,7 @@ Required arguments: ``--db``, ``--query``
 | | [``--threshold``](#markdown-header--threshold) | 0.1 | Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be.
 | | [``--family_alpha``](#markdown-header--family_alpha) | 1e-6 | Significance threshold used when filtering families.
 | [``-fo``](#markdown-header-fo) | [``--family_only``](#markdown-header--family_only) | False | If set, only place at the family level. Useful for certain analysis. Note: `subfamily_medianseqlen` in the results is for the family level.
-| [``-n``](#markdown-header-n) | [``--family_only``](#markdown-header--top_n_fams) | 1 | Number of top level families to place into. By default, placed into only the best scoring family.
+| [``-n``](#markdown-header-n) | [``--top_n_fams``](#markdown-header--top_n_fams) | 1 | Number of top level families to place into. By default, placed into only the best scoring family.
 | [``-o``](#markdown-header-o) | [``--out``](#markdown-header--db) | stdout | Path to output. If not set, defaults to stdout.
 | | [``--include_extant_genes``](#markdown-header--include_extant_genes)||Include extant gene IDs as comma separated entry in results
 | [``-c``](#markdown-header-c) | [``--chunksize``](#markdown-header--chunksize) |10000| Number of queries to process at once.
@@ -129,6 +129,15 @@ Required arguments: ``--db``, ``--oma_path``
 
 
 # Change log
+
+#### Version 2.0.3
+- fixes issue #30
+- update github action to latest versions
+
+#### Version 2.0.2
+- changed method for hiding taxa in build process. Now takes a file containing taxa to hide on separate lines.
+- checks and improved feedback for root taxon and requested taxa to hide.
+- root taxon set by default to the root level in speciestree.nwk (previously hard-coded to default to LUCA)
 
 #### Version 2.0.1
  - remove dependency for filehash library

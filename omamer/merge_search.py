@@ -530,6 +530,8 @@ class MergeSearch(object):
                         }
 
         df = pd.DataFrame(generate())
+        if len(df) == 0:
+            return df
 
         # cast to pd dtype so that we can use pd.NA...
         df["qseq_offset"] = df["qseq_offset"].astype("UInt32")

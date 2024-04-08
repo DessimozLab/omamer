@@ -210,7 +210,9 @@ class Database(object):
                 tax2children[tax] = [x.name.encode("ascii") for x in tl.children]
                 tax2level[tax] = tl.get_distance(stree)
                 if tl.is_leaf():
-                    species.add(tl.name.encode("ascii"))
+                    sp_name = tl.name.encode("ascii")
+                    species.add(sp_name)
+                    nspecies_below[sp_name] = 1
                 else:
                     nspecies_below[tl.name.encode("ascii")] = sum(1 for _ in tl.iter_leaves())
 
@@ -1114,21 +1116,38 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             for g in hog.geneRefs():
                 loft_id = g.attrib["og"].split(".")[1:]
                 sp = self.hog_parser.species.get_species(int(g.attrib["id"]))
-                yield (
-                    self.hog_parser.species.get_xref(
-                        int(g.attrib["id"]), xref_type="protId", sp=sp
-                    ),
-                    sp.name.encode("ascii"),
-                    ".".join(["HOG:{:07d}".format(hog.fam)] + loft_id).encode("ascii"),
-                )
+                sp_name = sp.name.encode("ascii")
+                if sp_name in nspecies_below:
+                    # not filtered out
+                    yield (
+                        self.hog_parser.species.get_xref(
+                            int(g.attrib["id"]), xref_type="protId", sp=sp
+                        ),
+                        sp_name,
+                        ".".join(["HOG:{:07d}".format(hog.fam)] + loft_id).encode("ascii"),
+                    )
+
+        def generate_hogs_for_prot(hog, gene_data):
+            for g in gene_data:
+                yield (hog.fam,  # Fam
+                        g[2],  # ID
+                        g[1],  # Level
+                        1,  # CompletenessScore
+                        1,  # NrMemberGenes
+                        False  # IsRoot
+                        )
 
         # load hog parser (using hogprop hogparser)
         hogs = []
         entries = []
         LOG.debug("loading hog structure and membership from orthoxml")
         for hog in tqdm(self.hog_parser.HOGs(auto_clean=True), desc="Parsing HOGs"):
-            hogs += list(filter(lambda x: x is not None, generate_hog_tab(hog)))
-            entries += list(generate_prot_tab(hog))
+            hog_data = list(filter(lambda x: x is not None, generate_hog_tab(hog)))
+            gene_data = list(generate_prot_tab(hog))
+            hog_data += list(generate_hogs_for_prot(hog, gene_data))
+
+            hogs += hog_data
+            entries += gene_data
 
         import pandas as pd
 
@@ -1246,6 +1265,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         oma_hog2hog = dict(zip(hog2oma_hog.values(), hog2oma_hog.keys()))
         hog2protoffs = defaultdict(set)
 
+        ent_tab = ent_tab[ent_tab["hogid"].map(lambda x: x in oma_hog2hog)]
+
         LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
 
         prot_off = 0  # pointer to protein in protein table
@@ -1296,9 +1317,10 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                     if sp in species:
                         # store
                         sp_off = sp2sp_off[sp]
+
                         seq = sanitiser(str(rec.seq)) + " "  # add the padding
                         seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
-                        seq_len = len(seq)
+                        seq_len = len(seq) - 1
                         seq_buffs.append(seq)
 
                         # store protein information
@@ -1332,6 +1354,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         sp_tab.flush()
 
         prot_tab.flush()
+        if prot_off != len(ent_tab):
+            raise ValueError("Did not find all protein sequences ({} / {})".format(prot_off, len(ent_tab)))
 
         seq_buff = np.concatenate(seq_buffs)
         return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
@@ -1525,8 +1549,8 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
                     # sequence
                     oma_seq_off = rr["SeqBufferOffset"]
-                    seq_len = rr["SeqBufferLength"]
-                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len]
+                    seq_len = rr["SeqBufferLength"] - 1
+                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len + 1]
                     seq_buffs.append(seq)
 
                     # store protein row

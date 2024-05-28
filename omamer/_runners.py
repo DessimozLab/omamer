@@ -383,7 +383,7 @@ def goodbye(args, time_taken, search_rate):
         f"\nThank you for using OMAmer. If you use OMAmer in your research, please cite:\n\n{citation}\n\n"
     )
     print_message(
-        "OMAmer uses data from the OMA browser. Results can be interpretted further using:"
+        "OMAmer uses data from the OMA browser. Results can be interpreted further using:"
     )
     print_message(" - OMA browser website (https://omabrowser.org)")
     print_message(

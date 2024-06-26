@@ -681,6 +681,9 @@ class MergeSearch(object):
                 # - a. filter to significant families (on p-value)
                 alpha = -1.0 * np.log(alpha_cutoff)
                 qres = qres[qres["pvalue"] >= alpha]
+                # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
+                qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
+
                 if len(qres) == 0:
                     continue
 

@@ -36,7 +36,7 @@ requirements = [
     "ete3",
     "lxml",
     "numba",
-    "numpy",
+    "numpy<2",     # pytables has no numpy2 compatible version yet
     "pandas>2.0.0",
     "property_manager",
     "Rmath4",

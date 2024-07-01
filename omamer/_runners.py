@@ -20,13 +20,13 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from ._utils import LOG
+from ._utils import LOG, check_file_exists
 
 
 def mkdb_oma(args):
-    from .database import DatabaseFromOMA
+    from .database import DatabaseFromOMABrowser, DatabaseFromOrthoXML
     from .index import Index
-    
+
     from ete3 import Tree
     import os
 
@@ -37,12 +37,39 @@ def mkdb_oma(args):
     LOG.info("arguments for build:")
     for (k, v) in vars(args).items():
         LOG.info(" - {}: {}".format(k, v))
-    
-    oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
-    nwk_fn = os.path.join(args.oma_path, "speciestree.nwk")
+
+    # work out mode
+    browser_db_mode = (args.oma_path is not None)
+
+    if browser_db_mode:
+        Database = DatabaseFromOMABrowser
+
+        # check directories and find files
+        if not os.path.isdir(args.oma_path):
+            raise ValueError('Can\'t find OMA PATH: {}'.format(args.oma_path))
+        if os.path.isdir(os.path.join(args.oma_path, 'data')):
+            # assume given root browser directory.
+            args.oma_path = os.path.join(args.oma_path, 'data')
+
+        oma_db_fn = os.path.join(args.oma_path, "OmaServer.h5")
+        check_file_exists(oma_db_fn)
+        nwk = os.path.join(args.oma_path, "speciestree.nwk")
+        check_file_exists(nwk)
+
+    else:
+        if args.orthoxml is None or args.species_tree is None or len(args.sequences) == 0:
+            raise ValueError('Must pass either browser database (--oma_path) or all files for OrthoXML build (--orthoxml --species_tree --sequences)')
+
+        # orthoxml mode
+        Database = DatabaseFromOrthoXML
+
+        # find files
+        oxml_fn = args.orthoxml.name
+        fasta_fns = list(map(lambda x: x.name, args.sequences))
+        nwk = args.species_tree.name
 
     # check if root_taxon in tree
-    t = Tree(nwk_fn, format=1, quoted_node_names=True)
+    t = Tree(nwk, format=1, quoted_node_names=True)
     if args.root_taxon is not None:
         pruned_t = t.search_nodes(name=args.root_taxon)
         if len(pruned_t) == 0:
@@ -55,7 +82,7 @@ def mkdb_oma(args):
     if args.hidden_taxa:
         # load and check for hidden taxa
         hidden_taxa = list(map(lambda x: x.rstrip(), args.hidden_taxa))
-       
+
         for ht in hidden_taxa:
             r = t.search_nodes(name=ht)
             if len(r) == 0:
@@ -65,7 +92,7 @@ def mkdb_oma(args):
     else:
         hidden_taxa = []
 
-    db = DatabaseFromOMA(
+    db = Database(
         args.db,
         root_taxon=root_taxon,
         min_fam_size=args.min_fam_size,
@@ -77,7 +104,10 @@ def mkdb_oma(args):
 
     # add sequences from database
     LOG.info("Loading sequences")
-    seq_buff = db.build_database(oma_db_fn, nwk_fn)
+    if browser_db_mode:
+        seq_buff = db.build_database(oma_db_fn, nwk)
+    else:
+        seq_buff = db.build_database(oxml_fn, fasta_fns, nwk)
 
     LOG.info("Building index")
     db.ki = Index(
@@ -353,7 +383,7 @@ def goodbye(args, time_taken, search_rate):
         f"\nThank you for using OMAmer. If you use OMAmer in your research, please cite:\n\n{citation}\n\n"
     )
     print_message(
-        "OMAmer uses data from the OMA browser. Results can be interpretted further using:"
+        "OMAmer uses data from the OMA browser. Results can be interpreted further using:"
     )
     print_message(" - OMA browser website (https://omabrowser.org)")
     print_message(

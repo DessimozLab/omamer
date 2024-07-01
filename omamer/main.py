@@ -94,7 +94,7 @@ def main():
         "mkdb",
         formatter_class=ArgumentDefaultsHelpFormatter,
         help="Build a database.",
-        description="Build a database, by providing an OMA HDF5 database file.",
+        description="Build a database, by providing an OMA HDF5 database file [BROWSERBUILD] or OrthoXML + FASTA + Newick files [OXMLBUILD].",
     )
     mkdb_parser.set_defaults(func=mkdb_oma)
     mkdb_parser.add_argument(
@@ -149,8 +149,23 @@ def main():
     mkdb_parser.add_argument("--k", default=6, help="k-mer length", type=int)
     mkdb_parser.add_argument(
         "--oma_path",
-        required=True,
-        help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk).",
+        help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk). [BROWSERBUILD]",
+    )
+    mkdb_parser.add_argument(
+        "--orthoxml",
+        help="Path to OrthoXML file containing HOGs. [OXMLBUILD]",
+        type=FileType("r")
+    )
+    mkdb_parser.add_argument(
+        "--species_tree",
+        help="Path to newick file containing species tree. [OXMLBUILD]",
+        type=FileType("r")
+    )
+    mkdb_parser.add_argument(
+        "--sequences",
+        nargs='*',
+        help="Paths to sequence files (1 or multiple, only for non-browser build). [OXMLBUILD]",
+        type=FileType("r")
     )
     mkdb_parser.add_argument(
         "--log_level",

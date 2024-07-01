@@ -562,18 +562,13 @@ class MergeSearch(object):
             df.loc[hog_f, "subfamily_geneset"] = df.loc[hog_f, "hog_offset"].apply(
                 lambda i: ",".join(
                     map(
-                        lambda x: x.decode("ascii"),
-                        self.db._db_Protein.col("ID")[
-                            get_hog_member_prots(
-                                i - 1,
-                                self.hog_tab,
+                        self.db.get_prot_id,
+                        get_hog_member_prots(
+                            i-1,
+                            self.hog_tab,
                                 self.db._db_ChildrenHOG[:],
                                 self.db._db_ChildrenProt[:],
-                            )
-                        ],
-                    )
-                )
-            )
+                            ))))
 
         # add the hog id
         df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(
@@ -686,6 +681,9 @@ class MergeSearch(object):
                 # - a. filter to significant families (on p-value)
                 alpha = -1.0 * np.log(alpha_cutoff)
                 qres = qres[qres["pvalue"] >= alpha]
+                # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
+                qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
+
                 if len(qres) == 0:
                     continue
 

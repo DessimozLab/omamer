@@ -159,7 +159,7 @@ def get_fam_level_offsets(fam_ent, level_arr):
 
 
 ## search functions
-@numba.njit
+#@numba.njit
 def custom_unique1d(ar):
     """
     adapted from np._unique1d for numba
@@ -176,7 +176,7 @@ def custom_unique1d(ar):
     return aux[mask], perm[mask], np.diff(idx)
 
 
-@numba.njit
+#@numba.njit
 def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     """
     get the sequence unique k-mers and non ambiguous locations (when truly unique)
@@ -196,7 +196,7 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     return custom_unique1d(r)
 
 
-@numba.njit
+#@numba.njit
 def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
     """
     Perform the kmer search, using the index.
@@ -766,4 +766,5 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return func
+        #return numba.jit(func, parallel=True, nopython=True, nogil=True)

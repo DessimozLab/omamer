@@ -1549,8 +1549,8 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
                     # sequence
                     oma_seq_off = rr["SeqBufferOffset"]
-                    seq_len = rr["SeqBufferLength"] - 1
-                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len + 1]
+                    seq_len = rr["SeqBufferLength"] - np.uint64(1)
+                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len + np.uint64(1)]
                     seq_buffs.append(seq)
 
                     # store protein row

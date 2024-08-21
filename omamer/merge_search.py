@@ -20,7 +20,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from Rmath4 import pbinom
+from Rmath4 import pbinom, phyper
 from numba.tests.support import captured_stdout
 from property_manager import lazy_property, cached_property
 from time import time
@@ -55,6 +55,10 @@ def binom_neglogccdf(x, n, p):
     # bdtrc supports (float64, long, float64)
     # return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
     return -1.0 * pbinom(x - 1, n, p, 0, 1)
+
+    # pbinom(n - 1, m, m/N, 0, 0)
+    # phyper(n - 1, m, N - m, m, 0, 0)
+    #return -1.0 * phyper(x - 1, n, n/p - n, n, 0, 1)
 
 
 # ----
@@ -159,7 +163,7 @@ def get_fam_level_offsets(fam_ent, level_arr):
 
 
 ## search functions
-#@numba.njit
+@numba.njit
 def custom_unique1d(ar):
     """
     adapted from np._unique1d for numba
@@ -176,27 +180,48 @@ def custom_unique1d(ar):
     return aux[mask], perm[mask], np.diff(idx)
 
 
-#@numba.njit
+@numba.njit
 def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     """
     get the sequence unique k-mers and non ambiguous locations (when truly unique)
     """
     s_norm = DIGITS_AA_LOOKUP[s]
     r = np.zeros(n_kmers, dtype=np.uint32)  # max kmer 7
-    for i in numba.prange(n_kmers):
-        # numba can't do np.dot with non-float
-        for j in numba.prange(k):
-            r[i] += trans[j] * s_norm[i + j]
 
-        # does k-mer contain any X?
-        x_seen = np.any(s_norm[i : i + k] == DIGITS_AA_LOOKUP[88])  # 88==b'X'
-        # if yes, replace it by the x_flag
+    # compute the code of the first k-mer
+    for j in range(k):
+        r[0] += trans[j] * s_norm[j]
+
+    # does k-mer contain any X?
+    x_seen = np.any(s_norm[0:k] == DIGITS_AA_LOOKUP[88])
+    # if yes, replace it by the x_flag
+    r[0] = r[0] if not x_seen else x_flag
+
+    # codes for other k-mers
+    for i in range(1, n_kmers):
+        if not x_seen:
+            # if the previous k-mer was valid,
+            # recompute the current code from the previous one
+
+            # remove the first character from the code
+            shared = r[i-1] - (trans[0] * s_norm[i - 1])
+
+            # trans[-2] is the alphabet size
+            r[i] = shared * trans[-2] + trans[-1] * s_norm[i + k - 1]
+
+        else:
+            # if the previous k-mer has Xs,
+            # just compute the code from scratch
+            for j in range(k):
+                r[i] += trans[j] * s_norm[i + j]
+
+        x_seen = np.any(s_norm[i: i + k] == DIGITS_AA_LOOKUP[88])
         r[i] = r[i] if not x_seen else x_flag
 
     return custom_unique1d(r)
 
 
-#@numba.njit
+@numba.njit
 def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
     """
     Perform the kmer search, using the index.
@@ -663,7 +688,7 @@ class MergeSearch(object):
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
                     qres["pvalue"][i] = min(
-                        MAX_LOGP,
+                        float(MAX_LOGP),
                         max(
                             0.0,
                             (
@@ -766,5 +791,5 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
-        return func
-        #return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        #return func

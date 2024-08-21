@@ -22,6 +22,7 @@
 """
 from Rmath4 import pbinom, phyper
 from numba.tests.support import captured_stdout
+from numba.typed import List
 from property_manager import lazy_property, cached_property
 from time import time
 import numba
@@ -181,6 +182,24 @@ def custom_unique1d(ar):
 
 
 @numba.njit
+def unique1d_linear(array):
+    """
+    Find a set of unique elements in linear time
+    """
+    unique_list = List()
+    index_list = List()
+    seen = set()
+
+    for i in range(len(array)):
+        if array[i] not in seen:
+            seen.add(array[i])
+            unique_list.append(array[i])
+            index_list.append(i)
+
+    return np.asarray(unique_list), np.asarray(index_list), None
+
+
+@numba.njit
 def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     """
     get the sequence unique k-mers and non ambiguous locations (when truly unique)
@@ -218,7 +237,7 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
         x_seen = np.any(s_norm[i: i + k] == DIGITS_AA_LOOKUP[88])
         r[i] = r[i] if not x_seen else x_flag
 
-    return custom_unique1d(r)
+    return unique1d_linear(r)
 
 
 @numba.njit

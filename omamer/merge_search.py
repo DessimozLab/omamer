@@ -172,11 +172,13 @@ def family_result_sort(x, k):
     this uses a quicksort implementation as np.argsort does not support struct type in numba.
     """
 
+    idx = family_result_argsort(x, list(range(len(x))))
+    y = np.zeros_like(x)
+    for i in numba.prange(len(x)):
+        y[i] = x[idx[i]]
+    return y
+
     if len(x) <= k:
-        #idx = family_result_argsort(x, list(range(len(x))))
-        #y = np.zeros_like(x)
-        #for i in numba.prange(len(x)):
-        #    y[i] = x[idx[i]]
         return x
 
     _ = _select(x, k, 0, len(x) - 1)
@@ -368,16 +370,25 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 
 @numba.njit
-def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
+def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
+                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                     deinit_fam_list, deinit_hog_list):
     """
     Perform the kmer search, using the index.
     """
-    hog_counts = Dict.empty(key_type=numba.uint32, value_type=numba.int64)
-    fam_counts = Dict.empty(key_type=numba.uint32, value_type=numba.int64)
 
-    # store lowest and higher k-mer locations
-    fam_lowloc = Dict.empty(key_type=numba.uint32, value_type=numba.uint32)
-    fam_highloc = Dict.empty(key_type=numba.uint32, value_type=numba.uint32)
+    # reinitialize counters for the indexes modified
+    # by the previous call
+    for family in deinit_fam_list:
+        fam_counts[family] = 0
+        fam_lowloc[family] = -1
+        fam_highloc[family] = -1
+
+    for hog in deinit_hog_list:
+        hog_counts[hog] = 0
+
+    deinit_fam_list = List.empty_list(numba.int32)
+    deinit_hog_list = List.empty_list(numba.int32)
 
     # iterate unique k-mers
     for m in range(r1.shape[0]):
@@ -394,32 +405,29 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
         fams = hog_tab["FamOff"][hogs]
 
         for hog in hogs:
-            if hog in hog_counts:
-                hog_counts[hog] += 1
-            else:
-                hog_counts[hog] = 1
+            if not hog_counts[hog]:
+                deinit_hog_list.append(hog)
+
+            hog_counts[hog] += 1
 
         for fam_off in fams:
-            if fam_off in fam_counts:
-                fam_counts[fam_off] += 1
-            else:
-                fam_counts[fam_off] = 1
+            if not fam_counts[fam_off]:
+                deinit_fam_list.append(fam_off)
 
-            if fam_off in fam_lowloc:
-                if loc < fam_lowloc[fam_off]:
-                    fam_lowloc[fam_off] = loc
-            else:
-                # initiate first location
+            fam_counts[fam_off] += 1
+
+            # initiate first location
+            if fam_lowloc[fam_off] == -1:
                 fam_lowloc[fam_off] = loc
-
-            if fam_off in fam_highloc:
-                if loc > fam_highloc[fam_off]:
-                    fam_highloc[fam_off] = loc
-            else:
-                # initiate first location
                 fam_highloc[fam_off] = loc
 
-    return hog_counts, fam_counts, fam_lowloc, fam_highloc
+            # update either lower or higher boundary
+            elif loc < fam_lowloc[fam_off]:
+                fam_lowloc[fam_off] = loc
+            elif loc > fam_highloc[fam_off]:
+                fam_highloc[fam_off] = loc
+
+    return deinit_fam_list, deinit_hog_list
 
 
 ## functions to cumulate HOG k-mer counts
@@ -827,6 +835,13 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
+            hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
+            fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
+            fam_lowloc = np.full(fam_tab.size, -1, dtype=np.int32)
+            fam_highloc = np.full(fam_tab.size, -1, dtype=np.int32)
+            deinit_fam_list = List.empty_list(numba.int32)
+            deinit_hog_list = List.empty_list(numba.int32)
+
             for zz in numba.prange(len(seqs_idx) - 1):
                 # load seq
                 s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
@@ -847,15 +862,18 @@ class MergeSearch(object):
                     continue
 
                 # search using kmers
-                hog_counts, fam_counts, fam_lowloc, fam_highloc = search_seq_kmers(
-                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff
+                deinit_fam_list, deinit_hog_list = search_seq_kmers(
+                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
+                    hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                    deinit_fam_list, deinit_hog_list
                 )
 
                 # identify families of interest. note: repeat(zeros_like..) numba hack
-                count_keys, counts_values = unzip_dict(fam_counts)
-                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(count_keys))
-                qres["id"][:] = count_keys
-                qres["count"][:] = counts_values
+                idx = np.argwhere(fam_counts > 0).flatten()
+                #idx = deinit_fam_list
+                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
+                qres["id"][:] = idx
+                qres["count"][:] = fam_counts[idx]
 
                 # 1. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
@@ -932,7 +950,7 @@ class MergeSearch(object):
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
                     # cumulation of counts
-                    c = dict_slice(hog_counts, hog_s, hog_e)
+                    c = hog_counts[hog_s:hog_e].copy()
 
                     cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
 
@@ -942,7 +960,7 @@ class MergeSearch(object):
                         r1.size,
                         fam_level_offsets,
                         fam_hog2parent,
-                        dict_slice(hog_counts, hog_s, hog_e),
+                        hog_counts[hog_s:hog_e],
                         ref_hog_prob[hog_s:hog_e],
                     )
 
@@ -964,5 +982,5 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return numba.jit(func, parallel=False, nopython=True, nogil=True)
         #return func

@@ -22,7 +22,7 @@
 """
 from Rmath4 import pbinom, phyper
 from numba.tests.support import captured_stdout
-from numba.typed import List
+from numba.typed import List, Dict
 from property_manager import lazy_property, cached_property
 from time import time
 import numba
@@ -86,6 +86,52 @@ def fam_res_compare(x1, x2):
 
 
 @numba.njit
+def fam_res_less(x1, x2):
+    """
+    Same as fam_res_compare, but operates as '<'
+    """
+    if x1["normcount"] != x2["normcount"]:
+        return x1["normcount"] < x2["normcount"]
+
+    if x1["overlap"] != x2["overlap"]:
+        return x1["overlap"] < x2["overlap"]
+
+    if x1["pvalue"] != x2["pvalue"]:
+        return x1["pvalue"] < x2["pvalue"]
+
+    return False
+
+
+@numba.njit
+def fam_res_le(x1, x2):
+    """
+    Same as fam_res_compare, but operates as '<='
+    """
+    if not fam_res_less(x1, x2):
+        return x1["normcount"] == x2["normcount"] and \
+            x1["overlap"] == x2["overlap"] and \
+            x1["pvalue"] == x2["pvalue"]
+
+    return True
+
+
+@numba.njit
+def fam_res_greater(x1, x2):
+    """
+    Same as fam_res_compare, but operates as '>'
+    """
+    return not fam_res_le(x1, x2)
+
+
+@numba.njit
+def fam_res_ge(x1, x2):
+    """
+    Same as fam_res_compare, but operates as '>='
+    """
+    return not fam_res_less(x1, x2)
+
+
+@numba.njit
 def family_result_argsort(x, ii):
     """
     argsort of family results using defined comparison above.
@@ -120,17 +166,98 @@ def family_result_argsort(x, ii):
 
 
 @numba.njit
-def family_result_sort(x):
+def family_result_sort(x, k):
     """
     Sort the family results according to normcount, overlap and pvalue (to break ties).
     this uses a quicksort implementation as np.argsort does not support struct type in numba.
     """
-    # perform the family result sorting.
-    idx = family_result_argsort(x, list(range(len(x))))
-    y = np.zeros_like(x)
-    for i in numba.prange(len(x)):
-        y[i] = x[idx[i]]
-    return y
+
+    if len(x) <= k:
+        #idx = family_result_argsort(x, list(range(len(x))))
+        #y = np.zeros_like(x)
+        #for i in numba.prange(len(x)):
+        #    y[i] = x[idx[i]]
+        return x
+
+    _ = _select(x, k, 0, len(x) - 1)
+    return x[:k]
+
+
+@numba.njit
+def _swap(data, i, j):
+    # Manually swap each field. I don't know how to do it more
+    # generally under @numba.njit, as numba seems to have problems
+    # with indexing structured arrays
+    temp = np.zeros(1, dtype=data.dtype)[0]
+    temp['id'] = data[i]['id']
+    temp['pvalue'] = data[i]['pvalue']
+    temp['count'] = data[i]['count']
+    temp['normcount'] = data[i]['normcount']
+    temp['overlap'] = data[i]['overlap']
+
+    data[i]['id'] = data[j]['id']
+    data[i]['pvalue'] = data[j]['pvalue']
+    data[i]['count'] = data[j]['count']
+    data[i]['normcount'] = data[j]['normcount']
+    data[i]['overlap'] = data[j]['overlap']
+
+    data[j]['id'] = temp['id']
+    data[j]['pvalue'] = temp['pvalue']
+    data[j]['count'] = temp['count']
+    data[j]['normcount'] = temp['normcount']
+    data[j]['overlap'] = temp['overlap']
+
+
+@numba.njit
+def _partition(A, low, high, mid):
+    if mid == -1:
+        mid = (low + high) >> 1
+    # NOTE: the pattern of swaps below for the pivot choice and the
+    # partitioning gives good results (i.e. regular O(n log n))
+    # on sorted, reverse-sorted, and uniform arrays.  Subtle changes
+    # risk breaking this property.
+
+    # Use median of three {low, middle, high} as the pivot
+    if fam_res_greater(A[mid], A[low]):
+        _swap(A, mid, low)
+    if fam_res_greater(A[high], A[mid]):
+        _swap(A, high, mid)
+        if fam_res_greater(A[mid], A[low]):
+            _swap(A, low, mid)
+
+    pivot = np.zeros(1, dtype=A.dtype)[0]
+    pivot['id'] = A[mid]['id']
+    pivot['pvalue'] = A[mid]['pvalue']
+    pivot['count'] = A[mid]['count']
+    pivot['normcount'] = A[mid]['normcount']
+    pivot['overlap'] = A[mid]['overlap']
+
+    _swap(A, high, mid)
+
+    i = low
+    for j in range(low, high):
+        if fam_res_greater(A[j], pivot):
+            _swap(A, i, j)
+            i += 1
+
+    _swap(A, i, high)
+    return i
+
+
+@numba.njit
+def _select(array, k, low, high):
+    """
+    Select the k'th largest element
+    """
+    i = _partition(array, low, high, -1)
+    while i != k:
+        if i < k:
+            low = i + 1
+            i = _partition(array, low, high, -1)
+        else:
+            high = i - 1
+            i = _partition(array, low, high, -1)
+    return array[k]
 
 
 # ----
@@ -196,7 +323,7 @@ def unique1d_linear(array):
             unique_list.append(array[i])
             index_list.append(i)
 
-    return np.asarray(unique_list), np.asarray(index_list), None
+    return np.asarray(unique_list), np.asarray(index_list, dtype=np.uint32), None
 
 
 @numba.njit
@@ -245,12 +372,12 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
     """
     Perform the kmer search, using the index.
     """
-    hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
-    fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
+    hog_counts = Dict.empty(key_type=numba.uint32, value_type=numba.int64)
+    fam_counts = Dict.empty(key_type=numba.uint32, value_type=numba.int64)
 
     # store lowest and higher k-mer locations
-    fam_lowloc = np.full(fam_tab.size, -1, dtype=np.int32)
-    fam_highloc = np.full(fam_tab.size, -1, dtype=np.int32)
+    fam_lowloc = Dict.empty(key_type=numba.uint32, value_type=numba.uint32)
+    fam_highloc = Dict.empty(key_type=numba.uint32, value_type=numba.uint32)
 
     # iterate unique k-mers
     for m in range(r1.shape[0]):
@@ -260,30 +387,39 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff):
         # to ignore k-mers with X
         if kmer == x_flag:
             continue
-        else:
-            pass
 
         # get mapping to HOGs
-        x = table_idx[kmer : kmer + 2]
-        hogs = table_buff[x[0] : x[1]]
+        x = table_idx[kmer: kmer + 2]
+        hogs = table_buff[x[0]: x[1]]
         fams = hog_tab["FamOff"][hogs]
-        hog_counts[hogs] += np.uint16(1)
-        fam_counts[fams] += np.uint16(1)
 
-        # store lowest and highest locations
+        for hog in hogs:
+            if hog in hog_counts:
+                hog_counts[hog] += 1
+            else:
+                hog_counts[hog] = 1
+
         for fam_off in fams:
-            # initiate first location
-            if fam_lowloc[fam_off] == -1:
+            if fam_off in fam_counts:
+                fam_counts[fam_off] += 1
+            else:
+                fam_counts[fam_off] = 1
+
+            if fam_off in fam_lowloc:
+                if loc < fam_lowloc[fam_off]:
+                    fam_lowloc[fam_off] = loc
+            else:
+                # initiate first location
                 fam_lowloc[fam_off] = loc
+
+            if fam_off in fam_highloc:
+                if loc > fam_highloc[fam_off]:
+                    fam_highloc[fam_off] = loc
+            else:
+                # initiate first location
                 fam_highloc[fam_off] = loc
 
-            # update either lower or higher boundary
-            elif loc < fam_lowloc[fam_off]:
-                fam_lowloc[fam_off] = loc
-            elif loc > fam_highloc[fam_off]:
-                fam_highloc[fam_off] = loc
-
-    return (hog_counts, fam_counts, fam_lowloc, fam_highloc)
+    return hog_counts, fam_counts, fam_lowloc, fam_highloc
 
 
 ## functions to cumulate HOG k-mer counts
@@ -419,6 +555,24 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
             q2closest_taxon[i] = hog_tab["TaxOff"][hog_off]
 
     return q2closest_taxon
+
+
+@numba.njit
+def unzip_dict(data: numba.typed.Dict):
+    keys = np.zeros(len(data))
+    values = np.zeros_like(keys)
+    for i, key in enumerate(data):
+        keys[i] = key
+        values[i] = data[key]
+    return keys, values
+
+
+@numba.njit
+def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.ndarray:
+    result = np.zeros(end - start, dtype=np.uint32)
+    for j in range(start, end):
+        result[j - start] = data.get(j, np.uint32(0))
+    return result
 
 
 class MergeSearch(object):
@@ -693,15 +847,15 @@ class MergeSearch(object):
                     continue
 
                 # search using kmers
-                (hog_counts, fam_counts, fam_lowloc, fam_highloc) = search_seq_kmers(
+                hog_counts, fam_counts, fam_lowloc, fam_highloc = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff
                 )
 
                 # identify families of interest. note: repeat(zeros_like..) numba hack
-                idx = np.argwhere(fam_counts > 0).flatten()
-                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
-                qres["id"][:] = idx
-                qres["count"][:] = fam_counts[idx]
+                count_keys, counts_values = unzip_dict(fam_counts)
+                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(count_keys))
+                qres["id"][:] = count_keys
+                qres["count"][:] = counts_values
 
                 # 1. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
@@ -732,9 +886,12 @@ class MergeSearch(object):
                     continue
 
                 # - b. filter on sequence coverage
-                qres["overlap"][:] = (
-                    fam_highloc[qres["id"]] - fam_lowloc[qres["id"]] + k
-                ) / query_len
+                overlap = np.zeros(len(qres))
+                for i in range(len(qres)):
+                    family_id = qres["id"][i]
+                    overlap[i] = (fam_highloc[family_id] - fam_lowloc[family_id] + k) / query_len
+
+                qres["overlap"][:] = overlap
 
                 qres = qres[(qres["overlap"] >= (25 / query_len))]
                 if len(qres) == 0:
@@ -751,18 +908,14 @@ class MergeSearch(object):
 
                 # 4. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
-                qres = family_result_sort(qres)
+                qres = family_result_sort(qres, top_n_fams)
 
                 # - b. store results
                 family_results["id"][zz, :top_n_fams] = qres["id"][:top_n_fams] + 1
                 family_results["pvalue"][zz, :top_n_fams] = qres["pvalue"][:top_n_fams]
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
-                family_results["normcount"][zz, :top_n_fams] = qres["normcount"][
-                    :top_n_fams
-                ]
-                family_results["overlap"][zz, :top_n_fams] = qres["overlap"][
-                    :top_n_fams
-                ]
+                family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
+                family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
 
                 # 5. Place within families
                 for i in numba.prange(min(len(qres), top_n_fams)):
@@ -779,7 +932,8 @@ class MergeSearch(object):
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
                     # cumulation of counts
-                    c = hog_counts[hog_s:hog_e].copy()
+                    c = dict_slice(hog_counts, hog_s, hog_e)
+
                     cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
 
                     # new expected count, but using old cumulation
@@ -788,7 +942,7 @@ class MergeSearch(object):
                         r1.size,
                         fam_level_offsets,
                         fam_hog2parent,
-                        hog_counts[hog_s:hog_e],
+                        dict_slice(hog_counts, hog_s, hog_e),
                         ref_hog_prob[hog_s:hog_e],
                     )
 

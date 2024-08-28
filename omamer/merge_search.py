@@ -875,6 +875,19 @@ class MergeSearch(object):
                 qres["id"][:] = idx
                 qres["count"][:] = fam_counts[idx]
 
+                # 2. Filtering
+                # - b. filter on sequence coverage
+                overlap = np.zeros(len(qres))
+                for i in range(len(qres)):
+                    family_id = qres["id"][i]
+                    overlap[i] = (fam_highloc[family_id] - fam_lowloc[family_id] + k) / query_len
+
+                qres["overlap"][:] = overlap
+
+                qres = qres[(qres["overlap"] >= (25 / query_len))]
+                if len(qres) == 0:
+                    continue
+
                 # 1. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
@@ -893,25 +906,12 @@ class MergeSearch(object):
                         ),
                     )
 
-                # 2. Filtering
                 # - a. filter to significant families (on p-value)
                 alpha = -1.0 * np.log(alpha_cutoff)
                 qres = qres[qres["pvalue"] >= alpha]
                 # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
                 qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
 
-                if len(qres) == 0:
-                    continue
-
-                # - b. filter on sequence coverage
-                overlap = np.zeros(len(qres))
-                for i in range(len(qres)):
-                    family_id = qres["id"][i]
-                    overlap[i] = (fam_highloc[family_id] - fam_lowloc[family_id] + k) / query_len
-
-                qres["overlap"][:] = overlap
-
-                qres = qres[(qres["overlap"] >= (25 / query_len))]
                 if len(qres) == 0:
                     continue
 

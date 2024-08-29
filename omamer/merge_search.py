@@ -38,7 +38,7 @@ from .hierarchy import (
     is_taxon_implied,
     get_children,
 )
-from ._clock import clock
+from ._clock import clock, as_seconds
 
 
 # maximum neglogp to set
@@ -801,11 +801,16 @@ class MergeSearch(object):
                 t1 = clock()
                 place_time += t1 - t0
 
-            print("Parse time\t", parse_time)
-            print("Search time\t", search_time)
-            print("Filter time\t", filter_time)
-            print("Pvalue time\t", pvalue_time)
-            print("Place time\t", place_time)
-            print("Sort time\t", sort_time)
+            total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
+
+            print()
+            print("Parse time\t", as_seconds(parse_time))
+            print("Search time\t", as_seconds(search_time))
+            print("Filter time\t", as_seconds(filter_time))
+            print("Pvalue time\t", as_seconds(pvalue_time))
+            print("Place time\t", as_seconds(place_time))
+            print("Sort time\t", as_seconds(sort_time))
+            print("Batch total\t", as_seconds(total_time))
+            print()
 
         return numba.jit(func, parallel=False, nopython=True, nogil=True)

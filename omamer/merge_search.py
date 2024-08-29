@@ -38,6 +38,7 @@ from .hierarchy import (
     is_taxon_implied,
     get_children,
 )
+from ._clock import clock
 
 
 # maximum neglogp to set
@@ -629,7 +630,18 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
+            parse_time = 0.0
+            search_time = 0.0
+            filter_time = 0.0
+            pvalue_time = 0.0
+            place_time = 0.0
+            sort_time = 0.0
+            total_time = 0.0
+
             for zz in numba.prange(len(seqs_idx) - 1):
+
+                t0 = clock()
+
                 # load seq
                 s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
@@ -648,10 +660,18 @@ class MergeSearch(object):
                 elif r1[0] == x_flag:
                     continue
 
+                t1 = clock()
+                parse_time += t1 - t0
+                t0 = clock()
+
                 # search using kmers
                 (hog_counts, fam_counts, fam_lowloc, fam_highloc) = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff
                 )
+
+                t1 = clock()
+                search_time += t1 - t0
+                t0 = clock()
 
                 # identify families of interest. note: repeat(zeros_like..) numba hack
                 idx = np.argwhere(fam_counts > 0).flatten()
@@ -676,6 +696,10 @@ class MergeSearch(object):
                             ),
                         ),
                     )
+
+                t1 = clock()
+                pvalue_time += t1 - t0
+                t0 = clock()
 
                 # 2. Filtering
                 # - a. filter to significant families (on p-value)
@@ -705,6 +729,10 @@ class MergeSearch(object):
                     len(r1) - top_fam_expect_counts
                 )
 
+                t1 = clock()
+                filter_time += t1 - t0
+                t0 = clock()
+
                 # 4. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
                 qres = family_result_sort(qres)
@@ -719,6 +747,10 @@ class MergeSearch(object):
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][
                     :top_n_fams
                 ]
+
+                t1 = clock()
+                sort_time += t1 - t0
+                t0 = clock()
 
                 # 5. Place within families
                 for i in numba.prange(min(len(qres), top_n_fams)):
@@ -766,4 +798,14 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+                t1 = clock()
+                place_time += t1 - t0
+
+            print("Parse time\t", parse_time)
+            print("Search time\t", search_time)
+            print("Filter time\t", filter_time)
+            print("Pvalue time\t", pvalue_time)
+            print("Place time\t", place_time)
+            print("Sort time\t", sort_time)
+
+        return numba.jit(func, parallel=False, nopython=True, nogil=True)

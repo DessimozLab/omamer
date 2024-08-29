@@ -265,6 +265,7 @@ def main():
         help="Show metadata about an omamer database.",
         description="Show metadata about an existing omamer database",
     )
+
     info_parser.set_defaults(func=info_db)
     info_parser.add_argument(
         "-d",
@@ -304,3 +305,7 @@ def main():
         args.func(args)
     else:
         parser.print_usage()
+
+
+if __name__ == "__main__":
+    main()

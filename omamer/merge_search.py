@@ -39,6 +39,7 @@ from .hierarchy import (
     is_taxon_implied,
     get_children,
 )
+from ._clock import clock, as_seconds
 
 
 # maximum neglogp to set
@@ -816,7 +817,18 @@ class MergeSearch(object):
             deinit_fam_list = List.empty_list(numba.int32)
             deinit_hog_list = List.empty_list(numba.int32)
 
+            parse_time = 0.0
+            search_time = 0.0
+            filter_time = 0.0
+            pvalue_time = 0.0
+            place_time = 0.0
+            sort_time = 0.0
+            total_time = 0.0
+
             for zz in numba.prange(len(seqs_idx) - 1):
+
+                t0 = clock()
+
                 # load seq
                 s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
@@ -835,12 +847,20 @@ class MergeSearch(object):
                 elif r1[0] == x_flag:
                     continue
 
+                t1 = clock()
+                parse_time += t1 - t0
+                t0 = clock()
+
                 # search using kmers
                 deinit_fam_list, deinit_hog_list = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
                     deinit_fam_list, deinit_hog_list
                 )
+
+                t1 = clock()
+                search_time += t1 - t0
+                t0 = clock()
 
                 # identify families of interest. note: repeat(zeros_like..) numba hack
                 idx = np.argwhere(fam_counts > 0).flatten()
@@ -862,6 +882,10 @@ class MergeSearch(object):
                 if len(qres) == 0:
                     continue
 
+                t1 = clock()
+                filter_time += t1 - t0
+                t0 = clock()
+
                 # 1. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
@@ -880,6 +904,11 @@ class MergeSearch(object):
                         ),
                     )
 
+                t1 = clock()
+                pvalue_time += t1 - t0
+                t0 = clock()
+
+                # 2. Filtering
                 # - a. filter to significant families (on p-value)
                 alpha = -1.0 * np.log(alpha_cutoff)
                 qres = qres[qres["pvalue"] >= alpha]
@@ -898,6 +927,10 @@ class MergeSearch(object):
                     len(r1) - top_fam_expect_counts
                 )
 
+                t1 = clock()
+                filter_time += t1 - t0
+                t0 = clock()
+
                 # 4. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
                 qres = family_result_sort(qres, top_n_fams)
@@ -908,6 +941,10 @@ class MergeSearch(object):
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
                 family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
+
+                t1 = clock()
+                sort_time += t1 - t0
+                t0 = clock()
 
                 # 5. Place within families
                 for i in numba.prange(min(len(qres), top_n_fams)):
@@ -956,5 +993,19 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
+                t1 = clock()
+                place_time += t1 - t0
+
+            total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
+
+            print()
+            print("Parse time\t", as_seconds(parse_time))
+            print("Search time\t", as_seconds(search_time))
+            print("Filter time\t", as_seconds(filter_time))
+            print("Pvalue time\t", as_seconds(pvalue_time))
+            print("Place time\t", as_seconds(place_time))
+            print("Sort time\t", as_seconds(sort_time))
+            print("Batch total\t", as_seconds(total_time))
+            print()
+
         return numba.jit(func, parallel=False, nopython=True, nogil=True)
-        #return func

@@ -347,23 +347,23 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 @numba.njit
 def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc,
-                     deinit_fam_list, deinit_hog_list):
+                     hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
     """
     Perform the kmer search, using the index.
     """
-
-    # reinitialize counters for the indexes modified
-    # by the previous call
-    for family in deinit_fam_list:
+    # Reinitialize counters modified by the previous call
+    for i in range(num_hit_fams):
+        family = hit_fams[i]
         fam_counts[family] = 0
         fam_lowloc[family] = -1
         fam_highloc[family] = -1
 
-    for hog in deinit_hog_list:
+    for i in range(num_hit_hogs):
+        hog = hit_hogs[i]
         hog_counts[hog] = 0
 
-    deinit_fam_list = List.empty_list(numba.int32)
-    deinit_hog_list = List.empty_list(numba.int32)
+    num_hit_fams = 0
+    num_hit_hogs = 0
 
     # iterate unique k-mers
     for m in range(r1.shape[0]):
@@ -381,13 +381,15 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
 
         for hog in hogs:
             if not hog_counts[hog]:
-                deinit_hog_list.append(hog)
+                hit_hogs[num_hit_hogs] = hog
+                num_hit_hogs += 1
 
             hog_counts[hog] += 1
 
         for fam_off in fams:
             if not fam_counts[fam_off]:
-                deinit_fam_list.append(fam_off)
+                hit_fams[num_hit_fams] = fam_off
+                num_hit_fams += 1
 
             fam_counts[fam_off] += 1
 
@@ -402,7 +404,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
             elif loc > fam_highloc[fam_off]:
                 fam_highloc[fam_off] = loc
 
-    return deinit_fam_list, deinit_hog_list
+    return hit_fams, num_hit_fams, hit_hogs, num_hit_hogs
 
 
 ## functions to cumulate HOG k-mer counts
@@ -556,7 +558,6 @@ def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.n
     for j in range(start, end):
         result[j - start] = data.get(j, np.uint32(0))
     return result
-
 
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
@@ -814,8 +815,10 @@ class MergeSearch(object):
             fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
             fam_lowloc = np.full(fam_tab.size, -1, dtype=np.int32)
             fam_highloc = np.full(fam_tab.size, -1, dtype=np.int32)
-            deinit_fam_list = List.empty_list(numba.int32)
-            deinit_hog_list = List.empty_list(numba.int32)
+            hit_fams = np.zeros(fam_tab.size, dtype=np.int32)
+            hit_hogs = np.zeros(hog_tab.size, dtype=np.int32)
+            num_hit_fams = 0
+            num_hit_hogs = 0
 
             parse_time = 0.0
             search_time = 0.0
@@ -852,22 +855,21 @@ class MergeSearch(object):
                 t0 = clock()
 
                 # search using kmers
-                deinit_fam_list, deinit_hog_list = search_seq_kmers(
+                hit_fams, num_hit_fams, hit_hogs, num_hit_hogs = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
-                    deinit_fam_list, deinit_hog_list
+                    hit_fams, num_hit_fams, hit_hogs, num_hit_hogs
                 )
+
+                # Identify families of interest
+                idx = hit_fams[:num_hit_fams]
+                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
+                qres["id"][:] = idx
+                qres["count"][:] = fam_counts[idx]
 
                 t1 = clock()
                 search_time += t1 - t0
                 t0 = clock()
-
-                # identify families of interest. note: repeat(zeros_like..) numba hack
-                idx = np.argwhere(fam_counts > 0).flatten()
-                #idx = deinit_fam_list
-                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
-                qres["id"][:] = idx
-                qres["count"][:] = fam_counts[idx]
 
                 # 2. Filtering
                 # - b. filter on sequence coverage

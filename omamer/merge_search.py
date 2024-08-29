@@ -171,95 +171,69 @@ def family_result_sort(x, k):
     Sort the family results according to normcount, overlap and pvalue (to break ties).
     this uses a quicksort implementation as np.argsort does not support struct type in numba.
     """
-
-    idx = family_result_argsort(x, list(range(len(x))))
-    y = np.zeros_like(x)
-    for i in numba.prange(len(x)):
-        y[i] = x[idx[i]]
-    return y
-
-    if len(x) <= k:
-        return x
-
-    _ = _select(x, k, 0, len(x) - 1)
-    return x[:k]
+    idx = np.arange(len(x))
+    _ = _select(x, idx, k, 0, len(x) - 1)
+    return x[idx[:k]]
 
 
 @numba.njit
-def _swap(data, i, j):
-    # Manually swap each field. I don't know how to do it more
-    # generally under @numba.njit, as numba seems to have problems
-    # with indexing structured arrays
-    temp = np.zeros(1, dtype=data.dtype)[0]
-    temp['id'] = data[i]['id']
-    temp['pvalue'] = data[i]['pvalue']
-    temp['count'] = data[i]['count']
-    temp['normcount'] = data[i]['normcount']
-    temp['overlap'] = data[i]['overlap']
-
-    data[i]['id'] = data[j]['id']
-    data[i]['pvalue'] = data[j]['pvalue']
-    data[i]['count'] = data[j]['count']
-    data[i]['normcount'] = data[j]['normcount']
-    data[i]['overlap'] = data[j]['overlap']
-
-    data[j]['id'] = temp['id']
-    data[j]['pvalue'] = temp['pvalue']
-    data[j]['count'] = temp['count']
-    data[j]['normcount'] = temp['normcount']
-    data[j]['overlap'] = temp['overlap']
+def _swap(array, i, j):
+    tmp = array[i]
+    array[i] = array[j]
+    array[j] = tmp
 
 
 @numba.njit
-def _partition(A, low, high, mid):
-    if mid == -1:
-        mid = (low + high) >> 1
-    # NOTE: the pattern of swaps below for the pivot choice and the
-    # partitioning gives good results (i.e. regular O(n log n))
-    # on sorted, reverse-sorted, and uniform arrays.  Subtle changes
-    # risk breaking this property.
+def _partition(x, idx, low, high):
+    """
+    Index-based version of the partition algorithm of
+    quicksort. Juggles indexes of the idx array that
+    indexes the x array, considering the range [low, high].
+    """
+    mid = (low + high) >> 1
 
     # Use median of three {low, middle, high} as the pivot
-    if fam_res_greater(A[mid], A[low]):
-        _swap(A, mid, low)
-    if fam_res_greater(A[high], A[mid]):
-        _swap(A, high, mid)
-        if fam_res_greater(A[mid], A[low]):
-            _swap(A, low, mid)
+    if fam_res_greater(x[idx[mid]], x[idx[low]]):
+        _swap(idx, mid, low)
+    if fam_res_greater(x[idx[high]], x[idx[mid]]):
+        _swap(idx, high, mid)
+        if fam_res_greater(x[idx[mid]], x[idx[low]]):
+            _swap(idx, low, mid)
 
-    pivot = np.zeros(1, dtype=A.dtype)[0]
-    pivot['id'] = A[mid]['id']
-    pivot['pvalue'] = A[mid]['pvalue']
-    pivot['count'] = A[mid]['count']
-    pivot['normcount'] = A[mid]['normcount']
-    pivot['overlap'] = A[mid]['overlap']
+    pivot = x[idx[mid]]
+    # Put the pivot in the end of the array
+    _swap(idx, mid, high)
 
-    _swap(A, high, mid)
-
+    # Collect elements that are > pivot in the beginning
     i = low
     for j in range(low, high):
-        if fam_res_greater(A[j], pivot):
-            _swap(A, i, j)
+        if fam_res_greater(x[idx[j]], pivot):
+            _swap(idx, i, j)
             i += 1
 
-    _swap(A, i, high)
+    # All indexes of idx in [0, i) are good now.
+    # Let's place the pivot back where it should be
+    _swap(idx, i, high)
     return i
 
 
 @numba.njit
-def _select(array, k, low, high):
+def _select(x, idx, k, low, high):
     """
-    Select the k'th largest element
+    Select the k'th largest element of the x array
     """
-    i = _partition(array, low, high, -1)
+    if k >= len(x):
+        return len(x)
+
+    i = _partition(x, idx, low, high)
     while i != k:
         if i < k:
             low = i + 1
-            i = _partition(array, low, high, -1)
+            i = _partition(x, idx, low, high)
         else:
             high = i - 1
-            i = _partition(array, low, high, -1)
-    return array[k]
+            i = _partition(x, idx, low, high)
+    return idx[k]
 
 
 # ----

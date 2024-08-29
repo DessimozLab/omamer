@@ -404,7 +404,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
             elif loc > fam_highloc[fam_off]:
                 fam_highloc[fam_off] = loc
 
-    return hit_fams, num_hit_fams, hit_hogs, num_hit_hogs
+    return num_hit_fams, num_hit_hogs
 
 
 ## functions to cumulate HOG k-mer counts
@@ -811,14 +811,15 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
-            hog_counts = np.zeros(hog_tab.size, dtype=np.uint16)
-            fam_counts = np.zeros(fam_tab.size, dtype=np.uint16)
-            fam_lowloc = np.full(fam_tab.size, -1, dtype=np.int32)
-            fam_highloc = np.full(fam_tab.size, -1, dtype=np.int32)
-            hit_fams = np.zeros(fam_tab.size, dtype=np.int32)
-            hit_hogs = np.zeros(hog_tab.size, dtype=np.int32)
-            num_hit_fams = 0
-            num_hit_hogs = 0
+            num_threads = numba.get_num_threads()
+            thread_hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
+            thread_fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
+            thread_fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
+            thread_fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
+            thread_hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
+            thread_hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
+            thread_num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
+            thread_num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
             parse_time = 0.0
             search_time = 0.0
@@ -829,7 +830,6 @@ class MergeSearch(object):
             total_time = 0.0
 
             for zz in numba.prange(len(seqs_idx) - 1):
-
                 t0 = clock()
 
                 # load seq
@@ -854,12 +854,25 @@ class MergeSearch(object):
                 parse_time += t1 - t0
                 t0 = clock()
 
+                # Get thread-local data structures for search
+                hit_fams = thread_hit_fams[numba.get_thread_id()]
+                hit_hogs = thread_hit_hogs[numba.get_thread_id()]
+                hog_counts = thread_hog_counts[numba.get_thread_id()]
+                fam_counts = thread_fam_counts[numba.get_thread_id()]
+                fam_lowloc = thread_fam_lowloc[numba.get_thread_id()]
+                fam_highloc = thread_fam_highloc[numba.get_thread_id()]
+                num_hit_fams = thread_num_hit_fams[numba.get_thread_id()]
+                num_hit_hogs = thread_num_hit_hogs[numba.get_thread_id()]
+
                 # search using kmers
-                hit_fams, num_hit_fams, hit_hogs, num_hit_hogs = search_seq_kmers(
+                num_hit_fams, num_hit_hogs = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
                     hit_fams, num_hit_fams, hit_hogs, num_hit_hogs
                 )
+
+                thread_num_hit_fams[numba.get_thread_id()] = num_hit_fams
+                thread_num_hit_hogs[numba.get_thread_id()] = num_hit_hogs
 
                 # Identify families of interest
                 idx = hit_fams[:num_hit_fams]
@@ -1010,4 +1023,4 @@ class MergeSearch(object):
             print("Batch total\t", as_seconds(total_time))
             print()
 
-        return numba.jit(func, parallel=False, nopython=True, nogil=True)
+        return numba.jit(func, parallel=True, nopython=True, nogil=True)

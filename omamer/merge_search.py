@@ -821,13 +821,12 @@ class MergeSearch(object):
             thread_num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
             thread_num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
-            parse_time = 0.0
-            search_time = 0.0
-            filter_time = 0.0
-            pvalue_time = 0.0
-            place_time = 0.0
-            sort_time = 0.0
-            total_time = 0.0
+            parse_time = 0
+            search_time = 0
+            filter_time = 0
+            pvalue_time = 0
+            place_time = 0
+            sort_time = 0
 
             for zz in numba.prange(len(seqs_idx) - 1):
                 t0 = clock()
@@ -880,11 +879,35 @@ class MergeSearch(object):
                 qres["id"][:] = idx
                 qres["count"][:] = fam_counts[idx]
 
+
                 t1 = clock()
                 search_time += t1 - t0
                 t0 = clock()
 
-                # 2. Filtering
+                # 2. Fast family filtering
+                # Filter unlikely families by bounding the p-value with the Chernoff's bound:
+                #     P(X >= k) = P(X >= (1 + d) mu) <= (exp(d) / (1 + d)^(1+d))^mu < Alpha
+                # Here: k is the number of k-mer hit, mu is the expected number of hits
+                # d = delta is the considered deviation from the expected value,
+                # Alpha is the p-value cutoff (in original units, not negative log).
+                # d = delta = (k - mu) / mu by definition of k.
+                # If we want P(X >= k) >= Alpha, then we can safely eliminate families
+                # that have P(X >= k) < Alpha. We know that the probability is bounded
+                # by Chernoff. For such families, we will have then:
+                #     mu ((1+d) * ln(1+d) - d) < -ln(Alpha)
+                # This allows us to filter out families based on Alpha without
+                # actually computing the p-value which is quite expensive.
+
+                # Compute the delta, similar to normcount
+                expected_count = ref_fam_prob[qres["id"]] * len(r1)
+                delta = (qres["count"] - expected_count) / expected_count
+                chernoff_bound = expected_count * ((1 + delta) * np.log(1 + delta) - delta)
+
+                alpha = -1.0 * np.log(alpha_cutoff)
+                qres = qres[chernoff_bound >= alpha]
+                if len(qres) == 0:
+                    continue
+
                 # - b. filter on sequence coverage
                 overlap = np.zeros(len(qres))
                 for i in range(len(qres)):
@@ -925,7 +948,6 @@ class MergeSearch(object):
 
                 # 2. Filtering
                 # - a. filter to significant families (on p-value)
-                alpha = -1.0 * np.log(alpha_cutoff)
                 qres = qres[qres["pvalue"] >= alpha]
                 # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
                 qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
@@ -934,12 +956,9 @@ class MergeSearch(object):
                     continue
 
                 # 3. Compute normalised count
-                # - a. compute the expected count
-                top_fam_expect_counts = ref_fam_prob[qres["id"]] * len(r1)
-
-                # - b. compute the normalised count
-                qres["normcount"][:] = (qres["count"] - top_fam_expect_counts) / (
-                    len(r1) - top_fam_expect_counts
+                expected_count = ref_fam_prob[qres["id"]] * len(r1)
+                qres["normcount"][:] = (qres["count"] - expected_count) / (
+                    len(r1) - expected_count
                 )
 
                 t1 = clock()
@@ -1024,3 +1043,4 @@ class MergeSearch(object):
             print()
 
         return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        #return func

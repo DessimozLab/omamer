@@ -848,7 +848,7 @@ class MergeSearch(object):
                     continue
 
                 t1 = clock()
-                parse_time += t1 - t0
+                #parse_time += t1 - t0
                 t0 = clock()
 
                 # Get thread-local data structures for search
@@ -878,7 +878,7 @@ class MergeSearch(object):
                 qres["count"][:] = fam_counts[idx]
 
                 t1 = clock()
-                search_time += t1 - t0
+                #search_time += t1 - t0
                 t0 = clock()
 
                 # 2. Fast family filtering
@@ -923,7 +923,7 @@ class MergeSearch(object):
                     continue
 
                 t1 = clock()
-                filter_time += t1 - t0
+                #filter_time += t1 - t0
                 t0 = clock()
 
                 # 1. compute p-value for each family. note: in negative log units
@@ -945,7 +945,7 @@ class MergeSearch(object):
                     )
 
                 t1 = clock()
-                pvalue_time += t1 - t0
+                #pvalue_time += t1 - t0
                 t0 = clock()
 
                 # Filter on the actual p-value
@@ -963,7 +963,7 @@ class MergeSearch(object):
                 )
 
                 t1 = clock()
-                filter_time += t1 - t0
+                #filter_time += t1 - t0
                 t0 = clock()
 
                 # 4. Store results
@@ -978,7 +978,7 @@ class MergeSearch(object):
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
 
                 t1 = clock()
-                sort_time += t1 - t0
+                #sort_time += t1 - t0
                 t0 = clock()
 
                 # 5. Place within families
@@ -1029,7 +1029,7 @@ class MergeSearch(object):
                     )
 
                 t1 = clock()
-                place_time += t1 - t0
+                #place_time += t1 - t0
 
             total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
 

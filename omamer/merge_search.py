@@ -43,11 +43,9 @@ from ._clock import clock, as_seconds
 
 
 # maximum neglogp to set
-MAX_LOGP = 20000
+MAX_LOGP = 20000.0
 
 
-# ----
-# stats functions
 @numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
@@ -786,24 +784,24 @@ class MergeSearch(object):
     @lazy_property
     def _lookup(self):
         def func(
-            family_results,
-            subfam_results,
-            seqs,
-            seqs_idx,
-            trans,
-            table_idx,
-            table_buff,
-            k,
-            DIGITS_AA_LOOKUP,
-            fam_tab,
-            hog_tab,
-            level_arr,
-            top_n_fams,
-            ref_fam_prob,
-            ref_hog_prob,
-            alpha_cutoff,
-            sst,
-            family_only,
+                family_results,
+                subfam_results,
+                seqs,
+                seqs_idx,
+                trans,
+                table_idx,
+                table_buff,
+                k,
+                DIGITS_AA_LOOKUP,
+                fam_tab,
+                hog_tab,
+                level_arr,
+                top_n_fams,
+                ref_fam_prob,
+                ref_hog_prob,
+                alpha_cutoff,
+                sst,
+                family_only,
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
@@ -879,44 +877,48 @@ class MergeSearch(object):
                 qres["id"][:] = idx
                 qres["count"][:] = fam_counts[idx]
 
-
                 t1 = clock()
                 search_time += t1 - t0
                 t0 = clock()
 
                 # 2. Fast family filtering
-                # Filter unlikely families by bounding the p-value with the Chernoff's bound:
-                #     P(X >= k) = P(X >= (1 + d) mu) <= (exp(d) / (1 + d)^(1+d))^mu < Alpha
-                # Here: k is the number of k-mer hit, mu is the expected number of hits
-                # d = delta is the considered deviation from the expected value,
-                # Alpha is the p-value cutoff (in original units, not negative log).
-                # d = delta = (k - mu) / mu by definition of k.
-                # If we want P(X >= k) >= Alpha, then we can safely eliminate families
-                # that have P(X >= k) < Alpha. We know that the probability is bounded
-                # by Chernoff. For such families, we will have then:
-                #     mu ((1+d) * ln(1+d) - d) < -ln(Alpha)
-                # This allows us to filter out families based on Alpha without
-                # actually computing the p-value which is quite expensive.
+                #     - a. filter by count. We are only interested in families
+                #     that have at least their expected number of k-mer matches,
+                #     because that number should be already given by random
+                #     (however is still insignificant).
+                mu = ref_fam_prob[qres["id"]] * len(r1)
+                qres = qres[qres["count"] >= mu]
 
-                # Compute the delta, similar to normcount
-                expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                delta = (qres["count"] - expected_count) / expected_count
-                chernoff_bound = expected_count * ((1 + delta) * np.log(1 + delta) - delta)
+                #     - b. filter by sequence coverage. There is no point to
+                #     compute p-value for families that are going to be hard
+                #     filtered by coverage later anyway.
+                for i in range(len(qres)):
+                    family_id = qres["id"][i]
+                    qres["overlap"][i] = (fam_highloc[family_id] - fam_lowloc[family_id] + k) / query_len
 
-                alpha = -1.0 * np.log(alpha_cutoff)
-                qres = qres[chernoff_bound >= alpha]
+                qres = qres[(qres["overlap"] >= (25 / query_len))]
                 if len(qres) == 0:
                     continue
 
-                # - b. filter on sequence coverage
-                overlap = np.zeros(len(qres))
-                for i in range(len(qres)):
-                    family_id = qres["id"][i]
-                    overlap[i] = (fam_highloc[family_id] - fam_lowloc[family_id] + k) / query_len
+                # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
+                # that is, the Chernoff upper bound for the binomial X:
+                #     P(X >= k) <= exp(-n D(k/n || p))
+                # where D is Kullback-Leibler divergence.
+                # First, compute k / n, the empirical proportion of Bernoulli successes.
+                # We need to clip it a little for the case n = k, because it's used
+                # in logarithms later. For the other edge case, we already have k > 0
+                # guaranteed, so we're good here
+                epsilon = 1e-10
+                n = len(r1)
+                k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
-                qres["overlap"][:] = overlap
+                # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
+                # There is a theoretical chance of that P < alpha <= bound, and the test will
+                # fail with a false negative. I could not observe any instances of this.
+                p = ref_fam_prob[qres["id"]]
+                kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
+                qres = qres[kl_div > -np.log(alpha_cutoff)/n]
 
-                qres = qres[(qres["overlap"] >= (25 / query_len))]
                 if len(qres) == 0:
                     continue
 
@@ -932,12 +934,12 @@ class MergeSearch(object):
                         max(
                             0.0,
                             (
-                                binom_neglogccdf(
-                                    qres["count"][i],
-                                    len(r1),
-                                    ref_fam_prob[qres["id"][i]],
-                                )
-                                - correction_factor
+                                    binom_neglogccdf(
+                                        qres["count"][i],
+                                        len(r1),
+                                        ref_fam_prob[qres["id"][i]],
+                                    )
+                                    - correction_factor
                             ),
                         ),
                     )
@@ -946,19 +948,18 @@ class MergeSearch(object):
                 pvalue_time += t1 - t0
                 t0 = clock()
 
-                # 2. Filtering
-                # - a. filter to significant families (on p-value)
+                # Filter on the actual p-value
+                alpha = -1.0 * np.log(alpha_cutoff)
                 qres = qres[qres["pvalue"] >= alpha]
                 # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
                 qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
-
                 if len(qres) == 0:
                     continue
 
                 # 3. Compute normalised count
                 expected_count = ref_fam_prob[qres["id"]] * len(r1)
                 qres["normcount"][:] = (qres["count"] - expected_count) / (
-                    len(r1) - expected_count
+                        len(r1) - expected_count
                 )
 
                 t1 = clock()

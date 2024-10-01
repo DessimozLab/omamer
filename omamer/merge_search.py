@@ -344,7 +344,7 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 @numba.njit
 def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                     hog_counts, fam_counts, fam_lowloc, fam_highloc, ref_fam_prob,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
     """
     Perform the kmer search, using the index.
@@ -363,10 +363,42 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
     num_hit_fams = 0
     num_hit_hogs = 0
 
+    n = r1.shape[0]
+
+    #c = np.zeros((fam_tab.size,), dtype=np.int32)
+    c_max = 0
+
+    # Look at the largest k-mer to have an estimate of
+    # the # of candidate families needed
+    max_candidates = 1
+    for i in range(r1.shape[0] - 1, 0, -1):
+        kmer = r1[i]
+        if kmer == x_flag:
+            continue
+
+        x = table_idx[kmer: kmer + 2]
+        hogs = table_buff[x[0]: x[1]]
+        fams = hog_tab["FamOff"][hogs]
+
+        max_candidates = int(np.ceil(np.log(len(fams))))
+        break
+
+    # Count frequency
+    f = np.zeros((n,), dtype=np.int32)
+    f_candidates = np.zeros((max_candidates,), dtype=np.uint32)
+    num_candidates = 0
+
+    #nc = np.zeros((fam_tab.size,), dtype=np.float32)
+    #nc_opt = np.zeros((fam_tab.size,), dtype=np.float32)
+
+    f_left_border = 0
+    stop = False
+    middle = False
+
     # iterate unique k-mers
-    for m in range(r1.shape[0]):
-        kmer = r1[m]
-        loc = p1[m]
+    for i in range(r1.shape[0]):
+        kmer = r1[i]
+        loc = p1[i]
 
         # to ignore k-mers with X
         if kmer == x_flag:
@@ -377,30 +409,113 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
         hogs = table_buff[x[0]: x[1]]
         fams = hog_tab["FamOff"][hogs]
 
-        for hog in hogs:
-            if not hog_counts[hog]:
-                hit_hogs[num_hit_hogs] = hog
-                num_hit_hogs += 1
+        # Last stage
+        if stop and not middle:
+            # Binary search candidates in the k-mer family list,
+            # place them as usual
+            for fam_off in f_candidates[:num_candidates]:
+                idx = np.searchsorted(fams, fam_off)
+                if idx < len(fams) and fams[idx] == fam_off:
+                    hog = hogs[idx]
+                    if not hog_counts[hog]:
+                        hit_hogs[num_hit_hogs] = hog
+                        num_hit_hogs += 1
 
-            hog_counts[hog] += 1
+                    hog_counts[hog] += 1
 
-        for fam_off in fams:
-            if not fam_counts[fam_off]:
-                hit_fams[num_hit_fams] = fam_off
-                num_hit_fams += 1
+                    if not fam_counts[fam_off]:
+                        hit_fams[num_hit_fams] = fam_off
+                        num_hit_fams += 1
 
-            fam_counts[fam_off] += 1
+                    fam_counts[fam_off] += 1
 
-            # initiate first location
-            if fam_lowloc[fam_off] == -1:
-                fam_lowloc[fam_off] = loc
-                fam_highloc[fam_off] = loc
+                    # initiate first location
+                    if fam_lowloc[fam_off] == -1:
+                        fam_lowloc[fam_off] = loc
+                        fam_highloc[fam_off] = loc
 
-            # update either lower or higher boundary
-            elif loc < fam_lowloc[fam_off]:
-                fam_lowloc[fam_off] = loc
-            elif loc > fam_highloc[fam_off]:
-                fam_highloc[fam_off] = loc
+                    # update either lower or higher boundary
+                    elif loc < fam_lowloc[fam_off]:
+                        fam_lowloc[fam_off] = loc
+                    elif loc > fam_highloc[fam_off]:
+                        fam_highloc[fam_off] = loc
+
+        else:
+            for hog in hogs:
+                if not hog_counts[hog]:
+                    hit_hogs[num_hit_hogs] = hog
+                    num_hit_hogs += 1
+
+                hog_counts[hog] += 1
+
+            for fam_off in fams:
+                #p = ref_fam_prob[fam_off]
+                if not fam_counts[fam_off]:
+                    hit_fams[num_hit_fams] = fam_off
+                    num_hit_fams += 1
+
+                    #nc[fam_off] = (fam_counts[fam_off] + 1 - n*p) / (n - n * p)
+
+                f[fam_counts[fam_off]] -= 1
+                fam_counts[fam_off] += 1
+                f[fam_counts[fam_off]] += 1
+
+                if middle and fam_counts[fam_off] >= f_left_border:
+                    if num_candidates == max_candidates:
+                        max_candidates = 2 * max_candidates
+                        new_candidates = np.zeros((max_candidates,), dtype=np.uint32)
+                        for j in range(len(f_candidates)):
+                            new_candidates[j] = f_candidates[j]
+                        f_candidates = new_candidates
+
+                    f_candidates[num_candidates] = fam_off
+                    num_candidates += 1
+
+                c_max = max(c_max, fam_counts[fam_off])
+
+                # initiate first location
+                if fam_lowloc[fam_off] == -1:
+                    fam_lowloc[fam_off] = loc
+                    fam_highloc[fam_off] = loc
+
+                # update either lower or higher boundary
+                elif loc < fam_lowloc[fam_off]:
+                    fam_lowloc[fam_off] = loc
+                elif loc > fam_highloc[fam_off]:
+                    fam_highloc[fam_off] = loc
+
+            #for fam_off in hit_fams[:num_hit_fams]:
+                #p = ref_fam_prob[fam_off]
+                #nc_opt[fam_off] = nc[fam_off] + (n - i - 1) / (n - n * p)
+
+            #nc_opt_sorted = list(reversed(sorted(nc_opt)))
+            #nc_opt_max = nc_opt.max()
+
+            #c_opt = c + (n - i - 1)
+            #c_opt_sorted = list(reversed(sorted(c_opt)))
+            #c_opt_max = c_opt_sorted[1]
+            #stop = c_opt_max < c_max
+
+            # Middle stage is over
+            if stop:
+                middle = False
+                #print(f"Start binary search at {i} / {n} with {num_candidates} candidates")
+            else:
+                sum_candidates = 0
+                left_border = 0
+                for left_border in range(c_max, 0, -1):
+                    sum_candidates += f[left_border]
+                    if sum_candidates >= max_candidates:
+                        break
+
+                c_opt_candidate = fam_counts[left_border] + (n - i - 1)
+                stop = c_opt_candidate < c_max
+
+                # Start the middle stage (1 iteration)
+                if stop:
+                    f_left_border = left_border
+                    middle = True
+                    #print(f"Stop at {i} / {n}: {c_opt_candidate} < {c_max}. {max_candidates} candidates")
 
     return num_hit_fams, num_hit_hogs
 
@@ -861,10 +976,24 @@ class MergeSearch(object):
                 num_hit_fams = thread_num_hit_fams[numba.get_thread_id()]
                 num_hit_hogs = thread_num_hit_hogs[numba.get_thread_id()]
 
+                # sort k-mers by popularity
+                ranks = np.zeros(r1.shape[0], dtype=np.uint32)
+                for i in range(r1.shape[0]):
+                    kmer = r1[i]
+                    if kmer == x_flag:
+                        continue
+
+                    idx = table_idx[kmer: kmer + 2]
+                    ranks[i] = idx[1] - idx[0]
+                perm = ranks.argsort(kind="mergesort")
+                r1 = r1[perm]
+                p1 = p1[perm]
+
+
                 # search using kmers
                 num_hit_fams, num_hit_hogs = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                    hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                    hog_counts, fam_counts, fam_lowloc, fam_highloc, ref_fam_prob,
                     hit_fams, num_hit_fams, hit_hogs, num_hit_hogs
                 )
 

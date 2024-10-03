@@ -342,7 +342,7 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     return unique1d_linear(r)
 
 
-@numba.njit
+#@numba.njit
 def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc, ref_fam_prob,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
@@ -385,15 +385,20 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
 
     # Count frequency
     f = np.zeros((n,), dtype=np.int32)
+    f_nc = np.zeros((n,), dtype=np.int32)
     f_candidates = np.zeros((max_candidates,), dtype=np.uint32)
     num_candidates = 0
 
-    #nc = np.zeros((fam_tab.size,), dtype=np.float32)
+    nc = np.zeros((fam_tab.size,), dtype=np.float32)
+    nc_max = -np.inf
     #nc_opt = np.zeros((fam_tab.size,), dtype=np.float32)
 
     f_left_border = 0
-    stop = False
+    thorough = False
     middle = False
+
+    mu = ref_fam_prob * n
+    x = 1
 
     # iterate unique k-mers
     for i in range(r1.shape[0]):
@@ -410,7 +415,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
         fams = hog_tab["FamOff"][hogs]
 
         # Last stage
-        if stop and not middle:
+        if thorough and not middle:
             # Binary search candidates in the k-mer family list,
             # place them as usual
             for fam_off in f_candidates[:num_candidates]:
@@ -449,16 +454,23 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                 hog_counts[hog] += 1
 
             for fam_off in fams:
-                #p = ref_fam_prob[fam_off]
+                p = ref_fam_prob[fam_off]
                 if not fam_counts[fam_off]:
                     hit_fams[num_hit_fams] = fam_off
                     num_hit_fams += 1
 
-                    #nc[fam_off] = (fam_counts[fam_off] + 1 - n*p) / (n - n * p)
+                # Descretized normcount
+                if fam_counts[fam_off] > 0:
+                    inc = - int(np.ceil((1 - fam_counts[fam_off]) / (1 - p)))
+                    f_nc[inc] -= 1
 
                 f[fam_counts[fam_off]] -= 1
                 fam_counts[fam_off] += 1
                 f[fam_counts[fam_off]] += 1
+
+                nc[fam_off] = (fam_counts[fam_off] + 1 - n*p) / (n - n * p)
+                nc_int = - int(np.ceil((1 - fam_counts[fam_off]) / (1 - p)))
+                f_nc[nc_int] += 1
 
                 if middle and fam_counts[fam_off] >= f_left_border:
                     if num_candidates == max_candidates:
@@ -472,6 +484,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                     num_candidates += 1
 
                 c_max = max(c_max, fam_counts[fam_off])
+                nc_max = max(nc_max, nc[fam_off])
 
                 # initiate first location
                 if fam_lowloc[fam_off] == -1:
@@ -496,9 +509,11 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
             #c_opt_max = c_opt_sorted[1]
             #stop = c_opt_max < c_max
 
-            # Middle stage is over
-            if stop:
-                middle = False
+            # Middle stage is over if we have at least some
+            # candidates' ids
+            if thorough:
+                #middle = False
+                middle = num_candidates == 0
                 #print(f"Start binary search at {i} / {n} with {num_candidates} candidates")
             else:
                 sum_candidates = 0
@@ -509,10 +524,11 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                         break
 
                 c_opt_candidate = fam_counts[left_border] + (n - i - 1)
-                stop = c_opt_candidate < c_max
+                #nc_opt_candidate = nc[left_border] + (n - i - 1)
+                thorough = c_opt_candidate < c_max
 
                 # Start the middle stage (1 iteration)
-                if stop:
+                if thorough:
                     f_left_border = left_border
                     middle = True
                     #print(f"Stop at {i} / {n}: {c_opt_candidate} < {c_max}. {max_candidates} candidates")
@@ -1172,5 +1188,5 @@ class MergeSearch(object):
             print("Batch total\t", as_seconds(total_time))
             print()
 
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
-        #return func
+        #return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return func

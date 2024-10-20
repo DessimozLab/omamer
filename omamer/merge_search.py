@@ -973,6 +973,8 @@ class MergeSearch(object):
                     )
                 elif method == "rawcount":
                     qres["normcount"][:] = qres["count"]
+                elif method == "pvalue":
+                    qres["normcount"][:] = qres["pvalue"]
                 else:
                     return
 

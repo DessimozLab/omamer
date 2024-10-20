@@ -248,7 +248,7 @@ def main():
         "-m",
         "--method",
         default="normcount",
-        choices=["normcount", "zscore", "rawcount"],
+        choices=["normcount", "zscore", "rawcount", "pvalue"],
         help="Scoring scheme used to select family.",
     )
     search_parser.add_argument(

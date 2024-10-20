@@ -210,6 +210,7 @@ def search(args):
             df = ms.merge_search(
                 seqs=seqs,
                 ids=ids,
+                method=args.method,
                 top_n_fams=args.top_n_fams,
                 alpha=args.family_alpha,
                 sst=args.threshold,

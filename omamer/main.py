@@ -245,6 +245,13 @@ def main():
         help="Number of queries to process at once.",
     )
     search_parser.add_argument(
+        "-m",
+        "--method",
+        default="normcount",
+        choices=["normcount", "zscore", "rawcount"],
+        help="Scoring scheme used to select family.",
+    )
+    search_parser.add_argument(
         "-t",
         "--nthreads",
         default=1,

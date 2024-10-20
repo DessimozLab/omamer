@@ -606,11 +606,13 @@ class MergeSearch(object):
         self,
         seqs,
         ids,
+        method,
         top_n_fams=1,
         alpha=1e-6,
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
+
     ):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
@@ -655,6 +657,7 @@ class MergeSearch(object):
             alpha_cutoff=alpha,
             sst=sst,
             family_only=family_only,
+            method=method
         )
 
         t1 = time()
@@ -802,6 +805,7 @@ class MergeSearch(object):
                 alpha_cutoff,
                 sst,
                 family_only,
+                method
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
@@ -958,9 +962,19 @@ class MergeSearch(object):
 
                 # 3. Compute normalised count
                 expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        len(r1) - expected_count
-                )
+
+                if method == "normcount":
+                    qres["normcount"][:] = (qres["count"] - expected_count) / (
+                            len(r1) - expected_count
+                    )
+                elif method == "zscore":
+                    qres["normcount"][:] = (qres["count"] - expected_count) / (
+                        np.sqrt(len(r1) * ref_fam_prob[qres["id"]] * (1 - ref_fam_prob[qres["id"]]))
+                    )
+                elif method == "rawcount":
+                    qres["normcount"][:] = qres["count"]
+                else:
+                    return
 
                 t1 = clock()
                 filter_time += t1 - t0

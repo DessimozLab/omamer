@@ -22,7 +22,6 @@
 """
 from Bio import SeqIO
 from collections import defaultdict
-from itertools import repeat
 from packaging.version import parse as parse_version
 from tqdm.auto import tqdm
 import numpy as np
@@ -607,19 +606,33 @@ class Database(object):
             return [b".".join(split_hog_id[: i + 1]) for i in range(len(split_hog_id))]
 
     @staticmethod
-    def find_parent_hog(hog_id, hogs):
+    def find_parent_hog(hog_id, alpha_hogs):
+        '''
+        Find the parent hogs from sorted loft HOG ids
+        2024.10.25 updated to handle missing levels
+        '''
         if isinstance(hog_id, str):
             split_hog = hog_id.split(".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, ".".join(split_hog[:-1]))
-            return parent_hog
+            parent_hog_off = -1
+            for i in range(1, len(split_hog)):
+                exp_parent_hog = ".".join(split_hog[: - i])
+                exp_parent_hog_off = np.searchsorted(alpha_hogs, exp_parent_hog)
+                if alpha_hogs[exp_parent_hog_off] == exp_parent_hog:
+                    parent_hog_off = exp_parent_hog_off
+                    break
+            return parent_hog_off
+
         elif isinstance(hog_id, bytes):
+
             split_hog = hog_id.split(b".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, b".".join(split_hog[:-1]))
-            return parent_hog
+            parent_hog_off = -1
+            for i in range(1, len(split_hog)):
+                exp_parent_hog = b".".join(split_hog[: - i])
+                exp_parent_hog_off = np.searchsorted(alpha_hogs, exp_parent_hog)
+                if alpha_hogs[exp_parent_hog_off] == exp_parent_hog:
+                    parent_hog_off = exp_parent_hog_off
+                    break
+            return parent_hog_off
 
     def add_median_seqlen_col(self):
         """

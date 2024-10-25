@@ -66,9 +66,7 @@ def mkdb_oma(args):
         # find files
         oxml_fn = args.orthoxml.name
         fasta_fns = list(map(lambda x: x.name, args.sequences))
-        nwk = args.species_tree.name
-
-    # check if root_taxon in tree
+        nwk = args.spe    # check if root_taxon in tree
     t = Tree(nwk, format=1, quoted_node_names=True)
     if args.root_taxon is not None:
         pruned_t = t.search_nodes(name=args.root_taxon)
@@ -77,7 +75,9 @@ def mkdb_oma(args):
         elif len(pruned_t) > 1:
             raise ValueError("Ambiguous root taxon {} ({})".format(args.root_taxon, ", ".join(map(lambda x: x.name, pruned_t))))
         t = pruned_t[0]
-    root_taxon = t.name
+    root_taxon = t.namecies_tree.name
+
+
 
     if args.hidden_taxa:
         # load and check for hidden taxa

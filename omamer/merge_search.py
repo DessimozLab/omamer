@@ -170,9 +170,19 @@ def family_result_sort(x, k):
     Sort the family results according to normcount, overlap and pvalue (to break ties).
     this uses a quicksort implementation as np.argsort does not support struct type in numba.
     """
+
+    # Quickselect top k results
     idx = np.arange(len(x))
     _ = _select(x, idx, k, 0, len(x) - 1)
-    return x[idx[:k]]
+    x = x[idx[:k]]
+
+    # Now mergesort the selected results, because we need to
+    # report them sorted
+    idx = family_result_argsort(x, list(range(len(x))))
+    y = np.zeros_like(x)
+    for i in range(len(x)):
+        y[i] = x[idx[i]]
+    return y
 
 
 @numba.njit
@@ -235,7 +245,6 @@ def _select(x, idx, k, low, high):
     return idx[k]
 
 
-# ----
 ## generic functions
 @numba.njit
 def get_fam_hog2parent(fam_ent, hog_tab):
@@ -926,7 +935,7 @@ class MergeSearch(object):
                 filter_time += t1 - t0
                 t0 = clock()
 
-                # 1. compute p-value for each family. note: in negative log units
+                # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
                     qres["pvalue"][i] = min(
@@ -956,7 +965,7 @@ class MergeSearch(object):
                 if len(qres) == 0:
                     continue
 
-                # 3. Compute normalised count
+                # 4. Compute normalised count
                 expected_count = ref_fam_prob[qres["id"]] * len(r1)
                 qres["normcount"][:] = (qres["count"] - expected_count) / (
                         len(r1) - expected_count
@@ -966,7 +975,7 @@ class MergeSearch(object):
                 filter_time += t1 - t0
                 t0 = clock()
 
-                # 4. Store results
+                # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
                 qres = family_result_sort(qres, top_n_fams)
 

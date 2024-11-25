@@ -24,7 +24,7 @@
 from datetime import date
 
 __packagename__ = "omamer"
-__version__ = "2.0.5"
+__version__ = "2.1.0"
 __copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk> and Nikolai Romashchenko <nikolai.romashchenko@unil.ch>".format(
     date.today().year
 )

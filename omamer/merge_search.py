@@ -818,28 +818,21 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
+            # Arrays for thread-local data. We allocate them
+            # in advance to avoid doing so for every query
             num_threads = numba.get_num_threads()
-            thread_hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
-            thread_fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
-            thread_fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            thread_fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            thread_hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
-            thread_hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
-            thread_num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
-            thread_num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
-
-            parse_time = 0
-            search_time = 0
-            filter_time = 0
-            pvalue_time = 0
-            place_time = 0
-            sort_time = 0
+            hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
+            fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
+            fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
+            fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
+            hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
+            hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
+            num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
+            num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
             for zz in numba.prange(len(seqs_idx) - 1):
-                t0 = clock()
-
                 # load seq
-                s = seqs[seqs_idx[zz] : np.int64(seqs_idx[zz + 1] - 1)]
+                s = seqs[seqs_idx[zz]: np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
                 n_kmers = query_len - (k - 1)
 
@@ -856,39 +849,31 @@ class MergeSearch(object):
                 elif r1[0] == x_flag:
                     continue
 
-                t1 = clock()
-                parse_time += t1 - t0
-                t0 = clock()
-
                 # Get thread-local data structures for search
-                hit_fams = thread_hit_fams[numba.get_thread_id()]
-                hit_hogs = thread_hit_hogs[numba.get_thread_id()]
-                hog_counts = thread_hog_counts[numba.get_thread_id()]
-                fam_counts = thread_fam_counts[numba.get_thread_id()]
-                fam_lowloc = thread_fam_lowloc[numba.get_thread_id()]
-                fam_highloc = thread_fam_highloc[numba.get_thread_id()]
-                num_hit_fams = thread_num_hit_fams[numba.get_thread_id()]
-                num_hit_hogs = thread_num_hit_hogs[numba.get_thread_id()]
+                thread_hit_fams = hit_fams[numba.get_thread_id()]
+                thread_hit_hogs = hit_hogs[numba.get_thread_id()]
+                thread_hog_counts = hog_counts[numba.get_thread_id()]
+                thread_fam_counts = fam_counts[numba.get_thread_id()]
+                thread_fam_lowloc = fam_lowloc[numba.get_thread_id()]
+                thread_fam_highloc = fam_highloc[numba.get_thread_id()]
+                thread_num_hit_fams = num_hit_fams[numba.get_thread_id()]
+                thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
 
                 # search using kmers
-                num_hit_fams, num_hit_hogs = search_seq_kmers(
+                thread_num_hit_fams, thread_num_hit_hogs = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                    hog_counts, fam_counts, fam_lowloc, fam_highloc,
-                    hit_fams, num_hit_fams, hit_hogs, num_hit_hogs
+                    thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,
+                    thread_hit_fams, thread_num_hit_fams, thread_hit_hogs, thread_num_hit_hogs
                 )
 
-                thread_num_hit_fams[numba.get_thread_id()] = num_hit_fams
-                thread_num_hit_hogs[numba.get_thread_id()] = num_hit_hogs
+                num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
+                num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
 
                 # Identify families of interest
-                idx = hit_fams[:num_hit_fams]
+                idx = thread_hit_fams[:thread_num_hit_fams]
                 qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
                 qres["id"][:] = idx
-                qres["count"][:] = fam_counts[idx]
-
-                t1 = clock()
-                search_time += t1 - t0
-                t0 = clock()
+                qres["count"][:] = thread_fam_counts[idx]
 
                 # 2. Fast family filtering
                 #     - a. filter by count. We are only interested in families
@@ -903,7 +888,7 @@ class MergeSearch(object):
                 #     filtered by coverage later anyway.
                 for i in range(len(qres)):
                     family_id = qres["id"][i]
-                    qres["overlap"][i] = (fam_highloc[family_id] - fam_lowloc[family_id] + k) / query_len
+                    qres["overlap"][i] = (thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k) / query_len
 
                 qres = qres[(qres["overlap"] >= (25 / query_len))]
                 if len(qres) == 0:
@@ -931,10 +916,6 @@ class MergeSearch(object):
                 if len(qres) == 0:
                     continue
 
-                t1 = clock()
-                filter_time += t1 - t0
-                t0 = clock()
-
                 # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
@@ -943,19 +924,15 @@ class MergeSearch(object):
                         max(
                             0.0,
                             (
-                                    binom_neglogccdf(
-                                        qres["count"][i],
-                                        len(r1),
-                                        ref_fam_prob[qres["id"][i]],
-                                    )
-                                    - correction_factor
+                                binom_neglogccdf(
+                                    qres["count"][i],
+                                    len(r1),
+                                    ref_fam_prob[qres["id"][i]],
+                                )
+                                - correction_factor
                             ),
                         ),
                     )
-
-                t1 = clock()
-                pvalue_time += t1 - t0
-                t0 = clock()
 
                 # Filter on the actual p-value
                 alpha = -1.0 * np.log(alpha_cutoff)
@@ -971,10 +948,6 @@ class MergeSearch(object):
                         len(r1) - expected_count
                 )
 
-                t1 = clock()
-                filter_time += t1 - t0
-                t0 = clock()
-
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
                 qres = family_result_sort(qres, top_n_fams)
@@ -985,10 +958,6 @@ class MergeSearch(object):
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
                 family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
-
-                t1 = clock()
-                sort_time += t1 - t0
-                t0 = clock()
 
                 # 5. Place within families
                 for i in numba.prange(min(len(qres), top_n_fams)):
@@ -1005,7 +974,7 @@ class MergeSearch(object):
                     fam_level_offsets = get_fam_level_offsets(entry, level_arr)
 
                     # cumulation of counts
-                    c = hog_counts[hog_s:hog_e].copy()
+                    c = thread_hog_counts[hog_s:hog_e].copy()
 
                     cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
 
@@ -1015,7 +984,7 @@ class MergeSearch(object):
                         r1.size,
                         fam_level_offsets,
                         fam_hog2parent,
-                        hog_counts[hog_s:hog_e],
+                        thread_hog_counts[hog_s:hog_e],
                         ref_hog_prob[hog_s:hog_e],
                     )
 
@@ -1037,20 +1006,4 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
-                t1 = clock()
-                place_time += t1 - t0
-
-            total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
-
-            print()
-            print("Parse time\t", as_seconds(parse_time))
-            print("Search time\t", as_seconds(search_time))
-            print("Filter time\t", as_seconds(filter_time))
-            print("Pvalue time\t", as_seconds(pvalue_time))
-            print("Place time\t", as_seconds(place_time))
-            print("Sort time\t", as_seconds(sort_time))
-            print("Batch total\t", as_seconds(total_time))
-            print()
-
         return numba.jit(func, parallel=True, nopython=True, nogil=True)
-        #return func

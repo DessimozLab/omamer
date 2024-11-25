@@ -21,10 +21,18 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from datetime import date
 
-__packagename__ = "omamer"
-__version__ = "2.1.0"
-__copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk> and Nikolai Romashchenko <nikolai.romashchenko@unil.ch>".format(
-    date.today().year
-)
+import ctypes
+
+# Access the _PyTime_AsSecondsDouble and _PyTime_GetSystemClock functions from pythonapi
+clock = ctypes.pythonapi._PyTime_GetSystemClock
+as_seconds = ctypes.pythonapi._PyTime_AsSecondsDouble
+
+# Set the argument types and return types of the functions
+clock.argtypes = []
+clock.restype = ctypes.c_int64
+
+as_seconds.argtypes = [ctypes.c_int64]
+as_seconds.restype = ctypes.c_double
+
+

@@ -1,6 +1,7 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
+    (C) 2024 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
     (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
@@ -265,6 +266,7 @@ def main():
         help="Show metadata about an omamer database.",
         description="Show metadata about an existing omamer database",
     )
+
     info_parser.set_defaults(func=info_db)
     info_parser.add_argument(
         "-d",

@@ -130,6 +130,9 @@ Required arguments: ``--db``, ``--oma_path``
 
 # Change log
 
+#### Version 2.1.0
+- significant improvements to classification speed 
+
 #### Version 2.0.4
 - fixes issue #34 (numpy2 incompatibility)
 - experimental support to build omamer databases from orthoxml/fasta files

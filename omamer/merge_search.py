@@ -549,7 +549,7 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
 
     return q2closest_taxon
 
-
+z
 @numba.njit
 def estimate_family_prob(tab, idx, h2f):
     counts = np.zeros(h2f.max() + 1, dtype=np.float32)
@@ -557,7 +557,7 @@ def estimate_family_prob(tab, idx, h2f):
         hogs = tab[idx[i]: idx[i + 1]]
         counts[h2f[hogs]] += 1
 
-    return counts / idx[-1]
+    return counts / len(idx)
 
 
 class MergeSearch(object):

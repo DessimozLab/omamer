@@ -609,11 +609,13 @@ class MergeSearch(object):
         self,
         seqs,
         ids,
+        method,
         top_n_fams=1,
         alpha=1e-6,
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
+
     ):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
@@ -662,7 +664,7 @@ class MergeSearch(object):
             alpha_cutoff=alpha,
             sst=sst,
             family_only=family_only,
-
+            method=method
         )
 
         t1 = time()
@@ -810,6 +812,7 @@ class MergeSearch(object):
                 alpha_cutoff,
                 sst,
                 family_only,
+                method
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
@@ -829,6 +832,8 @@ class MergeSearch(object):
             num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
             num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
+            fast_family_filtering = True
+
             for zz in numba.prange(len(seqs_idx) - 1):
                 # load seq
                 s = seqs[seqs_idx[zz]: np.int64(seqs_idx[zz + 1] - 1)]
@@ -847,17 +852,6 @@ class MergeSearch(object):
                     pass
                 elif r1[0] == x_flag:
                     continue
-
-
-                #new_ref_prob = estimate_family_prob(table_buff, table_idx, hog_tab["FamOff"])
-                # assert np.all(new_ref_prob == ref_fam_prob)
-                # print(new_ref_prob[503468])
-                # print(len(new_ref_prob))
-                # print("New family probabilities:")
-                # print(max(new_ref_prob), np.mean(new_ref_prob), np.median(new_ref_prob), min(new_ref_prob))
-                # print(np.argmax(new_ref_prob))
-
-                #ref_fam_prob = new_ref_prob
 
                 # Get thread-local data structures for search
                 thread_hit_fams = hit_fams[numba.get_thread_id()]
@@ -885,46 +879,61 @@ class MergeSearch(object):
                 qres["id"][:] = idx
                 qres["count"][:] = thread_fam_counts[idx]
 
-                # 2. Fast family filtering
-                #     - a. filter by count. We are only interested in families
-                #     that have at least their expected number of k-mer matches,
-                #     because that number should be already given by random
-                #     (however is still insignificant).
-                mu = ref_fam_prob[qres["id"]] * len(r1)
-                qres = qres[qres["count"] >= mu]
 
-                #     - b. filter by sequence coverage. There is no point to
-                #     compute p-value for families that are going to be hard
-                #     filtered by coverage later anyway.
-                for i in range(len(qres)):
-                    family_id = qres["id"][i]
-                    qres["overlap"][i] = (thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k) / query_len
+                if fast_family_filtering:
+                    # 2. Fast family filtering
+                    #     - a. filter by count. We are only interested in families
+                    #     that have at least their expected number of k-mer matches,
+                    #     because that number should be already given by random
+                    #     (however is still insignificant).
+                    mu = ref_fam_prob[qres["id"]] * len(r1)
+                    qres = qres[qres["count"] >= mu]
 
-                qres = qres[(qres["overlap"] >= (25 / query_len))]
-                if len(qres) == 0:
-                    continue
+                    #     - b. filter by sequence coverage. There is no point to
+                    #     compute p-value for families that are going to be hard
+                    #     filtered by coverage later anyway.
+                    for i in range(len(qres)):
+                        family_id = qres["id"][i]
+                        qres["overlap"][i] = (thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k) / query_len
 
-                # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
-                # that is, the Chernoff upper bound for the binomial X:
-                #     P(X >= k) <= exp(-n D(k/n || p))
-                # where D is Kullback-Leibler divergence.
-                # First, compute k / n, the empirical proportion of Bernoulli successes.
-                # We need to clip it a little for the case n = k, because it's used
-                # in logarithms later. For the other edge case, we already have k > 0
-                # guaranteed, so we're good here
-                epsilon = 1e-10
-                n = len(r1)
-                k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
+                    qres = qres[(qres["overlap"] >= (25 / query_len))]
+                    if len(qres) == 0:
+                        continue
 
-                # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
-                # There is a theoretical chance of that P < alpha <= bound, and the test will
-                # fail with a false negative. I could not observe any instances of this.
-                p = ref_fam_prob[qres["id"]]
-                kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
-                qres = qres[kl_div > -np.log(alpha_cutoff)/n]
+                    # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
+                    # that is, the Chernoff upper bound for the binomial X:
+                    #     P(X >= k) <= exp(-n D(k/n || p))
+                    # where D is Kullback-Leibler divergence.
+                    # First, compute k / n, the empirical proportion of Bernoulli successes.
+                    # We need to clip it a little for the case n = k, because it's used
+                    # in logarithms later. For the other edge case, we already have k > 0
+                    # guaranteed, so we're good here
+                    epsilon = 1e-10
+                    n = len(r1)
+                    k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
-                if len(qres) == 0:
-                    continue
+                    # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
+                    # There is a theoretical chance of that P < alpha <= bound, and the test will
+                    # fail with a false negative. I could not observe any instances of this.
+                    p = ref_fam_prob[qres["id"]]
+                    kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
+                    qres = qres[kl_div > -np.log(alpha_cutoff)/n]
+
+                    if len(qres) == 0:
+                        continue
+
+                else:
+                    # 2. Simple filtering
+                    qres = qres[qres["count"] > 0]
+
+                    # filter by sequence coverage.
+                    for i in range(len(qres)):
+                        family_id = qres["id"][i]
+                        qres["overlap"][i] = (thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k) / query_len
+
+                    qres = qres[(qres["overlap"] >= (25 / query_len))]
+                    if len(qres) == 0:
+                        continue
 
                 # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
@@ -954,9 +963,21 @@ class MergeSearch(object):
 
                 # 4. Compute normalised count
                 expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        len(r1) - expected_count
-                )
+
+                if method == "normcount":
+                    qres["normcount"][:] = (qres["count"] - expected_count) / (
+                            len(r1) - expected_count
+                    )
+                elif method == "zscore":
+                    qres["normcount"][:] = (qres["count"] - expected_count) / (
+                        np.sqrt(len(r1) * ref_fam_prob[qres["id"]] * (1 - ref_fam_prob[qres["id"]]))
+                    )
+                elif method == "rawcount":
+                    qres["normcount"][:] = qres["count"]
+                elif method == "pvalue":
+                    qres["normcount"][:] = qres["pvalue"]
+                else:
+                    return
 
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking

@@ -551,21 +551,14 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
 
 
 @numba.njit
-def unzip_dict(data: numba.typed.Dict):
-    keys = np.zeros(len(data))
-    values = np.zeros_like(keys)
-    for i, key in enumerate(data):
-        keys[i] = key
-        values[i] = data[key]
-    return keys, values
+def estimate_family_prob(tab, idx, h2f):
+    counts = np.zeros(h2f.max() + 1, dtype=np.float32)
+    for i in range(len(idx) - 1):
+        hogs = tab[idx[i]: idx[i + 1]]
+        counts[h2f[hogs]] += 1
 
+    return counts / idx[-1]
 
-@numba.njit
-def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.ndarray:
-    result = np.zeros(end - start, dtype=np.uint32)
-    for j in range(start, end):
-        result[j - start] = data.get(j, np.uint32(0))
-    return result
 
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
@@ -645,6 +638,10 @@ class MergeSearch(object):
             ),
         )
 
+        h2f = self.db._db_HOG.col("FamOff")
+
+        new_ref_prob = estimate_family_prob(self.kmer_table["buff"], self.kmer_table["idx"], h2f)
+
         # perform the search. arguments are given like this as we are using numba.
         self._lookup(
             family_results,
@@ -660,11 +657,12 @@ class MergeSearch(object):
             self.hog_tab,
             self.level_arr,
             top_n_fams=top_n_fams,
-            ref_fam_prob=self.ref_fam_prob,
+            ref_fam_prob=new_ref_prob,
             ref_hog_prob=self.ref_hog_prob,
             alpha_cutoff=alpha,
             sst=sst,
             family_only=family_only,
+
         )
 
         t1 = time()
@@ -850,6 +848,17 @@ class MergeSearch(object):
                 elif r1[0] == x_flag:
                     continue
 
+
+                #new_ref_prob = estimate_family_prob(table_buff, table_idx, hog_tab["FamOff"])
+                # assert np.all(new_ref_prob == ref_fam_prob)
+                # print(new_ref_prob[503468])
+                # print(len(new_ref_prob))
+                # print("New family probabilities:")
+                # print(max(new_ref_prob), np.mean(new_ref_prob), np.median(new_ref_prob), min(new_ref_prob))
+                # print(np.argmax(new_ref_prob))
+
+                #ref_fam_prob = new_ref_prob
+
                 # Get thread-local data structures for search
                 thread_hit_fams = hit_fams[numba.get_thread_id()]
                 thread_hit_hogs = hit_hogs[numba.get_thread_id()]
@@ -1008,3 +1017,4 @@ class MergeSearch(object):
                     )
 
         return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        #return func

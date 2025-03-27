@@ -21,6 +21,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+import sys
+
 from Rmath4 import pbinom, phyper
 from numba.tests.support import captured_stdout
 from numba.typed import List, Dict
@@ -30,6 +32,7 @@ import numba
 import numpy as np
 import pandas as pd
 
+from omamer.index import retrieve_list, cumulate_counts_1fam, batch_decode
 
 from ._utils import LOG
 from .alphabets import get_transform
@@ -353,7 +356,7 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 
 @numba.njit
-def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
+def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
     """
@@ -373,6 +376,10 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
     num_hit_fams = 0
     num_hit_hogs = 0
 
+
+    select_time = 0
+    bits_time = 0
+
     # iterate unique k-mers
     for m in range(r1.shape[0]):
         kmer = r1[m]
@@ -383,8 +390,20 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
             continue
 
         # get mapping to HOGs
-        x = table_idx[kmer: kmer + 2]
-        hogs = table_buff[x[0]: x[1]]
+        hogs, stime, btime = retrieve_list(kmer, table_idx, table_buff, raw_flags)
+        select_time += stime
+        bits_time += btime
+
+
+        #x = table_idx[kmer: kmer + 2]
+        #hogs = table_buff[x[0]: x[1]]
+        #
+        # print("GO ", len(r1))
+        # flat, starts = batch_decode(r1, table_idx, table_buff, raw_flags)
+        # #lists = batch_decode(r1, table_idx, table_buff, raw_flags)
+        #
+        # hogs = flat[starts[i]:starts[i + 1]]
+
         fams = hog_tab["FamOff"][hogs]
 
         for hog in hogs:
@@ -412,31 +431,8 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
             elif loc > fam_highloc[fam_off]:
                 fam_highloc[fam_off] = loc
 
-    return num_hit_fams, num_hit_hogs
+    return num_hit_fams, num_hit_hogs, select_time, bits_time
 
-
-## functions to cumulate HOG k-mer counts
-@numba.njit
-def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
-    current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint32)
-
-    # iterate over level offsets backward
-    for i in range(fam_level_offsets.size - 2):
-        x = fam_level_offsets[-i - 3 : -i - 1]
-
-        # when reaching level, sum all hog counts with their best child count
-        hog_cum_counts[x[0] : x[1]] = np.add(
-            hog_cum_counts[x[0] : x[1]], current_best_child_count[x[0] : x[1]]
-        )
-
-        # update current_best_child_count of the parents of the current hogs
-        for j in range(x[0], x[1]):
-            parent_off = hog2parent[j]
-
-            # only if parent exists
-            if parent_off != -1:
-                c = current_best_child_count[hog2parent[j]]
-                current_best_child_count[hog2parent[j]] = max(c, hog_cum_counts[j])
 
 
 ## generic score functions
@@ -550,22 +546,6 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 
-@numba.njit
-def unzip_dict(data: numba.typed.Dict):
-    keys = np.zeros(len(data))
-    values = np.zeros_like(keys)
-    for i, key in enumerate(data):
-        keys[i] = key
-        values[i] = data[key]
-    return keys, values
-
-
-@numba.njit
-def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.ndarray:
-    result = np.zeros(end - start, dtype=np.uint32)
-    for j in range(start, end):
-        result[j - start] = data.get(j, np.uint32(0))
-    return result
 
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
@@ -654,6 +634,7 @@ class MergeSearch(object):
             self.trans,
             self.kmer_table["idx"],
             self.kmer_table["buff"],
+            self.kmer_table["raw_flags"],
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
             self.fam_tab,
@@ -801,6 +782,7 @@ class MergeSearch(object):
                 trans,
                 table_idx,
                 table_buff,
+                raw_flags,
                 k,
                 DIGITS_AA_LOOKUP,
                 fam_tab,
@@ -831,6 +813,16 @@ class MergeSearch(object):
             num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
             num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
+            parse_time = 0
+            search_time = 0
+            filter_time = 0
+            pvalue_time = 0
+            place_time = 0
+            sort_time = 0
+
+            select_time = 0
+            bits_time = 0
+
             for zz in numba.prange(len(seqs_idx) - 1):
                 # load seq
                 s = seqs[seqs_idx[zz]: np.int64(seqs_idx[zz + 1] - 1)]
@@ -841,8 +833,14 @@ class MergeSearch(object):
                 if n_kmers == 0:
                     continue
 
+                t0 = clock()
+
                 # seq -> bag of kmers
                 (r1, p1, _) = parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
+
+                t1 = clock()
+                parse_time = t1 - t0
+                t0 = clock()
 
                 # skip if only one k-mer with X
                 if len(r1) > 1:
@@ -861,14 +859,23 @@ class MergeSearch(object):
                 thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
 
                 # search using kmers
-                thread_num_hit_fams, thread_num_hit_hogs = search_seq_kmers(
-                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
+
+
+                thread_num_hit_fams, thread_num_hit_hogs, stime, btime = search_seq_kmers(
+                    r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                     thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,
                     thread_hit_fams, thread_num_hit_fams, thread_hit_hogs, thread_num_hit_hogs
                 )
 
                 num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
                 num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
+
+                select_time += stime
+                bits_time += btime
+
+                t1 = clock()
+                search_time += t1 - t0
+                t0 = clock()
 
                 # Identify families of interest
                 idx = thread_hit_fams[:thread_num_hit_fams]
@@ -917,6 +924,10 @@ class MergeSearch(object):
                 if len(qres) == 0:
                     continue
 
+                t1 = clock()
+                filter_time = t1 - t0
+                t0 = clock()
+
                 # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
                 for i in numba.prange(len(qres)):
@@ -949,6 +960,11 @@ class MergeSearch(object):
                         len(r1) - expected_count
                 )
 
+                t1 = clock()
+                pvalue_time = t1 - t0
+                t0 = clock()
+
+
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
                 qres = family_result_sort(qres, top_n_fams)
@@ -959,6 +975,11 @@ class MergeSearch(object):
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
                 family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
+
+                t1 = clock()
+                sort_time = t1 - t0
+                t0 = clock()
+
 
                 # 5. Place within families
                 for i in numba.prange(min(len(qres), top_n_fams)):
@@ -1007,4 +1028,22 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
+                t1 = clock()
+                place_time = t1 - t0
+
+            total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
+
+            print()
+            print("Select time\t", as_seconds(select_time))
+            print("Bits time\t", as_seconds(bits_time))
+            print()
+            print("Parse time\t", as_seconds(parse_time))
+            print("Search time\t", as_seconds(search_time))
+            print("Filter time\t", as_seconds(filter_time))
+            print("Pvalue time\t", as_seconds(pvalue_time))
+            print("Sort time\t", as_seconds(sort_time))
+            print("Place time\t", as_seconds(place_time))
+            print("Batch total\t", as_seconds(total_time))
+
+        #return func
         return numba.jit(func, parallel=True, nopython=True, nogil=True)

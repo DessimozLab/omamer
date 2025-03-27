@@ -21,7 +21,11 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+import numpy as np
+from omamer.index import update_with_elias_fano
+
 from ._utils import LOG, check_file_exists
+
 
 
 def mkdb_oma(args):
@@ -298,6 +302,138 @@ def _ensure_data_loaded(ms):
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
+
+    from enum import Enum
+    class Compression(Enum):
+        NONE = 0
+        ELIAS_FANO = 1
+        HUFFMAN = 2
+
+
+    import psutil
+    process = psutil.Process()
+    LOG.info(f"Memory after loading DB: "
+                 f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
+
+    #compression = Compression.HUFFMAN
+    compression = Compression.ELIAS_FANO
+    #compression = Compression.NONE
+
+    if compression == Compression.ELIAS_FANO:
+        # Replace the original kmer_index with a more
+        # compact Elias-Fano representation.
+        buff, new_idx, raw_flags = update_with_elias_fano(
+            ms.kmer_table["idx"], ms.kmer_table["buff"]
+        )
+
+        ms.kmer_table["buff"] = buff
+        ms.kmer_table["idx"] = new_idx
+        ms.kmer_table["raw_flags"] = raw_flags
+
+        LOG.info(f"Memory after replacing kmer_table: "
+                 f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
+    elif compression == Compression.HUFFMAN:
+
+        import numba
+        import heapq
+        from collections import Counter
+
+        @numba.njit
+        def compute_entropy(buff, max_hog_id):
+            counts = np.zeros(max_hog_id, dtype=np.uint32)
+
+            for i in range(buff.shape[0]):
+                counts[buff[i]] += 1
+
+            total = buff.shape[0]
+            entropy = 0.0
+
+            for i in range(max_hog_id):
+                if counts[i] > 0:
+                    p = counts[i] / total
+                    entropy -= p * np.log2(p)
+
+            return entropy
+
+        def build_huffman_codes(freqs):
+            heap = [[freq, [sym, ""]] for sym, freq in freqs.items()]
+            heapq.heapify(heap)
+
+            while len(heap) > 1:
+                lo = heapq.heappop(heap)
+                hi = heapq.heappop(heap)
+                for pair in lo[1:]: pair[1] = '0' + pair[1]
+                for pair in hi[1:]: pair[1] = '1' + pair[1]
+                heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
+
+            if len(heap) == 1:
+                return {sym: code for sym, code in heap[0][1:]}
+            else:
+                return {}
+
+        def canonical_codebook(raw_codebook):
+            code_lengths = [(sym, len(code)) for sym, code in raw_codebook.items()]
+            code_lengths.sort(key=lambda x: (x[1], x[0]))  # sort by length, then value
+
+            canonical = {}
+            code = 0
+            prev_len = 0
+
+            for sym, length in code_lengths:
+                code <<= (length - prev_len)
+                canonical[sym] = (code, length)
+                code += 1
+                prev_len = length
+
+            return canonical
+
+        def encode_bitstream(buff, canonical_codes):
+            bit_buffer = 0
+            bit_length = 0
+            out = []
+
+            for sym in buff:
+                code, length = canonical_codes[sym]
+                bit_buffer = (bit_buffer << length) | code
+                bit_length += length
+
+                while bit_length >= 8:
+                    bit_length -= 8
+                    byte = (bit_buffer >> bit_length) & 0xFF
+                    out.append(byte)
+
+            # Handle final bits
+            if bit_length > 0:
+                byte = (bit_buffer << (8 - bit_length)) & 0xFF
+                out.append(byte)
+
+            return np.array(out, dtype=np.uint8)
+
+
+        def count_frequencies(buff):
+            return Counter(buff)
+
+        H = compute_entropy(ms.kmer_table['buff'], ms.hog_tab.size)
+        print(f"Entropy = {H:.4f} bits per HOG ID")
+        print(f"Theoretical compression ratio = {32 / H:.2f}x")
+
+        freqs = count_frequencies(ms.kmer_table['buff'])
+        print(f"Building huffman...")
+        raw_codebook = build_huffman_codes(freqs)
+        print(f"Building canonical codebook...")
+        canonical = canonical_codebook(raw_codebook)
+
+        print(f"Encoding...")
+        bitstream = encode_bitstream(ms.kmer_table['buff'], canonical)
+
+        ms.kmer_table['buff'] = bitstream
+        ms.kmer_table['codebook'] = canonical
+
+        LOG.info(f"Memory after replacing kmer_table: "
+                 f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
+    else:
+        ms.kmer_table['raw_flags'] = np.empty((0,))
+
 
     print_message("\nFinished loading required data\n")
     print_line(80)

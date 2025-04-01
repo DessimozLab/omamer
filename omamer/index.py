@@ -730,101 +730,75 @@ def retrieve_list(i, idx, buff, raw_flags):
     return out, select_time, bits_time
 
 @numba.njit
-def decode_ef_list(start, buff):
-    l = buff[start]
-    lenL = buff[start + 1]
-    lenU = buff[start + 2]
-    n = buff[start + 3]
+def batch_decode(kmers, idx, buff, raw_flags, start_kmer, x_flag, out, sizes, max_elements):
+    i = start_kmer
+    sizes[0] = 0
+    current_n = 0
 
-    lower = buff[start + 4 : start + 4 + lenL]
-    upper = buff[start + 4 + lenL : start + 4 + lenL + lenU]
+    t0 = clock()
 
-    out = np.empty(n, dtype=np.uint32)
-    for i in range(n):
-        u = select1(upper, i) - i
-        lo = get_bits(lower, i, l)
-        out[i] = (u << l) | lo
-
-    return out
-
-from numba.typed import List
-
-# #@numba.njit
-# def batch_decode(kmer_ids, idx, buff, raw_flags):
-#     results = List.empty_list(numba.types.uint32[:])
-#
-#     for i in range(kmer_ids.shape[0]):
-#         print(i)
-#         k = kmer_ids[i]
-#         start = idx[k]
-#         end = idx[k + 1]
-#
-#         if raw_flags[k]:
-#             results.append(buff[start:end])
-#         else:
-#             results.append(decode_ef_list(start, buff))
-#
-#     return results
-
-
-#@numba.njit
-def batch_decode(r1, x_flag, table_idx, table_buff, raw_flags):
-    # First pass: size estimation
-    total = 0
-    counts = np.zeros(len(r1), dtype=np.uint32)
-
-    for i in range(len(r1)):
-        kmer = r1[i]
+    # First pass: determine how many HOG lists fit to the batch
+    while i < len(kmers):
+        kmer = kmers[i]
         if kmer == x_flag:
+            i += 1
+            sizes[i] = 0
             continue
 
-        start = table_idx[kmer]
-        end = table_idx[kmer + 1]
+        start = idx[kmer]
+        end = idx[kmer + 1]
 
         if raw_flags[kmer]:
             n = end - start
         else:
-            lenL = table_buff[start + 1]
-            lenU = table_buff[start + 2]
-            n = table_buff[start + 3]  # we stored this in update
-        counts[i] = n
-        total += n
+            n = buff[start + 3]
 
-    # Allocate flat buffer and start positions
-    flat = np.empty(total, dtype=np.uint32)
-    starts = np.zeros(len(r1) + 1, dtype=np.uint32)
+        if current_n + n > max_elements:
+            #sizes[i] = current_n + n
+            break
 
-    # Second pass: actual decode
-    offset = 0
-    for i in range(len(r1)):
-        kmer = r1[i]
-        starts[i] = offset
+        current_n += n
+        sizes[i] = n
+        i += 1
 
+
+    t1 = clock()
+    bits_time = t1 - t0
+
+    # Second pass: decode into buffer
+    out_offset = 0
+    select_time = 0
+
+    for j in range(start_kmer, i):
+        kmer = kmers[j]
         if kmer == x_flag:
             continue
 
-        start = table_idx[kmer]
-        end = table_idx[kmer + 1]
+        start = idx[kmer]
+        end = idx[kmer + 1]
 
         if raw_flags[kmer]:
             n = end - start
-            for j in range(n):
-                flat[offset + j] = table_buff[start + j]
-            offset += n
+            out[out_offset : out_offset + n] = buff[start:end]
         else:
-            l = table_buff[start]
-            lenL = table_buff[start + 1]
-            lenU = table_buff[start + 2]
-            n = table_buff[start + 3]
-            lower = table_buff[start + 4 : start + 4 + lenL]
-            upper = table_buff[start + 4 + lenL : start + 4 + lenL + lenU]
+            l = buff[start]
+            lenL = buff[start + 1]
+            lenU = buff[start + 2]
+            n = buff[start + 3]
 
-            for j in range(n):
-                upos = select1(upper, j)
-                upper_val = upos - j
-                lower_val = get_bits(lower, j, l)
-                flat[offset + j] = (upper_val << l) | lower_val
-            offset += n
+            lower_start = start + 4
+            upper_start = lower_start + lenL
 
-    starts[len(r1)] = offset
-    return flat, starts
+            lower = buff[lower_start : lower_start + lenL]
+            upper = buff[upper_start : upper_start + lenU]
+
+            t0 = clock()
+            out[out_offset : out_offset + n] = from_elias_fano(l, lower, upper, n)
+            t1 = clock()
+            select_time += t1 - t0
+
+        out_offset += n
+
+    return i, select_time, bits_time
+
+

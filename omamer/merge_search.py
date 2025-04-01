@@ -360,7 +360,7 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
     """
-    Perform the kmer search, using the index.
+    Perform the kmer search using the index.
     """
     # Reinitialize counters modified by the previous call
     for i in range(num_hit_fams):
@@ -380,56 +380,78 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
     select_time = 0
     bits_time = 0
 
-    # iterate unique k-mers
-    for m in range(r1.shape[0]):
-        kmer = r1[m]
-        loc = p1[m]
+    start_kmer = 0
+    max_elements = 8192
+    batch_hogs = np.empty(max_elements, dtype=np.uint32)
 
-        # to ignore k-mers with X
-        if kmer == x_flag:
-            continue
+    sizes = np.empty(len(r1), dtype=np.uint32)
 
-        # get mapping to HOGs
-        hogs, stime, btime = retrieve_list(kmer, table_idx, table_buff, raw_flags)
+    while start_kmer < len(r1):
+        end_kmer, stime, btime = batch_decode(r1, table_idx, table_buff,
+                                       raw_flags, start_kmer, x_flag, batch_hogs, sizes,
+                                       max_elements=max_elements)
+
+        if end_kmer == start_kmer:
+            max_elements *= 2
+            batch_hogs = np.empty(max_elements, dtype=np.uint32)
+
         select_time += stime
         bits_time += btime
 
+        start = 0
+        for i in range(start_kmer, end_kmer):
+            kmer = r1[i]
+            loc = p1[i]
 
-        #x = table_idx[kmer: kmer + 2]
-        #hogs = table_buff[x[0]: x[1]]
-        #
-        # print("GO ", len(r1))
-        # flat, starts = batch_decode(r1, table_idx, table_buff, raw_flags)
-        # #lists = batch_decode(r1, table_idx, table_buff, raw_flags)
-        #
-        # hogs = flat[starts[i]:starts[i + 1]]
+            # to ignore k-mers with X
+            if kmer == x_flag:
+                continue
 
-        fams = hog_tab["FamOff"][hogs]
+            # true only for the uncompressed
+            #num_hogs = table_idx[kmer+1] - table_idx[kmer]
+            #num_hogs = sizes[i+1] - sizes[i]
+            end = start + sizes[i]
+            hogs = batch_hogs[start: end]
 
-        for hog in hogs:
-            if not hog_counts[hog]:
-                hit_hogs[num_hit_hogs] = hog
-                num_hit_hogs += 1
+            start = end
 
-            hog_counts[hog] += 1
+            # get mapping to HOGs
+            #hogs, stime, btime = retrieve_list(kmer, table_idx, table_buff, raw_flags)
+            #select_time += stime
+            #bits_time += btime
 
-        for fam_off in fams:
-            if not fam_counts[fam_off]:
-                hit_fams[num_hit_fams] = fam_off
-                num_hit_fams += 1
+            #x = table_idx[kmer: kmer + 2]
+            #hogs = table_buff[x[0]: x[1]]
 
-            fam_counts[fam_off] += 1
+            fams = hog_tab["FamOff"][hogs]
 
-            # initiate first location
-            if fam_lowloc[fam_off] == -1:
-                fam_lowloc[fam_off] = loc
-                fam_highloc[fam_off] = loc
+            for hog in hogs:
+                if not hog_counts[hog]:
+                    hit_hogs[num_hit_hogs] = hog
+                    num_hit_hogs += 1
 
-            # update either lower or higher boundary
-            elif loc < fam_lowloc[fam_off]:
-                fam_lowloc[fam_off] = loc
-            elif loc > fam_highloc[fam_off]:
-                fam_highloc[fam_off] = loc
+                hog_counts[hog] += 1
+
+            for fam_off in fams:
+                if not fam_counts[fam_off]:
+                    hit_fams[num_hit_fams] = fam_off
+                    num_hit_fams += 1
+
+                fam_counts[fam_off] += 1
+
+                # initiate first location
+                if fam_lowloc[fam_off] == -1:
+                    fam_lowloc[fam_off] = loc
+                    fam_highloc[fam_off] = loc
+
+                # update either lower or higher boundary
+                elif loc < fam_lowloc[fam_off]:
+                    fam_lowloc[fam_off] = loc
+                elif loc > fam_highloc[fam_off]:
+                    fam_highloc[fam_off] = loc
+
+        #print(end_kmer, " / ", len(r1))
+        start_kmer = end_kmer
 
     return num_hit_fams, num_hit_hogs, select_time, bits_time
 
@@ -859,8 +881,6 @@ class MergeSearch(object):
                 thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
 
                 # search using kmers
-
-
                 thread_num_hit_fams, thread_num_hit_hogs, stime, btime = search_seq_kmers(
                     r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                     thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,

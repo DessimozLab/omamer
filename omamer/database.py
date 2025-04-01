@@ -499,13 +499,13 @@ class Database(object):
             # TODO: check what else would break. this could be used if someone wanted to build a
             # database for flat OGs.
             LOG.warning("No nesting structure in HOGs defined in OrthoXML.")
-        else:
-            self.db.create_carray(
-                "/",
-                "ChildrenHOG",
-                obj=np.array(child_hogs, dtype=np.uint32),
-                filters=self._compr,
-            )
+            child_hogs = [0]  # adding sentinel in case no nested HOGs are defined.
+        self.db.create_carray(
+            "/",
+            "ChildrenHOG",
+            obj=np.array(child_hogs, dtype=np.uint32),
+            filters=self._compr,
+        )
         self.db.create_carray(
             "/",
             "ChildrenProt",

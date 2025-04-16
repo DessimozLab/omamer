@@ -647,27 +647,31 @@ def from_elias_fano_correct(l, lower, upper, n):
         out[i] = (upper_val << l) | lower_val
     return out
 
+import cppyy
+import cppyy.numba_ext
 
-# @numba.njit
-# def streaming_select1_positions(upper, n):
-#     positions = np.empty(n, dtype=np.uint32)
-#
-#     word_idx = 0
-#     word = upper[0]
-#     pos = 0
-#
-#     for i in range(n):
-#         while word == 0:
-#             word_idx += 1
-#             word = upper[word_idx]
-#             pos = word_idx * 32
-#
-#         tz = ctz(word)
-#         pos += tz
-#         positions[i] = pos
-#         word &= word - 1  # clear the bit
-#
-#     return positions
+
+cppyy.cppdef(r"""
+#include <stdint.h>
+
+extern "C" uint32_t ctz32(uint32_t x) {
+    return __builtin_ctz(x);
+}
+
+extern "C"
+uint32_t extract_lower_bits(uint32_t word, uint32_t next_word,
+                            uint32_t offset, uint32_t bit_width) {
+    uint32_t value = word >> offset;
+    if (offset + bit_width > 32) {
+        value |= next_word << (32 - offset);
+    }
+    return value & ((1U << bit_width) - 1);
+}
+""")
+
+ctz_cpp = cppyy.gbl.ctz32
+decode_ef = cppyy.gbl.decode_ef_element
+
 
 @numba.njit
 def from_elias_fano(l, lower, upper, n):
@@ -681,7 +685,7 @@ def from_elias_fano(l, lower, upper, n):
             word_idx += 1
             word = upper[word_idx]
 
-        pos = word_idx * 32 + ctz(word)
+        pos = word_idx * 32 + ctz_cpp(word)
         upper_val = pos - i
         word &= word - 1
 
@@ -729,8 +733,15 @@ def retrieve_list(i, idx, buff, raw_flags):
 
     return out, select_time, bits_time
 
+
 @numba.njit
-def batch_decode(kmers, idx, buff, raw_flags, start_kmer, x_flag, out, sizes, max_elements):
+def batch_decode(kmers, idx, buff, raw_flags, start_kmer,
+                 x_flag, out, sizes, max_elements):
+    """
+    Elias-Fano decoder for HOGs associated with a batch of k-mers.
+    More efficient than the per-k-mer decoder as it's more cache friendly.
+    Outputs HOGs into out and lengths of HOG arrays into sizes.
+    """
     i = start_kmer
     sizes[0] = 0
     current_n = 0
@@ -769,6 +780,7 @@ def batch_decode(kmers, idx, buff, raw_flags, start_kmer, x_flag, out, sizes, ma
     out_offset = 0
     select_time = 0
 
+    t0 = clock()
     for j in range(start_kmer, i):
         kmer = kmers[j]
         if kmer == x_flag:
@@ -792,12 +804,12 @@ def batch_decode(kmers, idx, buff, raw_flags, start_kmer, x_flag, out, sizes, ma
             lower = buff[lower_start : lower_start + lenL]
             upper = buff[upper_start : upper_start + lenU]
 
-            t0 = clock()
             out[out_offset : out_offset + n] = from_elias_fano(l, lower, upper, n)
-            t1 = clock()
-            select_time += t1 - t0
 
         out_offset += n
+
+    t1 = clock()
+    select_time += t1 - t0
 
     return i, select_time, bits_time
 

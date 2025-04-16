@@ -376,7 +376,6 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
     num_hit_fams = 0
     num_hit_hogs = 0
 
-
     select_time = 0
     bits_time = 0
 
@@ -407,21 +406,10 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
             if kmer == x_flag:
                 continue
 
-            # true only for the uncompressed
-            #num_hogs = table_idx[kmer+1] - table_idx[kmer]
-            #num_hogs = sizes[i+1] - sizes[i]
+            # get mapping to HOGs
             end = start + sizes[i]
             hogs = batch_hogs[start: end]
-
             start = end
-
-            # get mapping to HOGs
-            #hogs, stime, btime = retrieve_list(kmer, table_idx, table_buff, raw_flags)
-            #select_time += stime
-            #bits_time += btime
-
-            #x = table_idx[kmer: kmer + 2]
-            #hogs = table_buff[x[0]: x[1]]
 
             fams = hog_tab["FamOff"][hogs]
 

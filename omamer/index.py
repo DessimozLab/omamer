@@ -670,7 +670,7 @@ uint32_t extract_lower_bits(uint32_t word, uint32_t next_word,
 """)
 
 ctz_cpp = cppyy.gbl.ctz32
-decode_ef = cppyy.gbl.decode_ef_element
+#decode_ef = cppyy.gbl.decode_ef_element
 
 
 @numba.njit

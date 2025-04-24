@@ -1172,7 +1172,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         return (hog_tab.to_records(), ent_tab)
 
     ### main function ###
-    def build_database(self, oxml_path, fasta_paths, stree_path):
+    def build_database(self, oxml_path, sequence_files, structure_files, stree_path):
         self._check_open_writeable()
 
         # build taxonomy table except the SpeOff column
@@ -1201,9 +1201,11 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             hog2tax,
             hog2oma_hog,
             seq_buff,
+            structure_buff
         ) = self.select_and_filter_OMA_proteins(
             ent_tab,
-            fasta_paths,
+            sequence_files,
+            structure_files,
             fam2hogs,
             hog2oma_hog,
             hog2tax,
@@ -1238,7 +1240,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         # compute the median sequence length of each HOG
         self.add_median_seqlen_col()
 
-        return seq_buff
+        return seq_buff, structure_buff
 
     def add_metadata(self):
         super().add_metadata()
@@ -1252,7 +1254,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
     def select_and_filter_OMA_proteins(
         self,
         ent_tab,
-        fasta_paths,
+        sequence_files,
+        structure_files,
         fam2hogs,
         hog2oma_hog,
         hog2tax,
@@ -1290,7 +1293,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         sanitiser = Alphabet(n=21).sanitise_seq
 
         # go over all fasta records
-        for fasta_fn in fasta_paths:
+        for fasta_fn in sequence_files:
             with auto_open(fasta_fn, "rt") as fp:
                 for rec in tqdm(
                     SeqIO.parse(fp, "fasta"),
@@ -1359,7 +1362,62 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             raise ValueError("Did not find all protein sequences ({} / {})".format(prot_off, len(ent_tab)))
 
         seq_buff = np.concatenate(seq_buffs)
-        return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
+
+        ss_buffs = []
+        ss_off = 0
+        hog2ssoffs = defaultdict(set)
+
+        # go over  structure files
+        for fasta_fn in structure_files:
+            with auto_open(fasta_fn, "rt") as fp:
+                for rec in tqdm(
+                    SeqIO.parse(fp, "fasta"),
+                    desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
+                ):
+                    if rec.description in ent_tab.index:
+                        # this seems to be most common, full header is used in standalone orthoXML
+                        prot_id = rec.description
+                    elif rec.id in ent_tab.index:
+                        # otherwise we might only see the first part of the id.
+                        prot_id = rec.id
+                    else:
+                        # otherwise we can't do anything...
+                        continue
+
+                    # get hog id, skip if we have filtered it out
+                    r = ent_tab.loc[prot_id]
+                    hog_id = r["hogid"]
+                    sp = r["species"]
+                    # (hog_id, sp) = entry_mapping[prot_id]
+                    if hog_id not in oma_hog2hog:
+                        continue
+
+                    # check if the species of the sequence should be loaded
+                    if sp in species:
+                        seq = sanitiser(str(rec.seq)) + " "  # add the padding
+                        seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
+                        ss_buffs.append(seq)
+
+                        # store protein information
+                        #prot_id = prot_id.encode("ascii")
+                        #prot_tab.append(
+                        #    [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
+                        #)
+
+                        # store protein id
+                        #prot_id_buff.append(
+                        #    np.frombuffer(prot_id, dtype=tables.StringAtom(1))
+                        #)
+
+                        # track hog and family
+                        hog = oma_hog2hog[hog_id]
+                        hog2ssoffs[hog].add(ss_off)
+
+                        # update offset of protein row in table
+                        ss_off += 1
+
+        structure_buff = np.concatenate(ss_buffs)
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff, structure_buff
 
     def add_taxid_col(self):
         """
@@ -1471,7 +1529,8 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         # close and open in read mode
         h5file.close()
 
-        return seq_buff
+        structure_buff = None
+        return seq_buff, structure_buff
 
     def add_metadata(self):
         super().add_metadata()

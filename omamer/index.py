@@ -114,8 +114,15 @@ class Index(object):
             "idx": self.db._db_Index_TableIndex,
         }
 
+    @property
+    def ss_kmer_table(self):
+        return {
+            "buff": self.db._db_Index_TableSSBuffer,
+            "idx": self.db._db_Index_TableSSIndex,
+        }
+
     ### main function to build the index ###
-    def build_kmer_table(self, seq_buff):
+    def build_kmer_table(self, seq_buff, ss_buff):
         assert self.db.mode in {"w", "a"}, "Index must be opened in write mode."
         assert "/Index" not in self.db.db, "Index has already been computed"
 
@@ -123,7 +130,15 @@ class Index(object):
         sa = self._build_suffixarray(
             self.alphabet.translate(seq_buff), len(self.db._db_Protein)
         )
-        self._build_kmer_table(seq_buff, sa)
+
+        # structure suffix array
+        ss_sa = None
+        if ss_buff is not None:
+            ss_sa = self._build_suffixarray(
+                self.alphabet.translate(ss_buff), len(self.db._db_Protein)
+            )
+
+        self._build_kmer_table(seq_buff, sa, ss_buff, ss_sa)
 
     @staticmethod
     def _build_suffixarray(seqs, n):
@@ -137,7 +152,7 @@ class Index(object):
         sa[:n].sort()  # Sort delimiters by position
         return sa
 
-    def _build_kmer_table(self, seq_buff, sa):
+    def _build_kmer_table(self, seq_buff, sa, ss_buff, ss_sa):
         @numba.njit(parallel=True, nogil=True)
         def _compute_mask_and_filter(
             sa, sa_mask, sa_filter, k, n, prot2spoff, prot2hogoff, sp_filter
@@ -383,6 +398,76 @@ class Index(object):
         self.db.db.create_carray(
             idx, "HOGProbability", obj=hog_prob, filters=self.db._compr
         )
+
+        ############################
+        # structure index
+        ss_sa_mask = np.zeros(ss_sa.shape, dtype=np.uint32)
+        ss_sa_filter = np.zeros(ss_sa.shape, dtype=np.bool_)
+
+        _compute_mask_and_filter(
+            ss_sa,
+            ss_sa_mask,
+            ss_sa_filter,
+            self.k,
+            n,
+            self.db._db_Protein.col("SpeOff"),
+            self.db._db_Protein.col("HOGoff"),
+            self.sp_filter,
+        )
+        ss_sa = ss_sa[~ss_sa_filter[ss_sa]]
+        ss_sa_mask = ss_sa_mask[ss_sa]
+
+        LOG.debug(" - compute 3di k-mer table")
+        table_ss_idx = np.zeros(
+            (len(self.alphabet.DIGITS_AA) ** self.k + 1), dtype=np.uint32
+        )
+
+        # initiate buffer of size sa_mask, which is maximum size if all suffixes are from different HOGs
+        table_ss_buff = np.zeros((len(sa_mask)), dtype=np.uint32)
+        hog_ss_kmer_counts = np.zeros(len(self.db._db_HOG), dtype=np.uint64)
+        h2f = self.db._db_HOG.col("FamOff")
+        ii_table_ss_buff = _compute_kmer_table(
+            ss_sa,
+            ss_buff,
+            ss_sa_mask,
+            h2f,
+            self.db._db_HOG.col("ParentOff"),
+            table_ss_idx,
+            table_ss_buff,
+            hog_ss_kmer_counts,
+            self.k,
+            self.alphabet.DIGITS_AA,
+            self.alphabet.DIGITS_AA_LOOKUP,
+        )
+
+        table_ss_buff = table_ss_buff[:ii_table_ss_buff]
+
+        LOG.debug(" - write structure k-mer table")
+        self.db.db.create_carray(
+            idx, "TableSSIndex", obj=table_ss_idx, filters=self.db._compr
+        )
+        self.db.db.create_carray(
+            idx, "TableSSBuffer", obj=table_ss_buff, filters=self.db._compr
+        )
+
+        fam_ss_prob = estimate_family_prob(table_ss_buff, table_ss_idx, h2f)
+        self.db.db.create_carray(
+            idx, "FamilySSProbability", obj=fam_ss_prob, filters=self.db._compr
+        )
+
+        hog_ss_prob = estimate_hog_prob(
+            table_ss_idx,
+            hog_ss_kmer_counts,
+            self.db._db_Family,
+            self.db._db_LevelOffsets,
+            self.db._db_HOG.col("ParentOff"),
+        )
+        self.db.db.create_carray(
+            idx, "HOGSSProbability", obj=hog_ss_prob, filters=self.db._compr
+        )
+        ############################
+
+
 
 
 @numba.njit

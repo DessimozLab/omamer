@@ -70,7 +70,9 @@ def mkdb_oma(args):
 
         # find files
         oxml_fn = args.orthoxml.name
-        fasta_fns = list(map(lambda x: x.name, args.sequences))
+        sequence_files = list(map(lambda x: x.name, args.sequences))
+        structure_files = list(map(lambda x: x.name, args.structures)) \
+            if args.structures else []
         nwk = args.species_tree.name
 
     # check if root_taxon in tree
@@ -110,16 +112,16 @@ def mkdb_oma(args):
     # add sequences from database
     LOG.info("Loading sequences")
     if browser_db_mode:
-        seq_buff = db.build_database(oma_db_fn, nwk)
+        seq_buff, ss_buff = db.build_database(oma_db_fn, nwk)
     else:
-        seq_buff = db.build_database(oxml_fn, fasta_fns, nwk)
+        seq_buff, ss_buff = db.build_database(oxml_fn, sequence_files, structure_files, nwk)
 
     LOG.info("Building index")
     db.ki = Index(
         db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa
     )
     db.ki.sp_filter
-    db.ki.build_kmer_table(seq_buff)
+    db.ki.build_kmer_table(seq_buff, ss_buff)
     db.add_metadata()
     db.add_md5_hash()
 
@@ -295,6 +297,7 @@ def _ensure_data_loaded(ms):
             bar.text("[DONE]")
 
     ms.trans
+
     _load("tax_tab", "taxonomy information")
     _load("fam_tab", "family information")
     _load("hog_tab", "sub-family information")
@@ -302,6 +305,11 @@ def _ensure_data_loaded(ms):
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
+
+    _load("ss_kmer_table", "structural k-mer index")
+    _load("ss_ref_fam_prob", "structural family probability estimates")
+    _load("ss_ref_hog_prob", "structural sub-family probability estimates")
+
 
     from enum import Enum
     class Compression(Enum):
@@ -315,9 +323,8 @@ def _ensure_data_loaded(ms):
     LOG.info(f"Memory after loading DB: "
                  f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
 
-    #compression = Compression.HUFFMAN
-    compression = Compression.ELIAS_FANO
-    #compression = Compression.NONE
+    #compression = Compression.ELIAS_FANO
+    compression = Compression.NONE
 
     if compression == Compression.ELIAS_FANO:
         # Replace the original kmer_index with a more
@@ -332,105 +339,7 @@ def _ensure_data_loaded(ms):
 
         LOG.info(f"Memory after replacing kmer_table: "
                  f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
-    elif compression == Compression.HUFFMAN:
 
-        import numba
-        import heapq
-        from collections import Counter
-
-        @numba.njit
-        def compute_entropy(buff, max_hog_id):
-            counts = np.zeros(max_hog_id, dtype=np.uint32)
-
-            for i in range(buff.shape[0]):
-                counts[buff[i]] += 1
-
-            total = buff.shape[0]
-            entropy = 0.0
-
-            for i in range(max_hog_id):
-                if counts[i] > 0:
-                    p = counts[i] / total
-                    entropy -= p * np.log2(p)
-
-            return entropy
-
-        def build_huffman_codes(freqs):
-            heap = [[freq, [sym, ""]] for sym, freq in freqs.items()]
-            heapq.heapify(heap)
-
-            while len(heap) > 1:
-                lo = heapq.heappop(heap)
-                hi = heapq.heappop(heap)
-                for pair in lo[1:]: pair[1] = '0' + pair[1]
-                for pair in hi[1:]: pair[1] = '1' + pair[1]
-                heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
-
-            if len(heap) == 1:
-                return {sym: code for sym, code in heap[0][1:]}
-            else:
-                return {}
-
-        def canonical_codebook(raw_codebook):
-            code_lengths = [(sym, len(code)) for sym, code in raw_codebook.items()]
-            code_lengths.sort(key=lambda x: (x[1], x[0]))  # sort by length, then value
-
-            canonical = {}
-            code = 0
-            prev_len = 0
-
-            for sym, length in code_lengths:
-                code <<= (length - prev_len)
-                canonical[sym] = (code, length)
-                code += 1
-                prev_len = length
-
-            return canonical
-
-        def encode_bitstream(buff, canonical_codes):
-            bit_buffer = 0
-            bit_length = 0
-            out = []
-
-            for sym in buff:
-                code, length = canonical_codes[sym]
-                bit_buffer = (bit_buffer << length) | code
-                bit_length += length
-
-                while bit_length >= 8:
-                    bit_length -= 8
-                    byte = (bit_buffer >> bit_length) & 0xFF
-                    out.append(byte)
-
-            # Handle final bits
-            if bit_length > 0:
-                byte = (bit_buffer << (8 - bit_length)) & 0xFF
-                out.append(byte)
-
-            return np.array(out, dtype=np.uint8)
-
-
-        def count_frequencies(buff):
-            return Counter(buff)
-
-        H = compute_entropy(ms.kmer_table['buff'], ms.hog_tab.size)
-        print(f"Entropy = {H:.4f} bits per HOG ID")
-        print(f"Theoretical compression ratio = {32 / H:.2f}x")
-
-        freqs = count_frequencies(ms.kmer_table['buff'])
-        print(f"Building huffman...")
-        raw_codebook = build_huffman_codes(freqs)
-        print(f"Building canonical codebook...")
-        canonical = canonical_codebook(raw_codebook)
-
-        print(f"Encoding...")
-        bitstream = encode_bitstream(ms.kmer_table['buff'], canonical)
-
-        ms.kmer_table['buff'] = bitstream
-        ms.kmer_table['codebook'] = canonical
-
-        LOG.info(f"Memory after replacing kmer_table: "
-                 f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
     else:
         ms.kmer_table['raw_flags'] = np.empty((0,))
 

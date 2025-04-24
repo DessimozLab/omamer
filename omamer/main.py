@@ -169,6 +169,12 @@ def main():
         type=FileType("r")
     )
     mkdb_parser.add_argument(
+        "--structures",
+        nargs='*',
+        help="Paths to 3di structure files (1 or multiple, only for non-browser build). [OXMLBUILD]",
+        type=FileType("r")
+    )
+    mkdb_parser.add_argument(
         "--log_level",
         default="info",
         choices=["debug", "info", "warning"],

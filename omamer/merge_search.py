@@ -602,6 +602,20 @@ class MergeSearch(object):
     def ref_hog_prob(self):
         return self.db._db_Index_HOGProbability[:]
 
+    @cached_property
+    def ss_kmer_table(self):
+        z = self.ki.ss_kmer_table
+        return {k: z[k][:] for k in z}
+
+    @lazy_property
+    def ss_ref_fam_prob(self):
+        return self.db._db_Index_FamilySSProbability[:]
+
+    @lazy_property
+    def ss_ref_hog_prob(self):
+        return self.db._db_Index_HOGSSProbability[:]
+
+
     def merge_search(
         self,
         seqs,
@@ -645,6 +659,8 @@ class MergeSearch(object):
             self.kmer_table["idx"],
             self.kmer_table["buff"],
             self.kmer_table["raw_flags"],
+            self.ss_kmer_table["idx"],
+            self.ss_kmer_table["buff"],
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
             self.fam_tab,
@@ -653,6 +669,8 @@ class MergeSearch(object):
             top_n_fams=top_n_fams,
             ref_fam_prob=self.ref_fam_prob,
             ref_hog_prob=self.ref_hog_prob,
+            ss_ref_fam_prob=self.ss_ref_fam_prob,
+            ss_ref_hog_prob=self.ss_ref_hog_prob,
             alpha_cutoff=alpha,
             sst=sst,
             family_only=family_only,
@@ -793,6 +811,8 @@ class MergeSearch(object):
                 table_idx,
                 table_buff,
                 raw_flags,
+                ss_table_idx,
+                ss_table_buff,
                 k,
                 DIGITS_AA_LOOKUP,
                 fam_tab,
@@ -801,6 +821,8 @@ class MergeSearch(object):
                 top_n_fams,
                 ref_fam_prob,
                 ref_hog_prob,
+                ss_ref_fam_prob,
+                ss_ref_hog_prob,
                 alpha_cutoff,
                 sst,
                 family_only,

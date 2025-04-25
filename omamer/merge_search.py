@@ -356,7 +356,7 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 
 @numba.njit
-def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
+def search_seq_kmers_ef(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
     """
@@ -442,6 +442,68 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
         start_kmer = end_kmer
 
     return num_hit_fams, num_hit_hogs, select_time, bits_time
+
+@numba.njit
+def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
+                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                     hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
+    """
+    Perform the kmer search, using the index.
+    """
+    # Reinitialize counters modified by the previous call
+    for i in range(num_hit_fams):
+        family = hit_fams[i]
+        fam_counts[family] = 0
+        fam_lowloc[family] = -1
+        fam_highloc[family] = -1
+
+    for i in range(num_hit_hogs):
+        hog = hit_hogs[i]
+        hog_counts[hog] = 0
+
+    num_hit_fams = 0
+    num_hit_hogs = 0
+
+    # iterate unique k-mers
+    for m in range(r1.shape[0]):
+        kmer = r1[m]
+        loc = p1[m]
+
+        # to ignore k-mers with X
+        if kmer == x_flag:
+            continue
+
+        # get mapping to HOGs
+        x = table_idx[kmer: kmer + 2]
+        hogs = table_buff[x[0]: x[1]]
+        fams = hog_tab["FamOff"][hogs]
+
+        for hog in hogs:
+            if not hog_counts[hog]:
+                hit_hogs[num_hit_hogs] = hog
+                num_hit_hogs += 1
+
+            hog_counts[hog] += 1
+
+        for fam_off in fams:
+            if not fam_counts[fam_off]:
+                hit_fams[num_hit_fams] = fam_off
+                num_hit_fams += 1
+
+            fam_counts[fam_off] += 1
+
+            # initiate first location
+            if fam_lowloc[fam_off] == -1:
+                fam_lowloc[fam_off] = loc
+                fam_highloc[fam_off] = loc
+
+            # update either lower or higher boundary
+            elif loc < fam_lowloc[fam_off]:
+                fam_lowloc[fam_off] = loc
+            elif loc > fam_highloc[fam_off]:
+                fam_highloc[fam_off] = loc
+
+    return num_hit_fams, num_hit_hogs, 0, 0
 
 
 
@@ -619,6 +681,7 @@ class MergeSearch(object):
     def merge_search(
         self,
         seqs,
+        struct_seqs,
         ids,
         top_n_fams=1,
         alpha=1e-6,
@@ -629,6 +692,8 @@ class MergeSearch(object):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
 
+        ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
+
         # allocate result arrays
         family_results = np.zeros(
             (len(sbuff.idx) - 1, top_n_fams),
@@ -636,7 +701,9 @@ class MergeSearch(object):
                 [
                     ("id", np.uint32),
                     ("pvalue", np.float64),
+                    ("ss_pvalue", np.float64),
                     ("count", np.uint32),
+                    ("ss_count", np.uint32),
                     ("normcount", np.float64),
                     ("overlap", np.float64),
                 ]
@@ -655,6 +722,8 @@ class MergeSearch(object):
             subfam_results,
             sbuff.buff,
             sbuff.idx,
+            ssbuff.buff,
+            ssbuff.idx,
             self.trans,
             self.kmer_table["idx"],
             self.kmer_table["buff"],
@@ -807,6 +876,8 @@ class MergeSearch(object):
                 subfam_results,
                 seqs,
                 seqs_idx,
+                ss_seqs,
+                ss_seqs_idx,
                 trans,
                 table_idx,
                 table_buff,
@@ -845,6 +916,16 @@ class MergeSearch(object):
             num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
             num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
+            # Thread-local arrays for structure
+            ss_hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
+            ss_fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
+            ss_fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
+            ss_fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
+            ss_hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
+            ss_hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
+            num_ss_hit_fams = np.zeros(num_threads, dtype=np.uint32)
+            num_ss_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
+
             parse_time = 0
             search_time = 0
             filter_time = 0
@@ -856,10 +937,13 @@ class MergeSearch(object):
             bits_time = 0
 
             for zz in numba.prange(len(seqs_idx) - 1):
-                # load seq
+                # extract the sequence from the sequence buffer
                 s = seqs[seqs_idx[zz]: np.int64(seqs_idx[zz + 1] - 1)]
                 query_len = s.shape[0]
                 n_kmers = query_len - (k - 1)
+
+                # extract the structure from the structure buffer
+                ss = ss_seqs[ss_seqs_idx[zz] : np.int64(ss_seqs_idx[zz + 1] - 1)]
 
                 # double check we don't have short peptides (of len < k)
                 if n_kmers == 0:
@@ -867,8 +951,10 @@ class MergeSearch(object):
 
                 t0 = clock()
 
-                # seq -> bag of kmers
+                # get sequence k-mers
                 (r1, p1, _) = parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
+                # get structure k-mers
+                ss_r1, ss_p1, _ = parse_seq(ss, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
 
                 t1 = clock()
                 parse_time = t1 - t0
@@ -903,23 +989,53 @@ class MergeSearch(object):
                 select_time += stime
                 bits_time += btime
 
+                thread_ss_hit_fams = ss_hit_fams[numba.get_thread_id()]
+                thread_ss_hit_hogs = ss_hit_hogs[numba.get_thread_id()]
+                thread_ss_hog_counts = ss_hog_counts[numba.get_thread_id()]
+                thread_ss_fam_counts = ss_fam_counts[numba.get_thread_id()]
+                thread_ss_fam_lowloc = ss_fam_lowloc[numba.get_thread_id()]
+                thread_ss_fam_highloc = ss_fam_highloc[numba.get_thread_id()]
+                thread_num_ss_hit_fams = num_ss_hit_fams[numba.get_thread_id()]
+                thread_num_ss_hit_hogs = num_ss_hit_hogs[numba.get_thread_id()]
+
+                thread_num_ss_hit_fams, thread_num_ss_hit_hogs, stime, btime = search_seq_kmers(
+                    ss_r1, ss_p1, hog_tab, x_flag, ss_table_idx, ss_table_buff, raw_flags,
+                    thread_ss_hog_counts, thread_ss_fam_counts, thread_ss_fam_lowloc, thread_ss_fam_highloc,
+                    thread_ss_hit_fams, thread_num_ss_hit_fams, thread_ss_hit_hogs, thread_num_ss_hit_hogs
+                )
+
+                num_ss_hit_fams[numba.get_thread_id()] = thread_num_ss_hit_fams
+                num_ss_hit_hogs[numba.get_thread_id()] = thread_num_ss_hit_hogs
+
+                select_time += stime
+                bits_time += btime
+
                 t1 = clock()
                 search_time += t1 - t0
                 t0 = clock()
 
                 # Identify families of interest
                 idx = thread_hit_fams[:thread_num_hit_fams]
-                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
-                qres["id"][:] = idx
-                qres["count"][:] = thread_fam_counts[idx]
+                ss_idx = thread_ss_hit_fams[:thread_num_ss_hit_fams]
+                merged_idx = np.union1d(idx, ss_idx)
+
+                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(merged_idx))
+                qres["id"][:] = merged_idx
+
+                fam2row = {fam: i for i, fam in enumerate(merged_idx)}
+                for fam in idx:
+                    qres["count"][fam2row[fam]] = thread_fam_counts[fam]
+
+                for fam in ss_idx:
+                    qres["ss_count"][fam2row[fam]] = thread_ss_fam_counts[fam]
 
                 # 2. Fast family filtering
                 #     - a. filter by count. We are only interested in families
                 #     that have at least their expected number of k-mer matches,
                 #     because that number should be already given by random
                 #     (however is still insignificant).
-                mu = ref_fam_prob[qres["id"]] * len(r1)
-                qres = qres[qres["count"] >= mu]
+                #mu = ref_fam_prob[qres["id"]] * len(r1)
+                #qres = qres[qres["count"] >= mu]
 
                 #     - b. filter by sequence coverage. There is no point to
                 #     compute p-value for families that are going to be hard
@@ -947,9 +1063,9 @@ class MergeSearch(object):
                 # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
                 # There is a theoretical chance of that P < alpha <= bound, and the test will
                 # fail with a false negative. I could not observe any instances of this.
-                p = ref_fam_prob[qres["id"]]
-                kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
-                qres = qres[kl_div > -np.log(alpha_cutoff)/n]
+                #p = ref_fam_prob[qres["id"]]
+                #kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
+                #qres = qres[kl_div > -np.log(alpha_cutoff)/n]
 
                 if len(qres) == 0:
                     continue
@@ -976,19 +1092,39 @@ class MergeSearch(object):
                         ),
                     )
 
+                # P-value test for structure hits
+                correction_factor = np.log(len(ss_ref_fam_prob))
+                for i in numba.prange(len(qres)):
+                    qres["ss_pvalue"][i] = min(
+                        float(MAX_LOGP),
+                        max(
+                            0.0,
+                            (
+                                binom_neglogccdf(
+                                    qres["ss_count"][i],
+                                    len(r1),
+                                    ss_ref_fam_prob[qres["id"][i]],
+                                )
+                                - correction_factor
+                            ),
+                        ),
+                    )
+
                 # Filter on the actual p-value
                 alpha = -1.0 * np.log(alpha_cutoff)
-                qres = qres[qres["pvalue"] >= alpha]
+                qres = qres[(qres["pvalue"] >= alpha) | (qres["ss_pvalue"] >= alpha)]
                 # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
                 qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
                 if len(qres) == 0:
                     continue
 
                 # 4. Compute normalised count
-                expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        len(r1) - expected_count
-                )
+                #expected_count = ref_fam_prob[qres["id"]] * len(r1)
+                #qres["normcount"][:] = (qres["count"] - expected_count) / (
+                #        len(r1) - expected_count
+                #)
+
+                qres["normcount"][:] = (qres["count"] + qres["ss_count"]) / (2 * len(r1))
 
                 t1 = clock()
                 pvalue_time = t1 - t0
@@ -1075,5 +1211,5 @@ class MergeSearch(object):
             print("Place time\t", as_seconds(place_time))
             print("Batch total\t", as_seconds(total_time))
 
-        #return func
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return func
+        #return numba.jit(func, parallel=True, nopython=True, nogil=True)

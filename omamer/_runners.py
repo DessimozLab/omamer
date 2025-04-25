@@ -206,17 +206,29 @@ def search(args):
 
     print_message("")
     with alive_bar(**search_pbar_kwargs) as pbar:
-        for ids, seqs in SequenceReader.read(
+        query_iter = SequenceReader.read(
             args.query,
             k=db.ki.k,
             format="fasta",
             chunksize=args.chunksize,
             sanitiser=db.ki.alphabet.sanitise_seq,
-        ):
+        )
+        struct_iter = SequenceReader.read(
+            args.structure,
+            k=db.ki.k,
+            format="fasta",
+            chunksize=args.chunksize,
+            sanitiser=db.ki.alphabet.sanitise_seq,
+        )
+
+        # Iterate both in lock-step
+        for (ids_q, seqs_q), (ids_s, struct_seqs) in zip(query_iter, struct_iter):
+            assert ids_q == ids_s, "Query and structure IDs must match"
             t_search0 = time()
             df = ms.merge_search(
-                seqs=seqs,
-                ids=ids,
+                seqs=seqs_q,
+                struct_seqs=struct_seqs,
+                ids=ids_q,
                 top_n_fams=args.top_n_fams,
                 alpha=args.family_alpha,
                 sst=args.threshold,
@@ -225,7 +237,7 @@ def search(args):
             )
             t_search1 = time()
 
-            pbar(len(ids))
+            pbar(len(ids_q))
 
             if df.size > 0:
                 if print_header:
@@ -255,7 +267,8 @@ def search(args):
                     args.out, sep="\t", index=False, header=print_header, na_rep="N/A"
                 )
                 print_header = False
-            search_times.append((len(ids), t_search1 - t_search0))
+
+            search_times.append((len(ids_q), t_search1 - t_search0))
 
     db.close()
 

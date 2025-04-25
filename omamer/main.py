@@ -203,6 +203,14 @@ def main():
     )
 
     search_parser.add_argument(
+        "-s",
+        "--structure",
+        required=True,
+        help="Path to FASTA formatted 3di sequences",
+        type=FileType("r"),
+    )
+
+    search_parser.add_argument(
         "--threshold",
         default=0.10,
         type=float,

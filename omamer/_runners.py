@@ -223,7 +223,10 @@ def search(args):
 
         # Iterate both in lock-step
         for (ids_q, seqs_q), (ids_s, struct_seqs) in zip(query_iter, struct_iter):
-            assert ids_q == ids_s, "Query and structure IDs must match"
+            if ids_q != ids_s:
+                #LOG.warning(f"{ids_q} != {ids_s}")
+                raise RuntimeError("Query and structure IDs must match")
+
             t_search0 = time()
             df = ms.merge_search(
                 seqs=seqs_q,

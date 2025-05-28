@@ -773,6 +773,7 @@ class MergeSearch(object):
             "family_p",
             "family_count",
             "family_normcount",
+            "ss_count",
             "subfamily_score",
             "subfamily_count",
             "qseqlen",
@@ -793,6 +794,7 @@ class MergeSearch(object):
                             "family_p": family_results["pvalue"][i, j],
                             "subfamily_score": subfam_results["score"][i, j],
                             "family_count": family_results["count"][i, j],
+                            "ss_count": family_results["ss_count"][i, j],
                             "family_normcount": family_results["normcount"][i, j],
                             "subfamily_count": subfam_results["count"][i, j],
                         }
@@ -933,8 +935,8 @@ class MergeSearch(object):
             place_time = 0
             sort_time = 0
 
-            select_time = 0
-            bits_time = 0
+            # select_time = 0
+            # bits_time = 0
 
             for zz in numba.prange(len(seqs_idx) - 1):
                 # extract the sequence from the sequence buffer
@@ -986,8 +988,8 @@ class MergeSearch(object):
                 num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
                 num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
 
-                select_time += stime
-                bits_time += btime
+                #select_time += stime
+                #bits_time += btime
 
                 thread_ss_hit_fams = ss_hit_fams[numba.get_thread_id()]
                 thread_ss_hit_hogs = ss_hit_hogs[numba.get_thread_id()]
@@ -1007,8 +1009,8 @@ class MergeSearch(object):
                 num_ss_hit_fams[numba.get_thread_id()] = thread_num_ss_hit_fams
                 num_ss_hit_hogs[numba.get_thread_id()] = thread_num_ss_hit_hogs
 
-                select_time += stime
-                bits_time += btime
+                #select_time += stime
+                #bits_time += btime
 
                 t1 = clock()
                 search_time += t1 - t0
@@ -1139,6 +1141,7 @@ class MergeSearch(object):
                 family_results["id"][zz, :top_n_fams] = qres["id"][:top_n_fams] + 1
                 family_results["pvalue"][zz, :top_n_fams] = qres["pvalue"][:top_n_fams]
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
+                family_results["ss_count"][zz, :top_n_fams] = qres["ss_count"][:top_n_fams]
                 family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
 
@@ -1200,8 +1203,8 @@ class MergeSearch(object):
             total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
 
             print()
-            print("Select time\t", as_seconds(select_time))
-            print("Bits time\t", as_seconds(bits_time))
+            #print("Select time\t", as_seconds(select_time))
+            #print("Bits time\t", as_seconds(bits_time))
             print()
             print("Parse time\t", as_seconds(parse_time))
             print("Search time\t", as_seconds(search_time))
@@ -1211,5 +1214,9 @@ class MergeSearch(object):
             print("Place time\t", as_seconds(place_time))
             print("Batch total\t", as_seconds(total_time))
 
-        return func
-        #return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        # import psutil
+        # process = psutil.Process()
+        # print(f"Memory: {process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
+
+        #return func
+        return numba.jit(func, parallel=True, nopython=True, nogil=True)

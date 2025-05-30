@@ -618,7 +618,6 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 
-
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
         assert ki.db.db.mode == "r", "Database must be opened in read mode."
@@ -906,6 +905,8 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
+            only_sequence = False
+
             # Arrays for thread-local data. We allocate them
             # in advance to avoid doing so for every query
             num_threads = numba.get_num_threads()
@@ -1000,11 +1001,15 @@ class MergeSearch(object):
                 thread_num_ss_hit_fams = num_ss_hit_fams[numba.get_thread_id()]
                 thread_num_ss_hit_hogs = num_ss_hit_hogs[numba.get_thread_id()]
 
-                thread_num_ss_hit_fams, thread_num_ss_hit_hogs, stime, btime = search_seq_kmers(
-                    ss_r1, ss_p1, hog_tab, x_flag, ss_table_idx, ss_table_buff, raw_flags,
-                    thread_ss_hog_counts, thread_ss_fam_counts, thread_ss_fam_lowloc, thread_ss_fam_highloc,
-                    thread_ss_hit_fams, thread_num_ss_hit_fams, thread_ss_hit_hogs, thread_num_ss_hit_hogs
-                )
+                if not only_sequence:
+                    thread_num_ss_hit_fams, thread_num_ss_hit_hogs, stime, btime = search_seq_kmers(
+                        ss_r1, ss_p1, hog_tab, x_flag, ss_table_idx, ss_table_buff, raw_flags,
+                        thread_ss_hog_counts, thread_ss_fam_counts, thread_ss_fam_lowloc, thread_ss_fam_highloc,
+                        thread_ss_hit_fams, thread_num_ss_hit_fams, thread_ss_hit_hogs, thread_num_ss_hit_hogs
+                    )
+                else:
+                    thread_num_ss_hit_fams = 0
+                    thread_num_ss_hit_hogs = 0
 
                 num_ss_hit_fams[numba.get_thread_id()] = thread_num_ss_hit_fams
                 num_ss_hit_hogs[numba.get_thread_id()] = thread_num_ss_hit_hogs
@@ -1020,6 +1025,14 @@ class MergeSearch(object):
                 idx = thread_hit_fams[:thread_num_hit_fams]
                 ss_idx = thread_ss_hit_fams[:thread_num_ss_hit_fams]
                 merged_idx = np.union1d(idx, ss_idx)
+                #merged_idx = np.unique(np.concatenate((idx, ss_idx)))
+
+                # O(num of families) allocation. I am not sure how to
+                # make it fast without this one
+                # merged = np.zeros(fam_tab.size, dtype=np.uint8)
+                # merged[idx] = 1
+                # merged[ss_idx] = 1
+                # merged_idx = np.flatnonzero(merged)
 
                 qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(merged_idx))
                 qres["id"][:] = merged_idx
@@ -1036,8 +1049,10 @@ class MergeSearch(object):
                 #     that have at least their expected number of k-mer matches,
                 #     because that number should be already given by random
                 #     (however is still insignificant).
-                #mu = ref_fam_prob[qres["id"]] * len(r1)
-                #qres = qres[qres["count"] >= mu]
+                mu = ref_fam_prob[qres["id"]] * len(r1)
+                ss_mu = ss_ref_fam_prob[qres["id"]] * len(ss_r1)
+
+                qres = qres[(qres["count"] >= mu) | (qres["ss_count"] >= ss_mu)]
 
                 #     - b. filter by sequence coverage. There is no point to
                 #     compute p-value for families that are going to be hard
@@ -1047,8 +1062,13 @@ class MergeSearch(object):
                     qres["overlap"][i] = (thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k) / query_len
 
                 qres = qres[(qres["overlap"] >= (25 / query_len))]
+
+                t1 = clock()
+                filter_time += t1 - t0
                 if len(qres) == 0:
                     continue
+
+                t0 = clock()
 
                 # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
                 # that is, the Chernoff upper bound for the binomial X:
@@ -1065,20 +1085,30 @@ class MergeSearch(object):
                 # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
                 # There is a theoretical chance of that P < alpha <= bound, and the test will
                 # fail with a false negative. I could not observe any instances of this.
-                #p = ref_fam_prob[qres["id"]]
-                #kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
-                #qres = qres[kl_div > -np.log(alpha_cutoff)/n]
+                p = ref_fam_prob[qres["id"]]
+                kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
+
+                # Analogous for the structure significance test
+                ss_n = len(ss_r1)
+                ss_k_n = np.clip(qres["ss_count"] / ss_n, epsilon, 1 - epsilon)
+                ss_p = ss_ref_fam_prob[qres["id"]]
+                ss_kl_div = (ss_k_n * np.log(ss_k_n / ss_p) +
+                             (1 - ss_k_n) * np.log((1 - ss_k_n) / (1 - ss_p)))
+
+                qres = qres[(kl_div > -np.log(alpha_cutoff)/n) |
+                            (ss_kl_div > -np.log(alpha_cutoff)/ss_n)]
+
+                t1 = clock()
+                filter_time += t1 - t0
 
                 if len(qres) == 0:
                     continue
 
-                t1 = clock()
-                filter_time = t1 - t0
                 t0 = clock()
 
                 # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
-                for i in numba.prange(len(qres)):
+                for i in range(len(qres)):
                     qres["pvalue"][i] = min(
                         float(MAX_LOGP),
                         max(
@@ -1096,7 +1126,7 @@ class MergeSearch(object):
 
                 # P-value test for structure hits
                 correction_factor = np.log(len(ss_ref_fam_prob))
-                for i in numba.prange(len(qres)):
+                for i in range(len(qres)):
                     qres["ss_pvalue"][i] = min(
                         float(MAX_LOGP),
                         max(
@@ -1104,7 +1134,7 @@ class MergeSearch(object):
                             (
                                 binom_neglogccdf(
                                     qres["ss_count"][i],
-                                    len(r1),
+                                    len(ss_r1),
                                     ss_ref_fam_prob[qres["id"][i]],
                                 )
                                 - correction_factor
@@ -1117,8 +1147,14 @@ class MergeSearch(object):
                 qres = qres[(qres["pvalue"] >= alpha) | (qres["ss_pvalue"] >= alpha)]
                 # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
                 qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
+
+                t1 = clock()
+                pvalue_time += t1 - t0
+
                 if len(qres) == 0:
                     continue
+
+                t0 = clock()
 
                 # 4. Compute normalised count
                 #expected_count = ref_fam_prob[qres["id"]] * len(r1)
@@ -1126,12 +1162,7 @@ class MergeSearch(object):
                 #        len(r1) - expected_count
                 #)
 
-                qres["normcount"][:] = (qres["count"] + qres["ss_count"]) / (2 * len(r1))
-
-                t1 = clock()
-                pvalue_time = t1 - t0
-                t0 = clock()
-
+                qres["normcount"][:] = (qres["count"] + qres["ss_count"]) / (len(r1) + len(ss_r1))
 
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
@@ -1146,12 +1177,12 @@ class MergeSearch(object):
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
 
                 t1 = clock()
-                sort_time = t1 - t0
+                sort_time += t1 - t0
                 t0 = clock()
 
 
                 # 5. Place within families
-                for i in numba.prange(min(len(qres), top_n_fams)):
+                for i in range(min(len(qres), top_n_fams)):
                     entry = fam_tab[qres["id"][i]]
                     hog_s = entry["HOGoff"]
                     hog_e = hog_s + entry["HOGnum"]

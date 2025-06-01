@@ -715,6 +715,9 @@ class MergeSearch(object):
             ),
         )
 
+        #np.savetxt("table_idx.txt", self.kmer_table["idx"], fmt="%d")
+        #np.savetxt("ss_table_idx.txt", self.ss_kmer_table["idx"], fmt="%d")
+
         # perform the search. arguments are given like this as we are using numba.
         self._lookup(
             family_results,
@@ -936,6 +939,9 @@ class MergeSearch(object):
             place_time = 0
             sort_time = 0
 
+            stats_hit_fams = 0
+            stats_ss_hit_fams = 0
+
             # select_time = 0
             # bits_time = 0
 
@@ -1014,6 +1020,8 @@ class MergeSearch(object):
                 num_ss_hit_fams[numba.get_thread_id()] = thread_num_ss_hit_fams
                 num_ss_hit_hogs[numba.get_thread_id()] = thread_num_ss_hit_hogs
 
+                stats_hit_fams += thread_num_hit_fams
+                stats_ss_hit_fams += thread_num_ss_hit_fams
                 #select_time += stime
                 #bits_time += btime
 
@@ -1162,7 +1170,11 @@ class MergeSearch(object):
                 #        len(r1) - expected_count
                 #)
 
-                qres["normcount"][:] = (qres["count"] + qres["ss_count"]) / (len(r1) + len(ss_r1))
+                expected_count = ref_fam_prob[qres["id"]] * len(r1)
+                ss_expected_count = ss_ref_fam_prob[qres["id"]] * len(ss_r1)
+                a = (qres["count"] - expected_count) / (len(r1) - expected_count)
+                b = (qres["ss_count"] - ss_expected_count) / (len(ss_r1) - ss_expected_count)
+                qres["normcount"][:] = (a + b) / 2
 
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
@@ -1244,6 +1256,9 @@ class MergeSearch(object):
             print("Sort time\t", as_seconds(sort_time))
             print("Place time\t", as_seconds(place_time))
             print("Batch total\t", as_seconds(total_time))
+
+            print("Average hit fams:", stats_hit_fams / len(seqs_idx))
+            print("Average hit fams (ss):", stats_ss_hit_fams / len(seqs_idx))
 
         # import psutil
         # process = psutil.Process()

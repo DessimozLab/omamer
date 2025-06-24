@@ -444,6 +444,73 @@ def search_seq_kmers_ef(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flag
     return num_hit_fams, num_hit_hogs, select_time, bits_time
 
 @numba.njit
+def place_mi(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
+                 hog_scores, fam_scores,
+                 hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                 hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
+
+    # Reinitialize counters modified by the previous call
+    for i in range(num_hit_fams):
+        family = hit_fams[i]
+        fam_counts[family] = 0
+        fam_scores[family] = 0
+        fam_lowloc[family] = -1
+        fam_highloc[family] = -1
+
+    for i in range(num_hit_hogs):
+        hog = hit_hogs[i]
+        hog_counts[hog] = 0
+        hog_scores[hog] = 0
+
+    num_hit_fams = 0
+    num_hit_hogs = 0
+
+    for m in range(r1.shape[0]):
+        kmer = r1[m]
+        loc = p1[m]
+
+        # to ignore k-mers with X
+        if kmer == x_flag:
+            continue
+
+        # get mapping to HOGs
+        x = table_idx[kmer: kmer + 2]
+        hogs = table_buff[x[0]: x[1]]
+        fams = hog_tab["FamOff"][hogs]
+
+        num_fams = x[1] - x[0]
+        kmer_score = np.log2(fam_tab.size / num_fams) if num_fams else 0.0
+        for hog in hogs:
+            if not hog_counts[hog]:
+                hit_hogs[num_hit_hogs] = hog
+                num_hit_hogs += 1
+
+            hog_counts[hog] += 1
+            hog_scores[hog] += kmer_score
+
+        for fam_off in fams:
+            if not fam_counts[fam_off]:
+                hit_fams[num_hit_fams] = fam_off
+                num_hit_fams += 1
+
+            fam_counts[fam_off] += 1
+            fam_scores[fam_off] += kmer_score
+
+            # initiate first location
+            if fam_lowloc[fam_off] == -1:
+                fam_lowloc[fam_off] = loc
+                fam_highloc[fam_off] = loc
+
+            # update either lower or higher boundary
+            elif loc < fam_lowloc[fam_off]:
+                fam_lowloc[fam_off] = loc
+            elif loc > fam_highloc[fam_off]:
+                fam_highloc[fam_off] = loc
+
+    return num_hit_fams, num_hit_hogs
+
+
+@numba.njit
 def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
@@ -703,6 +770,8 @@ class MergeSearch(object):
                     ("ss_pvalue", np.float64),
                     ("count", np.uint32),
                     ("ss_count", np.uint32),
+                    ("score", np.uint32),
+                    ("ss_score", np.uint32),
                     ("normcount", np.float64),
                     ("overlap", np.float64),
                 ]
@@ -913,6 +982,8 @@ class MergeSearch(object):
             # Arrays for thread-local data. We allocate them
             # in advance to avoid doing so for every query
             num_threads = numba.get_num_threads()
+            hog_scores = np.zeros((num_threads, hog_tab.size), dtype=np.uint32)
+            fam_scores = np.zeros((num_threads, fam_tab.size), dtype=np.uint32)
             hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
             fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
             fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
@@ -923,6 +994,8 @@ class MergeSearch(object):
             num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
             # Thread-local arrays for structure
+            ss_hog_scores = np.zeros((num_threads, hog_tab.size), dtype=np.uint32)
+            ss_fam_scores = np.zeros((num_threads, fam_tab.size), dtype=np.uint32)
             ss_hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
             ss_fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
             ss_fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
@@ -978,6 +1051,8 @@ class MergeSearch(object):
                 # Get thread-local data structures for search
                 thread_hit_fams = hit_fams[numba.get_thread_id()]
                 thread_hit_hogs = hit_hogs[numba.get_thread_id()]
+                thread_hog_scores = hog_scores[numba.get_thread_id()]
+                thread_fam_scores = fam_scores[numba.get_thread_id()]
                 thread_hog_counts = hog_counts[numba.get_thread_id()]
                 thread_fam_counts = fam_counts[numba.get_thread_id()]
                 thread_fam_lowloc = fam_lowloc[numba.get_thread_id()]
@@ -986,11 +1061,31 @@ class MergeSearch(object):
                 thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
 
                 # search using kmers
-                thread_num_hit_fams, thread_num_hit_hogs, stime, btime = search_seq_kmers(
-                    r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
-                    thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,
-                    thread_hit_fams, thread_num_hit_fams, thread_hit_hogs, thread_num_hit_hogs
+                # thread_num_hit_fams, thread_num_hit_hogs, stime, btime = search_seq_kmers(
+                #     r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
+                #     thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,
+                #     thread_hit_fams, thread_num_hit_fams, thread_hit_hogs, thread_num_hit_hogs
+                # )
+                thread_num_hit_fams, thread_num_hit_hogs = place_mi(
+                    r1,
+                    p1,
+                    hog_tab,
+                    fam_tab,
+                    x_flag,
+                    table_idx,
+                    table_buff,
+                    thread_hog_scores,
+                    thread_fam_scores,
+                    thread_hog_counts,
+                    thread_fam_counts,
+                    thread_fam_lowloc,
+                    thread_fam_highloc,
+                    thread_hit_fams,
+                    thread_num_hit_fams,
+                    thread_hit_hogs,
+                    thread_num_hit_hogs,
                 )
+
 
                 num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
                 num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
@@ -1000,6 +1095,8 @@ class MergeSearch(object):
 
                 thread_ss_hit_fams = ss_hit_fams[numba.get_thread_id()]
                 thread_ss_hit_hogs = ss_hit_hogs[numba.get_thread_id()]
+                thread_ss_hog_scores = ss_hog_scores[numba.get_thread_id()]
+                thread_ss_fam_scores = ss_fam_scores[numba.get_thread_id()]
                 thread_ss_hog_counts = ss_hog_counts[numba.get_thread_id()]
                 thread_ss_fam_counts = ss_fam_counts[numba.get_thread_id()]
                 thread_ss_fam_lowloc = ss_fam_lowloc[numba.get_thread_id()]
@@ -1008,10 +1105,19 @@ class MergeSearch(object):
                 thread_num_ss_hit_hogs = num_ss_hit_hogs[numba.get_thread_id()]
 
                 if not only_sequence:
-                    thread_num_ss_hit_fams, thread_num_ss_hit_hogs, stime, btime = search_seq_kmers(
-                        ss_r1, ss_p1, hog_tab, x_flag, ss_table_idx, ss_table_buff, raw_flags,
-                        thread_ss_hog_counts, thread_ss_fam_counts, thread_ss_fam_lowloc, thread_ss_fam_highloc,
-                        thread_ss_hit_fams, thread_num_ss_hit_fams, thread_ss_hit_hogs, thread_num_ss_hit_hogs
+                    # thread_num_ss_hit_fams, thread_num_ss_hit_hogs, stime, btime = search_seq_kmers(
+                    #     ss_r1, ss_p1, hog_tab, x_flag, ss_table_idx, ss_table_buff, raw_flags,
+                    #     thread_ss_hog_counts, thread_ss_fam_counts, thread_ss_fam_lowloc, thread_ss_fam_highloc,
+                    #     thread_ss_hit_fams, thread_num_ss_hit_fams, thread_ss_hit_hogs, thread_num_ss_hit_hogs
+                    # )
+
+                    thread_num_ss_hit_fams, thread_num_ss_hit_hogs = place_mi(
+                        ss_r1, ss_p1, hog_tab, fam_tab, x_flag, ss_table_idx, ss_table_buff,
+                        thread_ss_hog_scores, thread_ss_fam_scores,
+                        thread_ss_hog_counts, thread_ss_fam_counts,
+                        thread_ss_fam_lowloc, thread_ss_fam_highloc,
+                        thread_ss_hit_fams, thread_num_ss_hit_fams,
+                        thread_ss_hit_hogs, thread_num_ss_hit_hogs
                     )
                 else:
                     thread_num_ss_hit_fams = 0
@@ -1029,18 +1135,11 @@ class MergeSearch(object):
                 search_time += t1 - t0
                 t0 = clock()
 
+
                 # Identify families of interest
                 idx = thread_hit_fams[:thread_num_hit_fams]
                 ss_idx = thread_ss_hit_fams[:thread_num_ss_hit_fams]
                 merged_idx = np.union1d(idx, ss_idx)
-                #merged_idx = np.unique(np.concatenate((idx, ss_idx)))
-
-                # O(num of families) allocation. I am not sure how to
-                # make it fast without this one
-                # merged = np.zeros(fam_tab.size, dtype=np.uint8)
-                # merged[idx] = 1
-                # merged[ss_idx] = 1
-                # merged_idx = np.flatnonzero(merged)
 
                 qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(merged_idx))
                 qres["id"][:] = merged_idx
@@ -1048,9 +1147,11 @@ class MergeSearch(object):
                 fam2row = {fam: i for i, fam in enumerate(merged_idx)}
                 for fam in idx:
                     qres["count"][fam2row[fam]] = thread_fam_counts[fam]
+                    qres["score"][fam2row[fam]] = thread_fam_scores[fam]
 
                 for fam in ss_idx:
                     qres["ss_count"][fam2row[fam]] = thread_ss_fam_counts[fam]
+                    qres["ss_score"][fam2row[fam]] = thread_ss_fam_scores[fam]
 
                 # 2. Fast family filtering
                 #     - a. filter by count. We are only interested in families
@@ -1172,9 +1273,11 @@ class MergeSearch(object):
 
                 expected_count = ref_fam_prob[qres["id"]] * len(r1)
                 ss_expected_count = ss_ref_fam_prob[qres["id"]] * len(ss_r1)
-                a = (qres["count"] - expected_count) / (len(r1) - expected_count)
-                b = (qres["ss_count"] - ss_expected_count) / (len(ss_r1) - ss_expected_count)
-                qres["normcount"][:] = (a + b) / 2
+
+                #a = (qres["count"] - expected_count) / (len(r1) - expected_count)
+                #b = (qres["ss_count"] - ss_expected_count) / (len(ss_r1) - ss_expected_count)
+                #qres["normcount"][:] = (a + b) / 2
+                qres["normcount"][:] = (qres["score"] + qres["ss_score"]) / 2
 
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking

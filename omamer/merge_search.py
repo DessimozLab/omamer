@@ -845,6 +845,7 @@ class MergeSearch(object):
             "family_count",
             "family_normcount",
             "ss_count",
+            "ss_family_p",
             "subfamily_score",
             "subfamily_count",
             "qseqlen",
@@ -866,6 +867,7 @@ class MergeSearch(object):
                             "subfamily_score": subfam_results["score"][i, j],
                             "family_count": family_results["count"][i, j],
                             "ss_count": family_results["ss_count"][i, j],
+                            "ss_family_p": family_results["ss_pvalue"][i, j],
                             "family_normcount": family_results["normcount"][i, j],
                             "subfamily_count": subfam_results["count"][i, j],
                         }
@@ -1288,6 +1290,7 @@ class MergeSearch(object):
                 family_results["pvalue"][zz, :top_n_fams] = qres["pvalue"][:top_n_fams]
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
                 family_results["ss_count"][zz, :top_n_fams] = qres["ss_count"][:top_n_fams]
+                family_results["ss_pvalue"][zz, :top_n_fams] = qres["ss_pvalue"][:top_n_fams]
                 family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
                 family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
 

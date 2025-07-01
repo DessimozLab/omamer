@@ -62,27 +62,47 @@ def binom_neglogccdf(x, n, p):
     #return -1.0 * phyper(x - 1, n, n/p - n, n, 0, 1)
 
 
+@numba.njit(nogil=True)
+def binom_ccdf(x, n, p):
+    # CCDF: P(X >= x) = 1 - CDF(x-1)
+    return pbinom(x - 1, n, p, 0, 0)  # lower_tail = TRUE, log_p = FALSE
+
+
 # ----
 # family result sorting
 @numba.njit
 def fam_res_compare(x1, x2):
     """
-    Compare two family results and order them according to normcount, overlap and pvalue.
+    Compare two family results and order them according to evalue
     """
-    # normalised count
-    if x1["normcount"] != x2["normcount"]:
-        # greater first
-        return -1 if (x1["normcount"] > x2["normcount"]) else 1
+    if x1["evalue"] != x2["evalue"]:
+         # smaller first
+         return -1 if (x1["evalue"] < x2["evalue"]) else 1
     else:
-        if x1["overlap"] != x2["overlap"]:
-            # greater first
-            return -1 if (x1["overlap"] > x2["overlap"]) else 1
-        else:
-            if x1["pvalue"] != x2["pvalue"]:
-                # greater first. note, we use neglog units
-                return -1 if (x1["pvalue"] > x2["pvalue"]) else 1
-    # equal. take whichever.
+         if x1["pvalue"] != x2["pvalue"]:
+             # greater first
+             return -1 if (x1["pvalue"] > x2["pvalue"]) else 1
     return 0
+
+# @numba.njit
+# def fam_res_compare(x1, x2):
+#     """
+#     Compare two family results and order them according to normcount, overlap and pvalue.
+#     """
+#     # normalised count
+#     if x1["normcount"] != x2["normcount"]:
+#         # greater first
+#         return -1 if (x1["normcount"] > x2["normcount"]) else 1
+#     else:
+#         if x1["overlap"] != x2["overlap"]:
+#             # greater first
+#             return -1 if (x1["overlap"] > x2["overlap"]) else 1
+#         else:
+#             if x1["pvalue"] != x2["pvalue"]:
+#                 # greater first. note, we use neglog units
+#                 return -1 if (x1["pvalue"] > x2["pvalue"]) else 1
+#     # equal. take whichever.
+#     return 0
 
 
 @numba.njit
@@ -567,6 +587,20 @@ def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.n
         result[j - start] = data.get(j, np.uint32(0))
     return result
 
+@numba.njit
+def log_sum_exp(x):
+    """The Log-Sum-Exp trick, computes log(sum_i exp(x_i))"""
+    m = np.max(x)
+    return m + np.log(np.sum(np.exp(x - m)))
+
+@numba.njit
+def log_sum(log_a, log_b):
+    """Compute log(a + b) from log(a), log(b)"""
+    if log_b > log_a:
+        return log_b + np.log1p(np.exp(log_a - log_b))
+    else:
+        return log_a + np.log1p(np.exp(log_b - log_a))
+
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
         assert ki.db.db.mode == "r", "Database must be opened in read mode."
@@ -632,6 +666,7 @@ class MergeSearch(object):
                 [
                     ("id", np.uint32),
                     ("pvalue", np.float64),
+                    ("evalue", np.float64),
                     ("count", np.uint32),
                     ("normcount", np.float64),
                     ("overlap", np.float64),
@@ -692,6 +727,7 @@ class MergeSearch(object):
             "qseqid",
             "hogid",
             "hoglevel",
+            "evalue",
             "family_p",
             "family_count",
             "family_normcount",
@@ -712,6 +748,7 @@ class MergeSearch(object):
                             "qseq_offset": i + 1,
                             "hog_offset": subfam_results["id"][i, j],
                             "qseq_overlap": family_results["overlap"][i, j],
+                            "evalue": family_results["evalue"][i, j],
                             "family_p": family_results["pvalue"][i, j],
                             "subfamily_score": subfam_results["score"][i, j],
                             "family_count": family_results["count"][i, j],
@@ -723,11 +760,23 @@ class MergeSearch(object):
         if len(df) == 0:
             return df
 
-        # cast to pd dtype so that we can use pd.NA...
-        df["qseq_offset"] = df["qseq_offset"].astype("UInt32")
-        df["hog_offset"] = df["hog_offset"].astype("UInt32")
-        df["family_count"] = df["family_count"].astype("UInt32")
-        df["subfamily_count"] = df["subfamily_count"].astype("UInt32")
+
+        int_cols = ["qseq_offset", "hog_offset", "family_count", "subfamily_count"]
+        float_cols = ["evalue"]
+
+        # Convert to nullable pandas dtypes
+        for col in int_cols:
+            df[col] = df[col].astype("UInt32")
+
+        for col in float_cols:
+            df[col] = df[col].astype("Float64")
+
+        # Set empty as NA, except the columns specified
+        na_value = 0
+        skip_cols = set(int_cols + float_cols)
+        for col in df.columns:
+            if col not in skip_cols:
+                df.loc[df[col] == na_value, col] = pd.NA
 
         # set empty as NA
         na_value = 0
@@ -876,6 +925,9 @@ class MergeSearch(object):
                 qres["id"][:] = idx
                 qres["count"][:] = thread_fam_counts[idx]
 
+                #N_q = len(qres)
+                #correction_factor = np.log(N_q)
+
                 # 2. Fast family filtering
                 #     - a. filter by count. We are only interested in families
                 #     that have at least their expected number of k-mer matches,
@@ -912,21 +964,21 @@ class MergeSearch(object):
                 # fail with a false negative. I could not observe any instances of this.
                 p = ref_fam_prob[qres["id"]]
                 kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
-                qres = qres[kl_div > -np.log(alpha_cutoff)/n]
+                candidates = qres[kl_div > -np.log(alpha_cutoff)/n]
 
                 if len(qres) == 0:
                     continue
 
                 # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
-                for i in numba.prange(len(qres)):
-                    qres["pvalue"][i] = min(
+                for i in range(len(candidates)):
+                    candidates["pvalue"][i] = min(
                         float(MAX_LOGP),
                         max(
                             0.0,
                             (
                                 binom_neglogccdf(
-                                    qres["count"][i],
+                                    candidates["count"][i],
                                     len(r1),
                                     ref_fam_prob[qres["id"][i]],
                                 )
@@ -936,25 +988,84 @@ class MergeSearch(object):
                     )
 
                 # Filter on the actual p-value
-                alpha = -1.0 * np.log(alpha_cutoff)
-                qres = qres[qres["pvalue"] >= alpha]
+                neglog_alpha = -1.0 * np.log(alpha_cutoff)
+                #qres = qres[qres["pvalue"] > neglog_alpha]
+
+                N = len(ref_fam_prob)
+
+                # Compute database-wide e-value for every hit family Fi
+                for i in range(len(candidates)):
+                    k_i = candidates["count"][i]
+                    p_i = ref_fam_prob[candidates["id"][i]]
+
+                    # logp = np.zeros(qres.size)
+                    # jj = 0
+                    # for j in range(len(qres)):
+                    #     p_j = ref_fam_prob[qres["id"][j]]
+                    #     logp[jj] = -binom_neglogccdf(k_i, n, p_j)
+                    #     jj += 1
+
+                    evalue_thr = 10
+                    log_evalue_thr = np.log(evalue_thr)
+
+                    partial_log_evalue = -np.inf  # log(0)
+                    max_logp = -np.inf
+                    #logp = np.zeros(ref_fam_prob.size)
+                    jj = 0
+
+                    for j in range(len(ref_fam_prob)):
+                        p_j = ref_fam_prob[j]
+                        logp_j = -binom_neglogccdf(k_i, n, p_j)
+
+                        # Update log-sum-exp in a stable way
+                        if partial_log_evalue == -np.inf:
+                            partial_log_evalue = logp_j
+                        else:
+                            partial_log_evalue = log_sum(partial_log_evalue, logp_j)
+
+                        #logp[jj] = logp_j
+                        jj += 1
+
+                        if partial_log_evalue > log_evalue_thr:
+                            break
+
+                    #evalue = np.exp(log_sum_exp(logp))
+
+                    # If we broke the loop, the evalue is underestimated but
+                    # is too bad already and will be filtered out. Otherwise,
+                    # it's the correct value
+                    evalue = np.exp(partial_log_evalue)
+                    candidates["evalue"][i] = evalue
+                    evalue_old_i = N * binom_ccdf(k_i, n, p_i)
+
+                    if evalue < alpha_cutoff:
+                        a = 1
+
+                #qres["pvalue"] = -np.exp(qres["pvalue"])
+                candidates = candidates[candidates["evalue"] < evalue_thr]
+                candidates = candidates[candidates["pvalue"] > neglog_alpha]
+
+                qres = candidates
+
                 # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
-                qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
+                #qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
                 if len(qres) == 0:
                     continue
 
                 # 4. Compute normalised count
-                expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        len(r1) - expected_count
-                )
+                #expected_count = ref_fam_prob[qres["id"]] * len(r1)
+                #qres["normcount"][:] = qres["count"]
+                #(qres["count"] - expected_count) / (
+                       # len(r1) - expected_count
+                #)
 
                 # 5. Store results
-                # - a. sort by normcount, then overlap, then p-value for tie-breaking
+                # - a. sort families
                 qres = family_result_sort(qres, top_n_fams)
 
                 # - b. store results
                 family_results["id"][zz, :top_n_fams] = qres["id"][:top_n_fams] + 1
+                family_results["evalue"][zz, :top_n_fams] = qres["evalue"][:top_n_fams]
                 family_results["pvalue"][zz, :top_n_fams] = qres["pvalue"][:top_n_fams]
                 family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
                 family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
@@ -1007,4 +1118,5 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
+        #return func
         return numba.jit(func, parallel=True, nopython=True, nogil=True)

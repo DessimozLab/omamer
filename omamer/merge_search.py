@@ -611,6 +611,8 @@ class MergeSearch(object):
 
         self.include_extant_genes = include_extant_genes
 
+        self.fam_prob_order = np.argsort(self.ref_fam_prob)[::-1]
+
     # want to cache these, so that we don't load multiple times when chunking queries
     @cached_property
     def trans(self):
@@ -696,6 +698,7 @@ class MergeSearch(object):
             self.level_arr,
             top_n_fams=top_n_fams,
             ref_fam_prob=self.ref_fam_prob,
+            fam_prob_order=self.fam_prob_order,
             ref_hog_prob=self.ref_hog_prob,
             alpha_cutoff=alpha,
             sst=sst,
@@ -857,6 +860,7 @@ class MergeSearch(object):
                 level_arr,
                 top_n_fams,
                 ref_fam_prob,
+                fam_prob_order,
                 ref_hog_prob,
                 alpha_cutoff,
                 sst,
@@ -966,8 +970,58 @@ class MergeSearch(object):
                 kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
                 candidates = qres[kl_div > -np.log(alpha_cutoff)/n]
 
-                if len(qres) == 0:
+                if len(candidates) == 0:
                     continue
+
+                # Filter on the actual p-value
+                neglog_alpha = -1.0 * np.log(alpha_cutoff)
+                #qres = qres[qres["pvalue"] > neglog_alpha]
+
+                N = len(ref_fam_prob)
+                evalue_thr = 10
+                log_evalue_thr = np.log(evalue_thr)
+
+                # Compute database-wide e-value for every hit family Fi
+                for i in range(len(candidates)):
+                    k_i = candidates["count"][i]
+
+                    partial_log_evalue = -np.inf  # log(0)
+                    jj = 0
+
+                    # Family order is from the most probable families
+                    # to the least probable. That is to stop the evalue
+                    # prefix computation as fast as possible
+                    for j in fam_prob_order:
+                        p_j = ref_fam_prob[j]
+                        logp_j = -binom_neglogccdf(k_i, n, p_j)
+
+                        # Update log-sum-exp in a stable way
+                        if partial_log_evalue == -np.inf:
+                            partial_log_evalue = logp_j
+                        else:
+                            partial_log_evalue = log_sum(partial_log_evalue, logp_j)
+
+                        jj += 1
+
+                        if partial_log_evalue > log_evalue_thr:
+                            break
+
+                    #evalue = np.exp(log_sum_exp(logp))
+                    #print(jj)
+
+                    # If we broke the loop, the evalue is underestimated but
+                    # is too bad already and will be filtered out. Otherwise,
+                    # it's the correct value
+                    evalue = np.exp(partial_log_evalue)
+                    candidates["evalue"][i] = evalue
+                    #evalue_old_i = N * binom_ccdf(k_i, n, p_i)
+
+                    #if evalue < alpha_cutoff:
+                    #    a = 1
+
+                #qres["pvalue"] = -np.exp(qres["pvalue"])
+
+                candidates = candidates[candidates["evalue"] < evalue_thr]
 
                 # 3. compute p-value for each family. note: in negative log units
                 correction_factor = np.log(len(ref_fam_prob))
@@ -987,62 +1041,6 @@ class MergeSearch(object):
                         ),
                     )
 
-                # Filter on the actual p-value
-                neglog_alpha = -1.0 * np.log(alpha_cutoff)
-                #qres = qres[qres["pvalue"] > neglog_alpha]
-
-                N = len(ref_fam_prob)
-
-                # Compute database-wide e-value for every hit family Fi
-                for i in range(len(candidates)):
-                    k_i = candidates["count"][i]
-                    p_i = ref_fam_prob[candidates["id"][i]]
-
-                    # logp = np.zeros(qres.size)
-                    # jj = 0
-                    # for j in range(len(qres)):
-                    #     p_j = ref_fam_prob[qres["id"][j]]
-                    #     logp[jj] = -binom_neglogccdf(k_i, n, p_j)
-                    #     jj += 1
-
-                    evalue_thr = 10
-                    log_evalue_thr = np.log(evalue_thr)
-
-                    partial_log_evalue = -np.inf  # log(0)
-                    max_logp = -np.inf
-                    #logp = np.zeros(ref_fam_prob.size)
-                    jj = 0
-
-                    for j in range(len(ref_fam_prob)):
-                        p_j = ref_fam_prob[j]
-                        logp_j = -binom_neglogccdf(k_i, n, p_j)
-
-                        # Update log-sum-exp in a stable way
-                        if partial_log_evalue == -np.inf:
-                            partial_log_evalue = logp_j
-                        else:
-                            partial_log_evalue = log_sum(partial_log_evalue, logp_j)
-
-                        #logp[jj] = logp_j
-                        jj += 1
-
-                        if partial_log_evalue > log_evalue_thr:
-                            break
-
-                    #evalue = np.exp(log_sum_exp(logp))
-
-                    # If we broke the loop, the evalue is underestimated but
-                    # is too bad already and will be filtered out. Otherwise,
-                    # it's the correct value
-                    evalue = np.exp(partial_log_evalue)
-                    candidates["evalue"][i] = evalue
-                    evalue_old_i = N * binom_ccdf(k_i, n, p_i)
-
-                    if evalue < alpha_cutoff:
-                        a = 1
-
-                #qres["pvalue"] = -np.exp(qres["pvalue"])
-                candidates = candidates[candidates["evalue"] < evalue_thr]
                 candidates = candidates[candidates["pvalue"] > neglog_alpha]
 
                 qres = candidates
@@ -1054,7 +1052,7 @@ class MergeSearch(object):
 
                 # 4. Compute normalised count
                 #expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                #qres["normcount"][:] = qres["count"]
+                qres["normcount"][:] = qres["count"]
                 #(qres["count"] - expected_count) / (
                        # len(r1) - expected_count
                 #)

@@ -206,8 +206,14 @@ def main():
         "--family_alpha",
         default=1e-6,
         type=float,
-        help="Significance threshold used when filtering families.",
-    )
+        help="P-value threshold used when filtering families.",
+    ),
+    search_parser.add_argument(
+        "--evalue",
+        default=10,
+        type=float,
+        help="E-value threshold used when filtering families",
+    ),
     search_parser.add_argument(
         "-fo",
         "--family_only",

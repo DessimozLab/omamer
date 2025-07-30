@@ -213,6 +213,7 @@ def search(args):
                 ids=ids,
                 top_n_fams=args.top_n_fams,
                 alpha=args.family_alpha,
+                evalue_thr=args.evalue,
                 sst=args.threshold,
                 family_only=args.family_only,
                 ref_taxon_off=ref_taxoff,

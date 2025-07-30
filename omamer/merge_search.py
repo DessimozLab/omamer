@@ -652,8 +652,9 @@ class MergeSearch(object):
         self,
         seqs,
         ids,
-        top_n_fams=1,
-        alpha=1e-6,
+        top_n_fams,
+        alpha,
+        evalue_thr,
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
@@ -701,6 +702,7 @@ class MergeSearch(object):
             fam_prob_order=self.fam_prob_order,
             ref_hog_prob=self.ref_hog_prob,
             alpha_cutoff=alpha,
+            evalue_thr=evalue_thr,
             sst=sst,
             family_only=family_only,
         )
@@ -863,6 +865,7 @@ class MergeSearch(object):
                 fam_prob_order,
                 ref_hog_prob,
                 alpha_cutoff,
+                evalue_thr,
                 sst,
                 family_only,
         ):
@@ -977,8 +980,6 @@ class MergeSearch(object):
                 neglog_alpha = -1.0 * np.log(alpha_cutoff)
                 #qres = qres[qres["pvalue"] > neglog_alpha]
 
-                N = len(ref_fam_prob)
-                evalue_thr = 10
                 log_evalue_thr = np.log(evalue_thr)
 
                 # Compute database-wide e-value for every hit family Fi

@@ -980,6 +980,7 @@ class MergeSearch(object):
                 neglog_alpha = -1.0 * np.log(alpha_cutoff)
                 #qres = qres[qres["pvalue"] > neglog_alpha]
 
+                evalue_thr = alpha_cutoff * len(ref_fam_prob)
                 log_evalue_thr = np.log(evalue_thr)
 
                 # Compute database-wide e-value for every hit family Fi

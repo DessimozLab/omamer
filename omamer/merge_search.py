@@ -983,6 +983,8 @@ class MergeSearch(object):
                 evalue_thr = alpha_cutoff * len(ref_fam_prob)
                 log_evalue_thr = np.log(evalue_thr)
 
+
+
                 # Compute database-wide e-value for every hit family Fi
                 for i in range(len(candidates)):
                     k_i = candidates["count"][i]
@@ -1036,7 +1038,7 @@ class MergeSearch(object):
                                 binom_neglogccdf(
                                     candidates["count"][i],
                                     len(r1),
-                                    ref_fam_prob[qres["id"][i]],
+                                    ref_fam_prob[candidates["id"][i]],
                                 )
                                 - correction_factor
                             ),

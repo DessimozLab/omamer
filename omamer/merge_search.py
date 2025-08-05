@@ -29,6 +29,7 @@ from time import time
 import numba
 import numpy as np
 import pandas as pd
+import random
 
 
 from ._utils import LOG
@@ -601,6 +602,25 @@ def log_sum(log_a, log_b):
     else:
         return log_a + np.log1p(np.exp(log_b - log_a))
 
+@numba.njit
+def draw_query(deck, ptr1, n):
+    total = deck.shape[0]
+    # If we're about to run off the end, reshuffle and restart
+    if ptr1 + n > total:
+        np.random.shuffle(deck)
+        ptr1 = 0
+    # Slice out the window—make a copy so future reshuffles don't corrupt it
+    q = deck[ptr1 : ptr1 + n].copy()
+    ptr1 += n
+    return q, ptr1
+
+@numba.njit
+def draw_with_replacement(deck, n):
+    q = np.empty(n, dtype=deck.dtype)
+    for i in range(n):
+        q[i] = deck[np.random.randint(0, deck.shape[0])]
+    return q
+
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
         assert ki.db.db.mode == "r", "Database must be opened in read mode."
@@ -875,6 +895,16 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
+            M = table_idx.shape[0] - 1
+            U = np.arange(M, dtype=np.int64)
+
+            # If you have an `x_flag` sentinel you skip, you can exclude it:
+            if x_flag is not None:
+                U = U[U != x_flag]
+
+            deck = U.copy()
+            np.random.shuffle(deck)
+
             # Arrays for thread-local data. We allocate them
             # in advance to avoid doing so for every query
             num_threads = numba.get_num_threads()
@@ -983,8 +1013,6 @@ class MergeSearch(object):
                 evalue_thr = alpha_cutoff * len(ref_fam_prob)
                 log_evalue_thr = np.log(evalue_thr)
 
-
-
                 # Compute database-wide e-value for every hit family Fi
                 for i in range(len(candidates)):
                     k_i = candidates["count"][i]
@@ -1065,6 +1093,82 @@ class MergeSearch(object):
                 # - a. sort families
                 qres = family_result_sort(qres, top_n_fams)
 
+
+                #print("E-value:", qres["evalue"][0], "vs", evalue_thr)
+
+                R = 100_000  # number of random queries to generate
+                n = len(r1)  # query size
+                p1 = np.array(list(range(n)))
+                N = len(ref_fam_prob)
+                ptr = 0
+
+                gen_time = 0
+                search_time = 0
+                check_time = 0
+
+                fp_counts = 0
+                for r in range(R):
+
+                    t0 = clock()
+                    #query = random.choice(U, n)
+                    #query, ptr = draw_query(deck, ptr, n)
+                    query = draw_with_replacement(deck, n)
+                    t1 = clock()
+                    gen_time += t1 - t0
+
+                    t0 = clock()
+                    for i in range(thread_num_hit_fams):
+                        family = thread_hit_fams[i]
+                        thread_fam_counts[family] = 0
+                        thread_fam_lowloc[family] = -1
+                        thread_fam_highloc[family] = -1
+
+                    for i in range(thread_num_hit_hogs):
+                        hog = thread_hit_hogs[i]
+                        thread_hog_counts[hog] = 0
+
+                    thread_num_hit_fams = 0
+                    thread_num_hit_hogs = 0
+
+                    thread_num_hit_fams, thread_num_hit_hogs = search_seq_kmers(
+                        query,
+                        p1,
+                        hog_tab,
+                        fam_tab,
+                        x_flag,
+                        table_idx,
+                        table_buff,
+                        thread_hog_counts,
+                        thread_fam_counts,
+                        thread_fam_lowloc,
+                        thread_fam_highloc,
+                        thread_hit_fams,
+                        thread_num_hit_fams,
+                        thread_hit_hogs,
+                        thread_num_hit_hogs,
+                    )
+
+                    num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
+                    num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
+
+                    t1 = clock()
+                    search_time += t1 - t0
+
+                    t0 = clock()
+                    for i in range(thread_num_hit_fams):
+                        family = thread_hit_fams[i]
+                        if thread_fam_counts[family] >= qres["count"][0]:
+                            fp_counts += 1
+
+                    t1 = clock()
+                    check_time += t1 - t0
+
+                #print("Gen time:", gen_time / 1000)
+                #print("Search time:", search_time / 1000)
+                #print("Check time:", check_time / 1000)
+
+                fp_counts = fp_counts / R
+                print("Empirical e-value:", fp_counts, "vs", qres["evalue"][0])
                 # - b. store results
                 family_results["id"][zz, :top_n_fams] = qres["id"][:top_n_fams] + 1
                 family_results["evalue"][zz, :top_n_fams] = qres["evalue"][:top_n_fams]

@@ -184,6 +184,8 @@ def search(args):
 
     _ensure_data_loaded(ms)
 
+
+
     search_times = []
 
     search_pbar_kwargs = {
@@ -299,6 +301,13 @@ def _ensure_data_loaded(ms):
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
+    #
+    # print("Recomputing family probabilities...")
+    # from .merge_search import recompute_probs
+    # ms.ref_fam_prob = recompute_probs(ms.kmer_table["idx"],
+    #                                   ms.kmer_table["buff"],
+    #                                   ms.hog_tab["FamOff"])
+    # print("OK")
 
     print_message("\nFinished loading required data\n")
     print_line(80)

@@ -621,6 +621,28 @@ def draw_with_replacement(deck, n):
         q[i] = deck[np.random.randint(0, deck.shape[0])]
     return q
 
+# @numba.njit
+# def recompute_probs(idx, tab, h2f):
+#     c = np.zeros(h2f.max() + 1, dtype=np.uint32)
+#     for i in range(len(idx) - 1):
+#         hogs = tab[idx[i] : idx[i + 1]]
+#         c[h2f[hogs]] += 1
+#
+#     return c / idx[-1]
+@numba.njit
+def recompute_probs(table_idx, table_buff, hog2fam):
+    counts_j = np.zeros(hog2fam.max() + 1, dtype=np.uint32)
+
+    for kmer in range(len(table_idx) - 1):
+        start, end = table_idx[kmer], table_idx[kmer + 1]
+        hogs = table_buff[start:end]
+        fams = hog2fam[hogs]
+        for fam in fams:
+            counts_j[fam] += 1
+
+    p_recomputed = counts_j / table_idx[-1]
+    return p_recomputed
+
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
         assert ki.db.db.mode == "r", "Database must be opened in read mode."
@@ -631,7 +653,13 @@ class MergeSearch(object):
 
         self.include_extant_genes = include_extant_genes
 
-        self.fam_prob_order = np.argsort(self.ref_fam_prob)[::-1]
+        print("Recomputing family probabilities...")
+        self.recomputed_fam_probs = recompute_probs(self.kmer_table["idx"],
+                                                    self.kmer_table["buff"],
+                                                    self.hog_tab["FamOff"])
+        print("OK")
+        self.fam_prob_order = np.argsort(self.recomputed_fam_probs)[::-1]
+
 
     # want to cache these, so that we don't load multiple times when chunking queries
     @cached_property
@@ -703,6 +731,22 @@ class MergeSearch(object):
             ),
         )
 
+        debug_serialize = True
+        import os
+        import joblib
+        if debug_serialize:
+            print("Debug serialization...")
+
+            if not os.path.exists('ref_fam_prob.joblib'):
+                joblib.dump(self.ref_fam_prob, 'ref_fam_prob.joblib')
+            if not os.path.exists('table_idx.joblib'):
+                joblib.dump(self.kmer_table["idx"], 'table_idx.joblib')
+            if not os.path.exists('table_buff.joblib'):
+                joblib.dump(self.kmer_table["buff"], 'table_buff.joblib')
+            if not os.path.exists('hog2fam.joblib'):
+                joblib.dump(self.hog_tab["FamOff"], 'hog2fam.joblib')
+            print("OK")
+
         # perform the search. arguments are given like this as we are using numba.
         self._lookup(
             family_results,
@@ -718,7 +762,7 @@ class MergeSearch(object):
             self.hog_tab,
             self.level_arr,
             top_n_fams=top_n_fams,
-            ref_fam_prob=self.ref_fam_prob,
+            ref_fam_prob=self.recomputed_fam_probs,
             fam_prob_order=self.fam_prob_order,
             ref_hog_prob=self.ref_hog_prob,
             alpha_cutoff=alpha,

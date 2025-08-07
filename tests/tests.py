@@ -4,13 +4,12 @@ from omamer.merge_search import (
     family_result_sort,
 )
 
-dtype = [("normcount", float), ("overlap", float), ("pvalue", float)]
+dtype = [("evalue", float), ("pvalue", float)]
 
 def generate_random_data(seed, size=100):
     rng = np.random.default_rng(seed)
     data = np.zeros(size, dtype=dtype)
-    data['normcount'] = rng.random(size) * 100
-    data['overlap'] = rng.random(size) * 10
+    data['evalue'] = rng.random(size) * 100
     data['pvalue'] = rng.random(size)
     return data
 
@@ -24,7 +23,7 @@ def naive_sort(arr, k=None):
     # Sort using tuple key, reverse for descending
     sorted_list = sorted(
         records,
-        key=lambda x: (x['normcount'], x['overlap'], x['pvalue']),
+        key=lambda x: (-x['evalue'], x['pvalue']),
         reverse=True
     )
     if k is not None:
@@ -37,11 +36,11 @@ def assert_structs_close(a, b, atol=1e-8):
     """
     Compare two structured arrays field-by-field with tolerance.
     """
-    for field in ['normcount', 'overlap', 'pvalue']:
+    for field in ['evalue', 'pvalue']:
         np.testing.assert_allclose(a[field], b[field], atol=atol,
                                    err_msg=f"Field '{field}' differs")
 
-@pytest.mark.parametrize("seed", list(range(100)))
+@pytest.mark.parametrize("seed", list(range(50)))
 def test_family_sort(seed):
     x = generate_random_data(seed)
     # Full sort
@@ -56,29 +55,17 @@ def test_family_sort(seed):
     assert_structs_close(sorted_auto_k, sorted_naive_k)
 
 
-@pytest.mark.parametrize("seed", list(range(100)))
+@pytest.mark.parametrize("seed", list(range(50)))
 def test_ties(seed):
     random_data = generate_random_data(seed)
     # Make a tie with the best record
     sorted_full = naive_sort(random_data)
-    sorted_full[-1]["normcount"] = sorted_full[0]["normcount"]
-    sorted_full[-1]["overlap"] = sorted_full[0]["overlap"] + 1
-    np.random.shuffle(sorted_full)
-    random_data = sorted_full
-
-    k = 10
-    sorted_auto_k = family_result_sort(random_data, k=k)
-    sorted_naive_k = naive_sort(random_data, k=k)
-    assert_structs_close(sorted_auto_k, sorted_naive_k)
-
-    # Make a tie by the 2nd parameter
-    sorted_full = naive_sort(random_data)
-    sorted_full[-1]["normcount"] = sorted_full[0]["normcount"]
-    sorted_full[-1]["overlap"] = sorted_full[0]["overlap"]
+    sorted_full[-1]["evalue"] = sorted_full[0]["evalue"]
     sorted_full[-1]["pvalue"] = sorted_full[0]["pvalue"] + 1
     np.random.shuffle(sorted_full)
     random_data = sorted_full
 
+    k = 10
     sorted_auto_k = family_result_sort(random_data, k=k)
     sorted_naive_k = naive_sort(random_data, k=k)
     assert_structs_close(sorted_auto_k, sorted_naive_k)

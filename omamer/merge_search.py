@@ -110,11 +110,8 @@ def fam_res_less(x1, x2):
     """
     Same as fam_res_compare, but operates as '<'
     """
-    if x1["normcount"] != x2["normcount"]:
-        return x1["normcount"] < x2["normcount"]
-
-    if x1["overlap"] != x2["overlap"]:
-        return x1["overlap"] < x2["overlap"]
+    if x1["evalue"] != x2["evalue"]:
+        return x1["evalue"] > x2["evalue"]
 
     if x1["pvalue"] != x2["pvalue"]:
         return x1["pvalue"] < x2["pvalue"]
@@ -128,8 +125,7 @@ def fam_res_le(x1, x2):
     Same as fam_res_compare, but operates as '<='
     """
     if not fam_res_less(x1, x2):
-        return x1["normcount"] == x2["normcount"] and \
-            x1["overlap"] == x2["overlap"] and \
+        return x1["evalue"] == x2["evalue"] and \
             x1["pvalue"] == x2["pvalue"]
 
     return True

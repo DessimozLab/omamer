@@ -1268,6 +1268,10 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         ent_tab = ent_tab[ent_tab["hogid"].map(lambda x: x in oma_hog2hog)]
 
+        # Make ent_tab into a dict {protID -> (hogid, species)} as it's
+        # more efficient for querying individual protID than pd.DataFrame.loc
+        #ent_tab = ent_tab.to_dict("index")
+
         LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
 
         prot_off = 0  # pointer to protein in protein table
@@ -1289,13 +1293,36 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         sanitiser = Alphabet(n=21).sanitise_seq
 
+        from omamer._clock import clock, as_seconds
+        loc_time = 0
+        encode_time = 0
+        app1_time = 0
+        app2_time = 0
+        iter = 0
+
         # go over all fasta records
         for fasta_fn in fasta_paths:
+            if iter % 20 == 0:
+                print("Loc time", as_seconds(loc_time))
+                print("Encode time", as_seconds(encode_time))
+                print("App1 time", as_seconds(app1_time))
+                print("App2 time", as_seconds(app2_time))
+                total_time = loc_time + encode_time + app1_time + app2_time
+                print("Total time", as_seconds(total_time))
+                # loc_time = 0
+                # encode_time = 0
+                # app1_time = 0
+                # app2_time = 0
+                iter = 0
+
+            iter += 1
+
             with auto_open(fasta_fn, "rt") as fp:
                 for rec in tqdm(
                     SeqIO.parse(fp, "fasta"),
                     desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
                 ):
+
                     if rec.description in ent_tab.index:
                         # this seems to be most common, full header is used in standalone orthoXML
                         prot_id = rec.description
@@ -1306,16 +1333,23 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         # otherwise we can't do anything...
                         continue
 
+                    t0 = clock()
                     # get hog id, skip if we have filtered it out
                     r = ent_tab.loc[prot_id]
                     hog_id = r["hogid"]
                     sp = r["species"]
+
+                    t1 = clock()
+                    loc_time += t1 - t0
+
                     # (hog_id, sp) = entry_mapping[prot_id]
                     if hog_id not in oma_hog2hog:
                         continue
 
                     # check if the species of the sequence should be loaded
                     if sp in species:
+
+                        t0 = clock()
                         # store
                         sp_off = sp2sp_off[sp]
 
@@ -1324,12 +1358,20 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         seq_len = len(seq) - 1
                         seq_buffs.append(seq)
 
+                        t1 = clock()
+                        encode_time += t1 - t0
+
+                        t0 = clock()
+
                         # store protein information
                         prot_id = prot_id.encode("ascii")
                         prot_tab.append(
                             [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
                         )
+                        t1 = clock()
+                        app1_time += t1 - t0
 
+                        t0 = clock()
                         # store protein id
                         prot_id_buff.append(
                             np.frombuffer(prot_id, dtype=tables.StringAtom(1))
@@ -1339,8 +1381,18 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         hog = oma_hog2hog[hog_id]
                         hog2protoffs[hog].add(prot_off)
 
+                        t1 = clock()
+                        app2_time += t1 - t0
+
                         # update offset of protein row in table
                         prot_off += 1
+
+        print("Loc time", as_seconds(loc_time))
+        print("Encode time", as_seconds(encode_time))
+        print("App1 time", as_seconds(app1_time))
+        print("App2 time", as_seconds(app2_time))
+        total_time = loc_time + encode_time + app1_time + app2_time
+        print("Total time", as_seconds(total_time))
 
         # store species info
         sp_rows = [()] * len(species)  # keep sorted

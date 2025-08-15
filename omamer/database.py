@@ -1270,7 +1270,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         # Make ent_tab into a dict {protID -> (hogid, species)} as it's
         # more efficient for querying individual protID than pd.DataFrame.loc
-        ent_tab = ent_tab.to_dict("index")
+        ent_tab = ent_tab[~ent_tab.index.duplicated(keep="first")].to_dict("index")
 
         LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
 
@@ -1302,8 +1302,6 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         # go over all fasta records
         for fasta_fn in fasta_paths:
-
-
             with auto_open(fasta_fn, "rt") as fp:
                 for rec in tqdm(
                     SeqIO.parse(fp, "fasta"),

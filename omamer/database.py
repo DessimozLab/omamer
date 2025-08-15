@@ -1270,7 +1270,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         # Make ent_tab into a dict {protID -> (hogid, species)} as it's
         # more efficient for querying individual protID than pd.DataFrame.loc
-        #ent_tab = ent_tab.to_dict("index")
+        ent_tab = ent_tab.to_dict("index")
 
         LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
 
@@ -1302,31 +1302,32 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         # go over all fasta records
         for fasta_fn in fasta_paths:
-            if iter % 20 == 0:
-                print("Loc time", as_seconds(loc_time))
-                print("Encode time", as_seconds(encode_time))
-                print("App1 time", as_seconds(app1_time))
-                print("App2 time", as_seconds(app2_time))
-                total_time = loc_time + encode_time + app1_time + app2_time
-                print("Total time", as_seconds(total_time))
-                # loc_time = 0
-                # encode_time = 0
-                # app1_time = 0
-                # app2_time = 0
-                iter = 0
 
-            iter += 1
 
             with auto_open(fasta_fn, "rt") as fp:
                 for rec in tqdm(
                     SeqIO.parse(fp, "fasta"),
                     desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
                 ):
+                    if iter % 1000 == 0:
+                        print("Loc time", as_seconds(loc_time))
+                        print("Encode time", as_seconds(encode_time))
+                        print("App1 time", as_seconds(app1_time))
+                        print("App2 time", as_seconds(app2_time))
+                        total_time = loc_time + encode_time + app1_time + app2_time
+                        print("Total time", as_seconds(total_time))
+                        # loc_time = 0
+                        # encode_time = 0
+                        # app1_time = 0
+                        # app2_time = 0
+                        iter = 0
 
-                    if rec.description in ent_tab.index:
+                    iter += 1
+
+                    if rec.description in ent_tab:
                         # this seems to be most common, full header is used in standalone orthoXML
                         prot_id = rec.description
-                    elif rec.id in ent_tab.index:
+                    elif rec.id in ent_tab:
                         # otherwise we might only see the first part of the id.
                         prot_id = rec.id
                     else:
@@ -1335,7 +1336,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
                     t0 = clock()
                     # get hog id, skip if we have filtered it out
-                    r = ent_tab.loc[prot_id]
+                    r = ent_tab[prot_id]
                     hog_id = r["hogid"]
                     sp = r["species"]
 
@@ -1354,7 +1355,9 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         sp_off = sp2sp_off[sp]
 
                         seq = sanitiser(str(rec.seq)) + " "  # add the padding
+
                         seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
+                        #seq = np.frombuffer(seq.encode("ascii"), dtype=np.uint8)
                         seq_len = len(seq) - 1
                         seq_buffs.append(seq)
 

@@ -30,8 +30,16 @@ class Alphabet(object):
         self.setup()
 
     def setup(self):
+        self.sanitize_translate = None
+
         if self.n == 21:
             chars = set("ACDEFGHIKLMNPQRSTVWXY")
+            # 256-byte sanitizer translation map: maps allowed characters into
+            # themselves, everything else into X
+            self.sanitize_translate = bytes(
+                bytearray((b if b in chars else ord("X") for b in range(256)))
+            )
+
             digits = np.frombuffer(b"ACDEFGHIKLMNPQRSTVWXY", dtype=np.uint8)
             lookup = np.zeros(np.max(digits) + 1, dtype=np.uint8)
             lookup[digits] = np.arange(len(digits))
@@ -93,7 +101,11 @@ class Alphabet(object):
         else:
             return self.trans[x.view(np.uint8)].view("|S1")
 
-    def sanitise_seq(self, seq):
+    def sanitise_seq(self, seq: str) -> str:
+        if self.sanitize_translate:
+            b = seq.encode("ascii", "ignore").upper()
+            return b.translate(self.sanitize_translate).decode("ascii")
+
         return "".join([x if x in self.chars else "X" for x in seq])
 
     @property

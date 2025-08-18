@@ -1298,7 +1298,9 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         encode_time = 0
         app1_time = 0
         app2_time = 0
-        iter = 0
+        iter = 1
+        num_skipped = 0
+        num_reports = 0
 
         # go over all fasta records
         for fasta_fn in fasta_paths:
@@ -1307,12 +1309,15 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                     SeqIO.parse(fp, "fasta"),
                     desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
                 ):
-                    if iter % 1000 == 0:
+                    if iter % 100000 == 0:
+                        num_reports += 1
+                        print(f"Report {num_reports}")
                         print("Loc time", as_seconds(loc_time))
                         print("Encode time", as_seconds(encode_time))
                         print("App1 time", as_seconds(app1_time))
                         print("App2 time", as_seconds(app2_time))
                         total_time = loc_time + encode_time + app1_time + app2_time
+                        print("# of seqs skipped", num_skipped)
                         print("Total time", as_seconds(total_time))
                         # loc_time = 0
                         # encode_time = 0
@@ -1330,6 +1335,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         prot_id = rec.id
                     else:
                         # otherwise we can't do anything...
+                        num_skipped += 1
                         continue
 
                     t0 = clock()
@@ -1388,11 +1394,14 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         # update offset of protein row in table
                         prot_off += 1
 
+        num_reports += 1
+        print(f"Report {num_reports}")
         print("Loc time", as_seconds(loc_time))
         print("Encode time", as_seconds(encode_time))
         print("App1 time", as_seconds(app1_time))
         print("App2 time", as_seconds(app2_time))
         total_time = loc_time + encode_time + app1_time + app2_time
+        print("# of seqs skipped", num_skipped)
         print("Total time", as_seconds(total_time))
 
         # store species info

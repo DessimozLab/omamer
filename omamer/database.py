@@ -1063,14 +1063,14 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.include_younger_fams = include_younger_fams
 
     def setup_hogparser(self, oxml_path):
-        from .HOGParser import HOGParser
+        from .orthoxml_parser import OrthoxmlParser
 
         LOG.debug("loading species table from orthoxml")
         self.oxml_path = oxml_path
-        self.hog_parser = HOGParser(oxml_path)
+        self.hog_parser = OrthoxmlParser(oxml_path)
 
     def parse_oxml(self, nspecies_below):
-        from .HOGParser import is_orthologGroup_node
+        from .orthoxml_parser import is_orthologGroup_node
 
         def generate_hog_tab(hog):
             # this is more memory intensive (we cache the results)
@@ -1142,7 +1142,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         hogs = []
         entries = []
         LOG.debug("loading hog structure and membership from orthoxml")
-        for hog in tqdm(self.hog_parser.HOGs(auto_clean=True), desc="Parsing HOGs"):
+        for hog in tqdm(self.hog_parser.iter_hogs(auto_clean=True), desc="Parsing HOGs"):
             hog_data = list(filter(lambda x: x is not None, generate_hog_tab(hog)))
             gene_data = list(generate_prot_tab(hog))
             hog_data += list(generate_hogs_for_prot(hog, gene_data))
@@ -1277,7 +1277,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         prot_off = 0  # pointer to protein in protein table
 
         # store rows for species and protein tables and sequence buffer
-        seq_buffs = []
+        blob = bytearray()
 
         prot_tab = self.db.create_table(
             "/",
@@ -1291,7 +1291,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
         )
 
-        sanitiser = Alphabet(n=21).sanitise_seq
+        sanitiser = Alphabet(n=21).sanitize_translate
 
         from omamer._clock import clock, as_seconds
         loc_time = 0
@@ -1309,7 +1309,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                     SeqIO.parse(fp, "fasta"),
                     desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
                 ):
-                    if iter % 100000 == 0:
+                    if iter % 100_000 == 0:
                         num_reports += 1
                         print(f"Report {num_reports}")
                         print("Loc time", as_seconds(loc_time))
@@ -1353,17 +1353,16 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
                     # check if the species of the sequence should be loaded
                     if sp in species:
-
                         t0 = clock()
                         # store
                         sp_off = sp2sp_off[sp]
 
-                        seq = sanitiser(str(rec.seq)) + " "  # add the padding
-
-                        seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
-                        #seq = np.frombuffer(seq.encode("ascii"), dtype=np.uint8)
-                        seq_len = len(seq) - 1
-                        seq_buffs.append(seq)
+                        # sanitize sequence and encode as a byte array
+                        b = str(rec.seq).encode("ascii", "ignore").translate(sanitiser)
+                        seq_len = len(b) - 1
+                        blob.extend(b)
+                        # add whitespace
+                        blob.append(32)
 
                         t1 = clock()
                         encode_time += t1 - t0
@@ -1420,8 +1419,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         if prot_off != len(ent_tab):
             raise ValueError("Did not find all protein sequences ({} / {})".format(prot_off, len(ent_tab)))
 
-        seq_buff = np.concatenate(seq_buffs)
-        return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
+        #seq_buff = np.concatenate(seq_buffs)
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, blob
 
     def add_taxid_col(self):
         """

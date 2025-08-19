@@ -267,7 +267,7 @@ class AllSpecies(object):
 
         # Initialise species table
         self._species = {
-            species.name: species for species in hog_parser._species(no_xrefs, is_oma)
+            species.name: species for species in hog_parser.iter_species(no_xrefs, is_oma)
         }
 
         # Setup mappings for those that exist:
@@ -542,7 +542,7 @@ class Species(object):
             self.species_code = first_gene.attrib.pop("protId")[:5]
 
 
-class HOGParser(object):
+class OrthoxmlParser(object):
     """
     HOG parser interface.
     """
@@ -580,7 +580,7 @@ class HOGParser(object):
         is_not_oma = kwargs.get("is_not_oma", None)
         self.is_oma = False if is_not_oma and self.is_oma is True else self.is_oma
 
-    def _set_context(self, fn=None):
+    def _set_context(self, fn=None, events=("start", "end"), tag=None):
         """
         Sets up the context.
         """
@@ -589,13 +589,21 @@ class HOGParser(object):
         else:
             self.fp.seek(0)
 
-        self.context = etree.iterparse(self.fp, events=("start", "end"))
+        # If "tag" is passed, set the parser context to only yield
+        # tags of interest. This makes it parse faster since the barrier
+        # native code -> python is not passed for the tags we're
+        # not interested in
+        if not tag:
+            self.context = etree.iterparse(self.fp, events=events)
+        else:
+            self.context = etree.iterparse(self.fp, events=events, tag=tag)
 
-    def reset(self):
+    def reset(self, events=("start", "end"), tag=None):
         """
-        Resets the context
+        Resets the context of the lxml parser. This is used
+        to reinitialize the parser to parse different types of tags.
         """
-        self._set_context()
+        self._set_context(events=events, tag=tag)
 
     def __enter__(self):
         return self
@@ -604,36 +612,35 @@ class HOGParser(object):
         self.fp.close()
         del self.context
 
-    def _species(self, no_xrefs=False, is_oma=False):
+    def iter_species(self, no_xrefs=False, is_oma=False):
         """
         Iterates over species, yielding them until we hit the groups node.
         """
+
+        # Set the parser to only yield species and groups, any namespace
+        self.reset(tag=("{*}species", "{*}groups"))
+
         with tqdm(
             desc="Loading species",
             unit=" species",
             miniters=0,
-            mininterval=10,
+            mininterval=1,
             maxinterval=60,
         ) as pbar:
             for ev, el in self.context:
-                if not is_tag_name(el, ["species", "groups"]):
-                    pass
-
-                elif ev == "end" and is_tag_name(el, "species"):
-                    pbar.update()
+                if ev == "end" and is_tag_name(el, "species"):
+                    pbar.update(1)
                     yield Species(el, no_xrefs, is_oma)
 
                     el.clear()
-                    for a in el.xpath("ancestor-or-self::*"):
-                        while a.getprevious() is not None:
-                            del a.getparent()[0]
-                    del el
+                    while el.getprevious() is not None:
+                        del el.getparent()[0]
 
                 elif ev == "start" and is_tag_name(el, "groups"):
                     # Done with species
                     break
 
-    def HOGs(self, auto_clean=False):
+    def iter_hogs(self, auto_clean=False):
         """
         Iterates over HOGs, yielding them. If in low mem, remove them
         (call cleanup) as soon as done with them to save memory!
@@ -641,29 +648,24 @@ class HOGParser(object):
         auto_clean=True will delete the HOG from the XML structure after
         the yield.
         """
-        for ev, el in self.context:
-            if ev == "start" or not is_tag_name(
-                el, ["orthologGroup", "paralogGroup", "species"]
-            ):
-                pass
 
-            elif is_evolutionary_node(el) and el.getparent().tag == tag_name("groups"):
-                # Yield the HOG
+        self.reset(events=["end"], tag=("{*}species", "{*}orthologGroup", "{*}paralogGroup"))
+
+        for ev, el in self.context:
+
+            # If we don't clear the species, lxml will accumulate
+            # their objects even if the context is not subscribed to them. Okay...
+            if el.tag == tag_name("species"):
+                el.clear()
+                while el.getprevious() is not None:
+                    del el.getparent()[0]
+
+            if is_evolutionary_node(el) and el.getparent().tag == tag_name("groups"):
                 hog = self._HOG(el)
                 yield hog
 
-                if not auto_clean:
-                    pass
-                else:
+                if auto_clean:
                     hog.cleanup()
-
-            elif is_tag_name(el, "species"):
-                # Delete these - don't care about it.
-                el.clear()
-                for a in el.xpath("ancestor-or-self::*"):
-                    while a.getprevious() is not None:
-                        del a.getparent()[0]
-                del el
 
     def _HOG(self, g):
         """

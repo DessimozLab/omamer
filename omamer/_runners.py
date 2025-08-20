@@ -164,7 +164,9 @@ def search(args):
     db = Database(args.db)
 
     # setup search
-    ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
+    ms = MergeSearch(ki=db.ki,
+                     kmer_percentage=args.mu,
+                     include_extant_genes=args.include_extant_genes)
 
     # only print header for file output
     print_header = args.out.name != sys.stdout.name

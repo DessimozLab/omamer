@@ -239,6 +239,11 @@ def main():
         help="Include extant gene IDs as comma separated entry in results.",
     )
     search_parser.add_argument(
+        "--mu",
+        type=float,
+        default=50.0,
+    )
+    search_parser.add_argument(
         "-c",
         "--chunksize",
         default=10000,
@@ -306,3 +311,6 @@ def main():
         args.func(args)
     else:
         parser.print_usage()
+
+if __name__ == "__main__":
+    main()

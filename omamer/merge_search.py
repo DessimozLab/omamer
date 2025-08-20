@@ -312,7 +312,7 @@ def unique1d_linear(array):
 
 
 @numba.njit
-def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
+def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag, valid_kmers):
     """
     get the sequence unique k-mers and non ambiguous locations (when truly unique)
     """
@@ -324,13 +324,15 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
         r[0] += trans[j] * s_norm[j]
 
     # does k-mer contain any X?
-    x_seen = np.any(s_norm[0:k] == DIGITS_AA_LOOKUP[88])
+    invalid = np.any(s_norm[0:k] == DIGITS_AA_LOOKUP[88])
+    invalid |= not valid_kmers[r[0]]
+
     # if yes, replace it by the x_flag
-    r[0] = r[0] if not x_seen else x_flag
+    r[0] = r[0] if not invalid else x_flag
 
     # codes for other k-mers
     for i in range(1, n_kmers):
-        if not x_seen:
+        if not invalid:
             # if the previous k-mer was valid,
             # recompute the current code from the previous one
 
@@ -346,8 +348,11 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
             for j in range(k):
                 r[i] += trans[j] * s_norm[i + j]
 
-        x_seen = np.any(s_norm[i: i + k] == DIGITS_AA_LOOKUP[88])
-        r[i] = r[i] if not x_seen else x_flag
+        invalid = np.any(s_norm[i: i + k] == DIGITS_AA_LOOKUP[88])
+        invalid |= not valid_kmers[r[i]]
+
+        r[i] = r[i] if not invalid else x_flag
+
 
     return unique1d_linear(r)
 
@@ -567,8 +572,45 @@ def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.n
         result[j - start] = data.get(j, np.uint32(0))
     return result
 
+
+@numba.njit
+def _compute_mi(table_idx, N):
+    mi = np.zeros(len(table_idx))
+    for kmer in range(len(table_idx) - 1):
+        x = table_idx[kmer : kmer + 2]
+        m = x[1] - x[0]
+
+        if m > 0:
+            mi[kmer] = np.log2(N) - (
+                m / N * np.log2(m) + (1 - m / N) * np.log2(N - m)
+            )
+        else:
+            mi[kmer] = 0
+
+    kmer_order = np.argsort(mi)
+    return mi, kmer_order
+
 class MergeSearch(object):
-    def __init__(self, ki, include_extant_genes=False):
+    def _compute_valid_kmers(self, kmer_percentage):
+        table_idx = self.kmer_table["idx"]
+        N = self.fam_tab.size
+
+        self.mi, self.kmer_order = _compute_mi(table_idx, N)
+
+        # Consider only positive MI for threshold selection
+        # i.e. take percentile of present k-mers not all k-mers
+        positive_mi = self.mi[self.mi > 0]
+
+        kmer_percentage = kmer_percentage
+        mi_threshold = np.percentile(positive_mi, 100 - kmer_percentage)
+
+        self.valid_kmers = (self.mi >= mi_threshold).astype(np.uint8)
+
+        print("Positive MI size:", len(positive_mi))
+        print("MI threshold:", mi_threshold)
+        print("# of valid k-mers:", sum(self.valid_kmers))
+
+    def __init__(self, ki, kmer_percentage, include_extant_genes=False):
         assert ki.db.db.mode == "r", "Database must be opened in read mode."
 
         # load ki and db
@@ -576,6 +618,9 @@ class MergeSearch(object):
         self.ki = ki
 
         self.include_extant_genes = include_extant_genes
+
+        LOG.debug("Computing mutual information")
+        self._compute_valid_kmers(kmer_percentage)
 
     # want to cache these, so that we don't load multiple times when chunking queries
     @cached_property
@@ -654,6 +699,7 @@ class MergeSearch(object):
             self.trans,
             self.kmer_table["idx"],
             self.kmer_table["buff"],
+            self.valid_kmers,
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
             self.fam_tab,
@@ -794,24 +840,25 @@ class MergeSearch(object):
     @lazy_property
     def _lookup(self):
         def func(
-                family_results,
-                subfam_results,
-                seqs,
-                seqs_idx,
-                trans,
-                table_idx,
-                table_buff,
-                k,
-                DIGITS_AA_LOOKUP,
-                fam_tab,
-                hog_tab,
-                level_arr,
-                top_n_fams,
-                ref_fam_prob,
-                ref_hog_prob,
-                alpha_cutoff,
-                sst,
-                family_only,
+            family_results,
+            subfam_results,
+            seqs,
+            seqs_idx,
+            trans,
+            table_idx,
+            table_buff,
+            valid_kmers,
+            k,
+            DIGITS_AA_LOOKUP,
+            fam_tab,
+            hog_tab,
+            level_arr,
+            top_n_fams,
+            ref_fam_prob,
+            ref_hog_prob,
+            alpha_cutoff,
+            sst,
+            family_only,
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
@@ -842,7 +889,7 @@ class MergeSearch(object):
                     continue
 
                 # seq -> bag of kmers
-                (r1, p1, _) = parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
+                (r1, p1, _) = parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag, valid_kmers)
 
                 # skip if only one k-mer with X
                 if len(r1) > 1:
@@ -1007,4 +1054,5 @@ class MergeSearch(object):
                         c[int(choice)] if choice_score != 0.0 else 0
                     )
 
+        #return func
         return numba.jit(func, parallel=True, nopython=True, nogil=True)

@@ -359,7 +359,9 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag, valid_kmers):
 
 @numba.njit
 def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
+                     hog_counts, fam_counts, hog_scores, fam_scores,
+                     mi,
+                     fam_lowloc, fam_highloc,
                      hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
     """
     Perform the kmer search, using the index.
@@ -391,6 +393,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
         x = table_idx[kmer: kmer + 2]
         hogs = table_buff[x[0]: x[1]]
         fams = hog_tab["FamOff"][hogs]
+        mi_score = mi[kmer]
 
         for hog in hogs:
             if not hog_counts[hog]:
@@ -398,6 +401,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                 num_hit_hogs += 1
 
             hog_counts[hog] += 1
+            hog_scores[hog] += mi_score
 
         for fam_off in fams:
             if not fam_counts[fam_off]:
@@ -405,6 +409,7 @@ def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
                 num_hit_fams += 1
 
             fam_counts[fam_off] += 1
+            fam_scores[fam_off] += mi_score
 
             # initiate first location
             if fam_lowloc[fam_off] == -1:
@@ -700,6 +705,7 @@ class MergeSearch(object):
             self.kmer_table["idx"],
             self.kmer_table["buff"],
             self.valid_kmers,
+            self.mi,
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
             self.fam_tab,
@@ -848,6 +854,7 @@ class MergeSearch(object):
             table_idx,
             table_buff,
             valid_kmers,
+            mi,
             k,
             DIGITS_AA_LOOKUP,
             fam_tab,
@@ -871,6 +878,8 @@ class MergeSearch(object):
             num_threads = numba.get_num_threads()
             hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
             fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
+            hog_scores = np.zeros((num_threads, hog_tab.size), dtype=np.float32)
+            fam_scores = np.zeros((num_threads, fam_tab.size), dtype=np.float32)
             fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
             fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
             hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
@@ -902,6 +911,8 @@ class MergeSearch(object):
                 thread_hit_hogs = hit_hogs[numba.get_thread_id()]
                 thread_hog_counts = hog_counts[numba.get_thread_id()]
                 thread_fam_counts = fam_counts[numba.get_thread_id()]
+                thread_hog_scores = hog_scores[numba.get_thread_id()]
+                thread_fam_scores = fam_scores[numba.get_thread_id()]
                 thread_fam_lowloc = fam_lowloc[numba.get_thread_id()]
                 thread_fam_highloc = fam_highloc[numba.get_thread_id()]
                 thread_num_hit_fams = num_hit_fams[numba.get_thread_id()]
@@ -910,7 +921,9 @@ class MergeSearch(object):
                 # search using kmers
                 thread_num_hit_fams, thread_num_hit_hogs = search_seq_kmers(
                     r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                    thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,
+                    thread_hog_counts, thread_fam_counts, thread_hog_scores, thread_fam_scores,
+                    mi,
+                    thread_fam_lowloc, thread_fam_highloc,
                     thread_hit_fams, thread_num_hit_fams, thread_hit_hogs, thread_num_hit_hogs
                 )
 
@@ -922,6 +935,7 @@ class MergeSearch(object):
                 qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
                 qres["id"][:] = idx
                 qres["count"][:] = thread_fam_counts[idx]
+                qres["normcount"][:] = thread_fam_scores[idx]
 
                 # 2. Fast family filtering
                 #     - a. filter by count. We are only interested in families
@@ -992,9 +1006,10 @@ class MergeSearch(object):
 
                 # 4. Compute normalised count
                 expected_count = ref_fam_prob[qres["id"]] * len(r1)
-                qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        len(r1) - expected_count
-                )
+                #qres["normcount"][:] = (qres["count"] - expected_count) / (
+                #        len(r1) - expected_count
+                #)
+                #qres["normcount"][:] =
 
                 # 5. Store results
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking

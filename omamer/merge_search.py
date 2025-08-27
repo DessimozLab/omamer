@@ -575,10 +575,14 @@ def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.n
 
 @numba.njit
 def _compute_mi(table_idx, N):
+#def _compute_mi(table_idx, table_buff, hog2fam, N):
     mi = np.zeros(len(table_idx))
     for kmer in range(len(table_idx) - 1):
         x = table_idx[kmer : kmer + 2]
         m = x[1] - x[0]
+
+        #fams = hog2fam[table_buff[x[0] : x[1]]]
+        #m = len(fams)
 
         if m > 0:
             mi[kmer] = np.log2(N) - (
@@ -590,10 +594,12 @@ def _compute_mi(table_idx, N):
     kmer_order = np.argsort(mi)
     return mi, kmer_order
 
+
 class MergeSearch(object):
     def _compute_valid_kmers(self, kmer_percentage):
         table_idx = self.kmer_table["idx"]
-        N = self.fam_tab.size
+        #N = self.fam_tab.size
+        N = self.hog_tab.size
 
         self.mi, self.kmer_order = _compute_mi(table_idx, N)
 

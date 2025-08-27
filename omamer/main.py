@@ -205,7 +205,7 @@ def main():
     search_parser.add_argument(
         "-s",
         "--structure",
-        required=True,
+        required=False,
         help="Path to FASTA formatted 3di sequences",
         type=FileType("r"),
     )

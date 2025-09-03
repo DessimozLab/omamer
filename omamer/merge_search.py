@@ -621,7 +621,7 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 
-@numba.njit
+#@numba.njit
 def place_sequence(
     family_results,
     subfam_results,
@@ -657,7 +657,7 @@ def place_sequence(
 
     # Double check we don't have short peptides (of len < k)
     if n_kmers == 0:
-        return None
+        return False
 
     t0 = clock()
 
@@ -668,7 +668,7 @@ def place_sequence(
     if len(r1) > 1:
         pass
     elif r1[0] == x_flag:
-        return None
+        return False
 
     # Get thread-local data structures for search
     thread_hit_fams = hit_fams[numba.get_thread_id()]
@@ -726,7 +726,7 @@ def place_sequence(
     qres = qres[(qres["overlap"] >= (25 / query_len))]
 
     if len(qres) == 0:
-        return None
+        return False
 
     # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
     # that is, the Chernoff upper bound for the binomial X:
@@ -748,7 +748,7 @@ def place_sequence(
     qres = qres[kl_div > -np.log(alpha) / n]
 
     if len(qres) == 0:
-        return None
+        return False
 
     t0 = clock()
 
@@ -777,7 +777,7 @@ def place_sequence(
     qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
 
     if len(qres) == 0:
-        return None
+        return False
 
     # 4. Compute normalised count
     expected_count = ref_fam_prob[qres["id"]] * len(r1)
@@ -793,8 +793,6 @@ def place_sequence(
     family_results["id"][sequence_id, :top_n_fams] = qres["id"][:top_n_fams] + 1
     family_results["pvalue"][sequence_id, :top_n_fams] = qres["pvalue"][:top_n_fams]
     family_results["count"][sequence_id, :top_n_fams] = qres["count"][:top_n_fams]
-    family_results["ss_count"][sequence_id, :top_n_fams] = qres["ss_count"][:top_n_fams]
-    family_results["ss_pvalue"][sequence_id, :top_n_fams] = qres["ss_pvalue"][:top_n_fams]
     family_results["normcount"][sequence_id, :top_n_fams] = qres["normcount"][:top_n_fams]
     family_results["overlap"][sequence_id, :top_n_fams] = qres["overlap"][:top_n_fams]
 
@@ -1155,36 +1153,11 @@ class MergeSearch(object):
             num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
             num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
-            # Thread-local arrays for structure
-            ss_hog_scores = np.zeros((num_threads, hog_tab.size), dtype=np.uint32)
-            ss_fam_scores = np.zeros((num_threads, fam_tab.size), dtype=np.uint32)
-            ss_hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
-            ss_fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
-            ss_fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            ss_fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            ss_hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
-            ss_hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
-            num_ss_hit_fams = np.zeros(num_threads, dtype=np.uint32)
-            num_ss_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
-
-            parse_time = 0
-            search_time = 0
-            filter_time = 0
-            pvalue_time = 0
-            place_time = 0
-            sort_time = 0
-
-            stats_hit_fams = 0
-            stats_ss_hit_fams = 0
-
-            # select_time = 0
-            # bits_time = 0
-
             for sequence_id in numba.prange(len(seqs_idx) - 1):
                 # extract the sequence from the sequence buffer
                 sequence = seqs[seqs_idx[sequence_id]: np.int64(seqs_idx[sequence_id + 1] - 1)]
 
-                place_sequence(
+                placed = place_sequence(
                     family_results,
                     subfam_results,
                     sequence,
@@ -1211,6 +1184,39 @@ class MergeSearch(object):
                     fam_highloc,
                     num_hit_fams,
                     num_hit_hogs)
+
+                if not only_sequence and not placed:
+                    structure = ss_seqs[
+                        ss_seqs_idx[sequence_id] : np.int64(ss_seqs_idx[sequence_id + 1] - 1)
+                    ]
+                    place_sequence(
+                        family_results,
+                        subfam_results,
+                        structure,
+                        sequence_id,
+                        trans,
+                        ss_table_idx,
+                        ss_table_buff,
+                        k,
+                        DIGITS_AA_LOOKUP,
+                        fam_tab,
+                        hog_tab,
+                        level_arr,
+                        top_n_fams,
+                        ss_ref_fam_prob,
+                        ss_ref_hog_prob,
+                        alpha,
+                        sst,
+                        family_only,
+                        hit_fams,
+                        hit_hogs,
+                        hog_counts,
+                        fam_counts,
+                        fam_lowloc,
+                        fam_highloc,
+                        num_hit_fams,
+                        num_hit_hogs,
+                    )
 
 
             #total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time

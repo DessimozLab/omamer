@@ -1168,8 +1168,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         # perform post filtering on the protein table.
         # set index as the protein id so that we can look up the hog id.
         ent_tab = ent_tab[ent_tab["hogid"].isin(set(hog_tab["ID"]))].set_index("protId")
-
-        return (hog_tab.to_records(), ent_tab)
+        return hog_tab.to_records(), ent_tab
 
     ### main function ###
     def build_database(self, oxml_path, fasta_paths, stree_path):
@@ -1270,15 +1269,24 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         # Make ent_tab into a dict {protID -> (hogid, species)} as it's
         # more efficient for querying individual protID than pd.DataFrame.loc
-        ent_tab = ent_tab[~ent_tab.index.duplicated(keep="first")].to_dict("index")
 
-        LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
+        duplicates = ent_tab[ent_tab.index.duplicated(keep=False)]
+
+        # if found duplicated keys (i.e. protId), raise error
+        if len(duplicates) > 0:
+            nonunique_keys = duplicates.index.unique()
+            error_message = "Found duplicated protein IDs:\n" + "\n\t".join(s for s in nonunique_keys)
+            LOG.error(error_message)
+            raise RuntimeError(error_message)
+
+        ent_tab = ent_tab[~ent_tab.index.duplicated(keep="first")].to_dict("index")
 
         prot_off = 0  # pointer to protein in protein table
 
         # store rows for species and protein tables and sequence buffer
-        blob = bytearray()
+        seq_buffs = []
 
+        LOG.debug(" - loading proteins from FASTA sequences for selected HOGs")
         prot_tab = self.db.create_table(
             "/",
             "Protein",
@@ -1291,16 +1299,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
         )
 
-        sanitiser = Alphabet(n=21).sanitize_translate
-
-        from omamer._clock import clock, as_seconds
-        loc_time = 0
-        encode_time = 0
-        app1_time = 0
-        app2_time = 0
-        iter = 1
-        num_skipped = 0
-        num_reports = 0
+        sanitiser = Alphabet(n=21).sanitise_seq
 
         # go over all fasta records
         for fasta_fn in fasta_paths:
@@ -1309,24 +1308,6 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                     SeqIO.parse(fp, "fasta"),
                     desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
                 ):
-                    if iter % 100_000 == 0:
-                        num_reports += 1
-                        print(f"Report {num_reports}")
-                        print("Loc time", as_seconds(loc_time))
-                        print("Encode time", as_seconds(encode_time))
-                        print("App1 time", as_seconds(app1_time))
-                        print("App2 time", as_seconds(app2_time))
-                        total_time = loc_time + encode_time + app1_time + app2_time
-                        print("# of seqs skipped", num_skipped)
-                        print("Total time", as_seconds(total_time))
-                        # loc_time = 0
-                        # encode_time = 0
-                        # app1_time = 0
-                        # app2_time = 0
-                        iter = 0
-
-                    iter += 1
-
                     if rec.description in ent_tab:
                         # this seems to be most common, full header is used in standalone orthoXML
                         prot_id = rec.description
@@ -1335,17 +1316,11 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         prot_id = rec.id
                     else:
                         # otherwise we can't do anything...
-                        num_skipped += 1
                         continue
-
-                    t0 = clock()
                     # get hog id, skip if we have filtered it out
                     r = ent_tab[prot_id]
                     hog_id = r["hogid"]
                     sp = r["species"]
-
-                    t1 = clock()
-                    loc_time += t1 - t0
 
                     # (hog_id, sp) = entry_mapping[prot_id]
                     if hog_id not in oma_hog2hog:
@@ -1353,31 +1328,20 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
                     # check if the species of the sequence should be loaded
                     if sp in species:
-                        t0 = clock()
                         # store
                         sp_off = sp2sp_off[sp]
 
-                        # sanitize sequence and encode as a byte array
-                        b = str(rec.seq).encode("ascii", "ignore").translate(sanitiser)
-                        seq_len = len(b) - 1
-                        blob.extend(b)
-                        # add whitespace
-                        blob.append(32)
-
-                        t1 = clock()
-                        encode_time += t1 - t0
-
-                        t0 = clock()
+                        seq = sanitiser(str(rec.seq)) + " "  # add the padding
+                        seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
+                        seq_len = len(seq) - 1
+                        seq_buffs.append(seq)
 
                         # store protein information
                         prot_id = prot_id.encode("ascii")
                         prot_tab.append(
                             [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
                         )
-                        t1 = clock()
-                        app1_time += t1 - t0
 
-                        t0 = clock()
                         # store protein id
                         prot_id_buff.append(
                             np.frombuffer(prot_id, dtype=tables.StringAtom(1))
@@ -1387,21 +1351,9 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         hog = oma_hog2hog[hog_id]
                         hog2protoffs[hog].add(prot_off)
 
-                        t1 = clock()
-                        app2_time += t1 - t0
-
                         # update offset of protein row in table
                         prot_off += 1
 
-        num_reports += 1
-        print(f"Report {num_reports}")
-        print("Loc time", as_seconds(loc_time))
-        print("Encode time", as_seconds(encode_time))
-        print("App1 time", as_seconds(app1_time))
-        print("App2 time", as_seconds(app2_time))
-        total_time = loc_time + encode_time + app1_time + app2_time
-        print("# of seqs skipped", num_skipped)
-        print("Total time", as_seconds(total_time))
 
         # store species info
         sp_rows = [()] * len(species)  # keep sorted
@@ -1419,8 +1371,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         if prot_off != len(ent_tab):
             raise ValueError("Did not find all protein sequences ({} / {})".format(prot_off, len(ent_tab)))
 
-        #seq_buff = np.concatenate(seq_buffs)
-        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, blob
+        seq_buff = np.concatenate(seq_buffs)
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff
 
     def add_taxid_col(self):
         """

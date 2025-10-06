@@ -2,7 +2,7 @@
     HOGPROP - Propagation of Gene Ontology (GO) annotations through
     Hierarchical Orthologous Groups (HOGs) from the OMA project.
 
-    (C) 2024 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
+    (C) 2024-2025 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2015-2023 Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
 
     This file is part of HOGPROP. It contains a module for parsing an

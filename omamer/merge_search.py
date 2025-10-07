@@ -621,7 +621,7 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 
-#@numba.njit
+@numba.njit
 def place_sequence(
     family_results,
     subfam_results,

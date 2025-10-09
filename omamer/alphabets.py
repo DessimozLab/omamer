@@ -38,7 +38,7 @@ class Alphabet(object):
             # 256-byte sanitizer translation map: maps allowed characters into
             # themselves, everything else into X
             self.sanitize_translate = bytes(
-                bytearray((b if b in chars else ord("X") for b in range(256)))
+                bytearray((b if chr(b) in chars else ord("X") for b in range(256)))
             )
 
             digits = np.frombuffer(b"ACDEFGHIKLMNPQRSTVWXY", dtype=np.uint8)

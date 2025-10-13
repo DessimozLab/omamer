@@ -122,6 +122,6 @@ class Alphabet(object):
 def get_transform(k, DIGITS_AA):
     # k-mer transformation
     t = np.zeros(k, dtype=np.uint64)
-    for i in numba.prange(k):
+    for i in range(k):
         t[i] = len(DIGITS_AA) ** (k - (i + 1))
     return t

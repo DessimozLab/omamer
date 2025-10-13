@@ -92,11 +92,7 @@ class Index(object):
         assert self.db.mode in {"w", "a"}, "Index must be opened in write mode."
         assert "/Index" not in self.db.db, "Index has already been computed"
 
-        # build suffix array with option to translate the sequence buffer first
-        sa = self._build_suffixarray(
-            self.alphabet.translate(seq_buff), len(self.db._db_Protein)
-        )
-        self._build_kmer_table(seq_buff, sa)
+        self._build_kmer_table(seq_buff)
 
     @staticmethod
     def _build_suffixarray(seqs, n):
@@ -110,7 +106,7 @@ class Index(object):
         sa[:n].sort()  # Sort delimiters by position
         return sa
 
-    def _build_kmer_table(self, seq_buff, sa):
+    def _build_kmer_table(self, seq_buff):
         @numba.njit(parallel=True, nogil=True)
         def _compute_mask_and_filter(
             sa, sa_mask, sa_filter, k, n, prot2spoff, prot2hogoff, sp_filter
@@ -277,10 +273,20 @@ class Index(object):
 
             return hog_occ / idx[-1]
 
+        # build suffix array with option to translate the sequence buffer first
+        sa = self._build_suffixarray(
+            self.alphabet.translate(seq_buff), len(self.db._db_Protein)
+        )
+
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db._db_Protein)
         sa_mask = np.zeros(sa.shape, dtype=np.uint32)
         sa_filter = np.zeros(sa.shape, dtype=np.bool_)
+
+        import psutil
+
+        process = psutil.Process()
+        print("1) Current RAM:", process.memory_info().rss)
 
         _compute_mask_and_filter(
             sa,
@@ -293,8 +299,18 @@ class Index(object):
             self.sp_filter,
         )
 
+        print("2) Current RAM:", process.memory_info().rss)
+
+
         # before filtering the sa, reorder and reverse the suffix filter
         sa = sa[~sa_filter[sa]]
+
+        #mask = ~sa_filter[sa]
+        #keep = np.nonzero(mask)[0]
+        #sa[:len(keep)] = sa[keep]
+        #sa = sa[:len(keep)]
+
+        print("3) Current RAM:", process.memory_info().rss)
 
         # filter and reorder the mask according to this filtered sa
         sa_mask = sa_mask[sa]
@@ -325,8 +341,11 @@ class Index(object):
             self.alphabet.DIGITS_AA_LOOKUP,
         )
 
+        print("4) Current RAM:", process.memory_info().rss)
+
         # remove extra space
         table_buff = table_buff[:ii_table_buff]
+
 
         LOG.debug(" - write k-mer table")
         idx = self.db.db.create_group("/", "Index", "hog indexes")

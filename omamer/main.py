@@ -193,7 +193,7 @@ def main():
         "--query",
         required=True,
         help="Path to FASTA formatted sequences",
-        type=FileType("r"),
+        type=str,
     )
 
     search_parser.add_argument(

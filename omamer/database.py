@@ -31,14 +31,16 @@ import os
 import tables
 
 from . import __version__
-from .alphabets import Alphabet
+from .alphabets import Alphabet, get_transform
 from .hierarchy import (
     get_hog_child_prots,
     get_hog2taxa,
-    traverse,
+    traverse, compute_lca_hogs,
 )
 from .index import Index
 from ._utils import LOG, is_progress_disabled, compute_file_md5, auto_open
+from .sequence import seq_to_kmers
+from .sequence_buffer import SequenceBuffer
 
 
 class Database(object):
@@ -1061,6 +1063,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.min_fam_completeness = min_fam_completeness
         self.logic = logic
         self.include_younger_fams = include_younger_fams
+        self.kmers = defaultdict(set)
 
     def setup_hogparser(self, oxml_path):
         from .orthoxml_parser import OrthoxmlParser
@@ -1182,7 +1185,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.add_taxid_col()
 
         LOG.debug("build hog_table from orthoxml")
-        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+        hog_tab, ent_tab = self.parse_oxml(nspecies_below)
 
         LOG.debug("select and strip OMA HOGs")
         (
@@ -1198,16 +1201,14 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             fam2hogs,
             hog2protoffs,
             hog2tax,
-            hog2oma_hog,
-            seq_buff,
+            hog2oma_hog
         ) = self.select_and_filter_OMA_proteins(
             ent_tab,
             fasta_paths,
             fam2hogs,
             hog2oma_hog,
             hog2tax,
-            species,
-            self.min_fam_size,
+            species
         )
 
         LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
@@ -1237,8 +1238,6 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         # compute the median sequence length of each HOG
         self.add_median_seqlen_col()
 
-        return seq_buff
-
     def add_metadata(self):
         super().add_metadata()
         self.db.set_node_attr("/", "source", "OMA standalone")
@@ -1248,6 +1247,63 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.db.set_node_attr("/", "filter_logic", self.logic)
         self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
 
+    def build_kmer_table(self):
+        table_idx, table_buff, hog_kmer_counts = self.make_inverted_index()
+        self.write_index(table_idx, table_buff)
+
+        h2f = self.db._db_HOG.col("FamOff")
+        self.estimate_probs(table_buff, table_idx, h2f, hog_kmer_counts)
+
+    def make_inverted_index(self):
+        # Now in the hashmap { kmers -> [hogs] } the same kmer
+        # will have hogs that might be parents of each other. Replace
+        # them with LCA hogs
+        hog2fams = self.db._db_HOG.col("FamOff")
+        hog2parents = self.db._db_HOG.col("ParentOff")
+
+        # compute lengths
+        idx_len = len(self.alphabet.DIGITS_AA) ** self.k + 1
+        buff_len = sum(len(v) for v in self.kmers.values())
+
+        #table_idx, table_buff = self.add_index()
+        table_idx = np.zeros(idx_len, dtype=np.uint32)
+        table_buff = np.zeros(buff_len, dtype=np.uint32)
+        hog_kmer_counts = np.zeros(len(self.db._db_HOG), dtype=np.uint64)
+
+        offset = 0
+        for kmer in range(idx_len):
+            table_idx[kmer] = offset
+            hog_offsets = np.asarray(self.kmers.get(kmer, []), dtype=np.int32)
+            # get the corresponding fam offsets
+            fam_offsets = hog2fams[hog_offsets]
+
+            # compute the LCA hog offsets
+            postings = compute_lca_hogs(hog_offsets, fam_offsets, hog2parents)
+
+            hog_kmer_counts[postings] = hog_kmer_counts[postings] + 1
+
+            table_buff[offset : offset + len(postings)] = postings
+            offset += len(postings)
+            del self.kmers[kmer]
+
+        table_idx[idx_len] = offset
+
+        del self.kmers
+        return table_idx, table_buff, hog_kmer_counts
+
+    def write_index(self, table_idx, table_buff):
+        LOG.debug(" - write k-mer table")
+        idx = self.db.create_group("/", "Index", "hog indexes")
+        idx._f_setattr("k", self.k)
+        idx._f_setattr("alphabet_n", self.alphabet.n)
+        idx._f_setattr("hidden_taxa", self.hidden_taxa)
+        self.db.create_carray(
+            idx, "TableIndex", obj=table_idx, filters=self.db._compr
+        )
+        self.db.create_carray(
+            idx, "TableBuffer", obj=table_buff, filters=self.db._compr
+        )
+
     def select_and_filter_OMA_proteins(
         self,
         ent_tab,
@@ -1255,8 +1311,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         fam2hogs,
         hog2oma_hog,
         hog2tax,
-        species,
-        min_fam_size,
+        species
     ):
         # temporary mappers and booking for latter
         sp2sp_off = dict(
@@ -1283,9 +1338,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         prot_off = 0  # pointer to protein in protein table
 
-        # store rows for species and protein tables and sequence buffer
-        seq_buffs = []
-
+        # store rows for species and protein tables
         LOG.debug(" - loading proteins from FASTA sequences for selected HOGs")
         prot_tab = self.db.create_table(
             "/",
@@ -1331,10 +1384,12 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         # store
                         sp_off = sp2sp_off[sp]
 
-                        seq = sanitiser(str(rec.seq)) + " "  # add the padding
-                        seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
-                        seq_len = len(seq) - 1
-                        seq_buffs.append(seq)
+                        #seq = sanitiser(str(rec.seq)) + " "  # add the padding
+                        #seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
+                        #seq_len = len(seq) - 1
+
+                        seq = sanitiser(str(rec.seq))
+                        seq_len = len(seq)
 
                         # store protein information
                         prot_id = prot_id.encode("ascii")
@@ -1351,9 +1406,10 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         hog = oma_hog2hog[hog_id]
                         hog2protoffs[hog].add(prot_off)
 
+                        self._index_kmers(seq, hog_id)
+
                         # update offset of protein row in table
                         prot_off += 1
-
 
         # store species info
         sp_rows = [()] * len(species)  # keep sorted
@@ -1371,8 +1427,24 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         if prot_off != len(ent_tab):
             raise ValueError("Did not find all protein sequences ({} / {})".format(prot_off, len(ent_tab)))
 
-        seq_buff = np.concatenate(seq_buffs)
-        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog
+
+    def _index_kmers(self, seq, hog_id):
+        k = self.ki.k
+        lookup = self.ki.alphabet.DIGITS_AA_LOOKUP
+        trans = get_transform(k, lookup)
+
+        x_char = lookup[88]
+        x_flag = 0
+        for j in range(k):
+            x_flag += trans[j] * x_char
+        x_flag += 1
+
+        seq_buff = SequenceBuffer(seqs=[seq], ids=None)
+        codes, _, _ = seq_to_kmers(seq_buff.buff, lookup, k, trans, x_flag)
+
+        for code in codes:
+            self.kmers[code].add(hog_id)
 
     def add_taxid_col(self):
         """

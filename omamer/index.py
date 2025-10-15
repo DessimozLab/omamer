@@ -27,8 +27,14 @@ import numpy as np
 
 from ._utils import LOG
 from .alphabets import Alphabet, get_transform
-from .hierarchy import get_lca_off, get_leaves
+from .hierarchy import compute_lca_hogs, get_leaves
 from .merge_search import cumulate_counts_1fam
+
+
+@numba.njit
+def _same_kmer(seq_buff, sa, kmer, jj, k):
+    kmer_jj = seq_buff[sa[jj] : (sa[jj] + k)].view(np.uint8)
+    return np.all(np.equal(kmer, kmer_jj))
 
 
 class Index(object):
@@ -96,7 +102,11 @@ class Index(object):
         sa = self._build_suffixarray(
             self.alphabet.translate(seq_buff), len(self.db._db_Protein)
         )
-        self._build_kmer_table(seq_buff, sa)
+        table_idx, table_buff, hog_kmer_counts = self._build_kmer_table(seq_buff, sa)
+        h2f = self.db._db_HOG.col("FamOff")
+
+        self.estimate_probs(table_buff, table_idx, h2f, hog_kmer_counts)
+
 
     @staticmethod
     def _build_suffixarray(seqs, n):
@@ -128,41 +138,6 @@ class Index(object):
                     sa_filter[s:e] = True
                 else:
                     sa_filter[(e - k) : e] = True
-
-        @numba.njit
-        def _same_kmer(seq_buff, sa, kmer, jj, k):
-            kmer_jj = seq_buff[sa[jj] : (sa[jj] + k)].view(np.uint8)
-            return np.all(np.equal(kmer, kmer_jj))
-
-        @numba.njit
-        def _compute_many_lca_hogs(hog_offsets, fam_offsets, hog_parents):
-            """
-            compute lca hogs for a list of hogs and their families
-            """
-            # as many lca hogs as unique families
-            lca_hogs = np.zeros((np.unique(fam_offsets).size,), dtype=np.int32)
-
-            # keep track of family, the corresponding hogs and the lca hog offset
-            curr_fam = fam_offsets[0]
-            curr_hogs = list(
-                hog_offsets[0:1]
-            )  # set the type of items in list to integers
-            lca_off = 0
-
-            for i in range(1, len(hog_offsets)):
-                fam = fam_offsets[i]
-                # wait to have all hogs of the family between computing the lca hog
-                if fam == curr_fam:
-                    curr_hogs.append(hog_offsets[i])
-                else:
-                    lca_hogs[lca_off] = get_lca_off(curr_hogs, hog_parents)
-                    curr_hogs = list(hog_offsets[i : i + 1])
-                    curr_fam = fam
-                    lca_off += 1
-
-            # last family
-            lca_hogs[lca_off] = get_lca_off(curr_hogs, hog_parents)
-            return lca_hogs
 
         @numba.njit
         def _compute_kmer_table(
@@ -215,7 +190,7 @@ class Index(object):
                 fam_offsets = hog_fams[hog_offsets]
 
                 # compute the LCA hog offsets
-                lca_hog_offsets = _compute_many_lca_hogs(
+                lca_hog_offsets = compute_lca_hogs(
                     hog_offsets, fam_offsets, hog_parents
                 )
 
@@ -239,43 +214,6 @@ class Index(object):
             # fill until the end
             table_idx[kk:] = ii_table_buff
             return ii_table_buff
-
-        def estimate_family_prob(tab, idx, h2f):
-            @numba.njit
-            def count_family_occurrence(tab, idx, h2f):
-                c = np.zeros(h2f.max() + 1, dtype=np.uint32)
-                for i in range(len(idx) - 1):
-                    hogs = tab[idx[i] : idx[i + 1]]
-                    c[h2f[hogs]] += idx[i + 1] - idx[i]
-                return c
-
-            fam_occ = count_family_occurrence(tab, idx, h2f)
-            return fam_occ / idx[-1]
-
-        def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
-            @numba.njit(parallel=True, nogil=True)
-            def cumulate_counts_nfams(
-                hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent
-            ):
-                hog_cum_counts = hog_counts.copy()
-
-                for i in numba.prange(len(fam_level_off)):
-                    s = fam_level_off[i]
-                    e = np.int32(s + fam_level_num[i] + 2)
-                    fam_level_offsets = level_arr[s:e]
-                    cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent)
-
-                return hog_cum_counts
-
-            hog_occ = cumulate_counts_nfams(
-                hog_counts,
-                fam_tab.col("LevelOff"),
-                fam_tab.col("LevelNum"),
-                level_arr[:],
-                hog2parent,
-            )
-
-            return hog_occ / idx[-1]
 
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db._db_Protein)
@@ -340,10 +278,50 @@ class Index(object):
             idx, "TableBuffer", obj=table_buff, filters=self.db._compr
         )
 
+        return table_idx, table_buff, hog_kmer_counts
+
+    def estimate_probs(self, table_buff, table_idx, h2f, hog_kmer_counts):
+        def estimate_family_prob(tab, idx, h2f):
+            @numba.njit
+            def count_family_occurrence(tab, idx, h2f):
+                c = np.zeros(h2f.max() + 1, dtype=np.uint32)
+                for i in range(len(idx) - 1):
+                    hogs = tab[idx[i] : idx[i + 1]]
+                    c[h2f[hogs]] += idx[i + 1] - idx[i]
+                return c
+
+            fam_occ = count_family_occurrence(tab, idx, h2f)
+            return fam_occ / idx[-1]
+
+        def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
+            @numba.njit(parallel=True, nogil=True)
+            def cumulate_counts_nfams(
+                hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent
+            ):
+                hog_cum_counts = hog_counts.copy()
+
+                for i in numba.prange(len(fam_level_off)):
+                    s = fam_level_off[i]
+                    e = np.int32(s + fam_level_num[i] + 2)
+                    fam_level_offsets = level_arr[s:e]
+                    cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent)
+
+                return hog_cum_counts
+
+            hog_occ = cumulate_counts_nfams(
+                hog_counts,
+                fam_tab.col("LevelOff"),
+                fam_tab.col("LevelNum"),
+                level_arr[:],
+                hog2parent,
+            )
+
+            return hog_occ / idx[-1]
+
         # compute the family / hog probability estimates, assuming binomial distns
         fam_prob = estimate_family_prob(table_buff, table_idx, h2f)
         self.db.db.create_carray(
-            idx, "FamilyProbability", obj=fam_prob, filters=self.db._compr
+            table_idx, "FamilyProbability", obj=fam_prob, filters=self.db._compr
         )
 
         hog_prob = estimate_hog_prob(
@@ -353,6 +331,7 @@ class Index(object):
             self.db._db_LevelOffsets,
             self.db._db_HOG.col("ParentOff"),
         )
+
         self.db.db.create_carray(
-            idx, "HOGProbability", obj=hog_prob, filters=self.db._compr
+            table_idx, "HOGProbability", obj=hog_prob, filters=self.db._compr
         )

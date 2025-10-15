@@ -103,19 +103,37 @@ def mkdb_oma(args):
         mode="w",
     )
 
-    # add sequences from database
-    LOG.info("Loading sequences")
-    if browser_db_mode:
-        seq_buff = db.build_database(oma_db_fn, nwk)
-    else:
-        seq_buff = db.build_database(oxml_fn, fasta_fns, nwk)
-
     LOG.info("Building index")
     db.ki = Index(
         db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa
     )
-    db.ki.sp_filter
-    db.ki.build_kmer_table(seq_buff)
+
+    # add sequences from database
+    LOG.info("Loading sequences")
+    if browser_db_mode:
+        seq_buff = db.build_database(oma_db_fn, nwk)
+
+        LOG.info("Building index")
+        db.ki = Index(
+            db,
+            k=args.k,
+            reduced_alphabet=args.reduced_alphabet,
+            hidden_taxa=hidden_taxa,
+        )
+        db.ki.sp_filter
+        db.ki.build_kmer_table(seq_buff)
+    else:
+        db.build_database(oxml_fn, fasta_fns, nwk)
+        LOG.info("Building index")
+        db.ki = Index(
+            db,
+            k=args.k,
+            reduced_alphabet=args.reduced_alphabet,
+            hidden_taxa=hidden_taxa,
+        )
+        db.ki.sp_filter
+        db.build_kmer_table()
+
     db.add_metadata()
     db.add_md5_hash()
 

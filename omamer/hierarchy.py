@@ -80,6 +80,37 @@ def get_lca_off(offsets, parent_arr):
 
 
 @numba.njit
+def compute_lca_hogs(hog_offsets, fam_offsets, hog_parents):
+    """
+    Compute LCA hogs for a list of hogs and their families
+    """
+    # as many lca hogs as unique families
+    lca_hogs = np.zeros((np.unique(fam_offsets).size,), dtype=np.int32)
+
+    # keep track of family, the corresponding hogs and the lca hog offset
+    curr_fam = fam_offsets[0]
+    curr_hogs = list(
+        hog_offsets[0:1]
+    )  # set the type of items in list to integers
+    lca_off = 0
+
+    for i in range(1, len(hog_offsets)):
+        fam = fam_offsets[i]
+        # wait to have all hogs of the family between computing the lca hog
+        if fam == curr_fam:
+            curr_hogs.append(hog_offsets[i])
+        else:
+            lca_hogs[lca_off] = get_lca_off(curr_hogs, hog_parents)
+            curr_hogs = list(hog_offsets[i : i + 1])
+            curr_fam = fam
+            lca_off += 1
+
+    # last family
+    lca_hogs[lca_off] = get_lca_off(curr_hogs, hog_parents)
+    return lca_hogs
+
+
+@numba.njit
 def get_children(off, tab, c_buff):
     ent = tab[off]
     c_off = ent["ChildrenOff"]

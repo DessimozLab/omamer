@@ -33,6 +33,7 @@ import pandas as pd
 
 from ._utils import LOG
 from .alphabets import get_transform
+from .sequence import seq_to_kmers
 from .sequence_buffer import SequenceBuffer
 from .hierarchy import (
     get_root_leaf_offsets,
@@ -273,83 +274,6 @@ def get_fam_level_offsets(fam_ent, level_arr):
 
     # because specific for a single family, reinitizialize offsets of family levels
     return fam_level_offsets - fam_level_offsets[0]
-
-
-## search functions
-@numba.njit
-def custom_unique1d(ar):
-    """
-    adapted from np._unique1d for numba
-    """
-    perm = ar.argsort(kind="mergesort")  # if return_index else 'quicksort')
-    aux = ar[perm]
-
-    mask = np.empty(aux.shape, dtype=np.bool_)
-    mask[:1] = True
-    mask[1:] = aux[1:] != aux[:-1]
-
-    idx = np.concatenate((np.nonzero(mask)[0], np.array([mask.size])))
-
-    return aux[mask], perm[mask], np.diff(idx)
-
-
-@numba.njit
-def unique1d_linear(array):
-    """
-    Find a set of unique elements in linear time
-    """
-    unique_list = List()
-    index_list = List()
-    seen = set()
-
-    for i in range(len(array)):
-        if array[i] not in seen:
-            seen.add(array[i])
-            unique_list.append(array[i])
-            index_list.append(i)
-
-    return np.asarray(unique_list), np.asarray(index_list, dtype=np.uint32), None
-
-
-@numba.njit
-def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
-    """
-    get the sequence unique k-mers and non ambiguous locations (when truly unique)
-    """
-    s_norm = DIGITS_AA_LOOKUP[s]
-    r = np.zeros(n_kmers, dtype=np.uint32)  # max kmer 7
-
-    # compute the code of the first k-mer
-    for j in range(k):
-        r[0] += trans[j] * s_norm[j]
-
-    # does k-mer contain any X?
-    x_seen = np.any(s_norm[0:k] == DIGITS_AA_LOOKUP[88])
-    # if yes, replace it by the x_flag
-    r[0] = r[0] if not x_seen else x_flag
-
-    # codes for other k-mers
-    for i in range(1, n_kmers):
-        if not x_seen:
-            # if the previous k-mer was valid,
-            # recompute the current code from the previous one
-
-            # remove the first character from the code
-            shared = r[i-1] - (trans[0] * s_norm[i - 1])
-
-            # trans[-2] is the alphabet size
-            r[i] = shared * trans[-2] + trans[-1] * s_norm[i + k - 1]
-
-        else:
-            # if the previous k-mer has Xs,
-            # just compute the code from scratch
-            for j in range(k):
-                r[i] += trans[j] * s_norm[i + j]
-
-        x_seen = np.any(s_norm[i: i + k] == DIGITS_AA_LOOKUP[88])
-        r[i] = r[i] if not x_seen else x_flag
-
-    return unique1d_linear(r)
 
 
 @numba.njit
@@ -842,7 +766,7 @@ class MergeSearch(object):
                     continue
 
                 # seq -> bag of kmers
-                (r1, p1, _) = parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
+                (r1, p1, _) = seq_to_kmers(s, DIGITS_AA_LOOKUP, k, trans, x_flag)
 
                 # skip if only one k-mer with X
                 if len(r1) > 1:

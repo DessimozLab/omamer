@@ -1168,6 +1168,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         # perform post filtering on the protein table.
         # set index as the protein id so that we can look up the hog id.
         ent_tab = ent_tab[ent_tab["hogid"].isin(set(hog_tab["ID"]))].set_index("protId")
+
         return hog_tab.to_records(), ent_tab
 
     ### main function ###
@@ -1182,7 +1183,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.add_taxid_col()
 
         LOG.debug("build hog_table from orthoxml")
-        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+        hog_tab, ent_tab = self.parse_oxml(nspecies_below)
 
         LOG.debug("select and strip OMA HOGs")
         (

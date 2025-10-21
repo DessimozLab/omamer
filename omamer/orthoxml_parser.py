@@ -270,6 +270,8 @@ class AllSpecies(object):
             species.name: species for species in hog_parser.iter_species(no_xrefs, is_oma)
         }
 
+        self._gene2species = hog_parser._gene2species
+
         # Setup mappings for those that exist:
         self._species_codes = {}
         self._species_ncbi = {}
@@ -335,6 +337,12 @@ class AllSpecies(object):
         This might need to be replaced for more general OrthoXML.
         NOTE: this might not work with non-OMA. Unsure of standard for this.
         """
+
+        # NR: Let's use the direct mapping Genes -> Species
+        # for the case if the gene IDs are not contiguous.
+        if hasattr(self, "_gene2species"):
+            return self._species[self._gene2species[ids]]
+
         species = self._species_table[0]
         max_ids = self._species_table[1]
 
@@ -509,7 +517,8 @@ class Species(object):
         """
         if not is_oma or self.NCBITaxID == -1:
             for gene in el.iterfind(".//OrthoXML:gene", NS):
-                id_ = int(gene.attrib.pop("id", None))
+                #id_ = int(gene.attrib.pop("id", None))
+                id_ = int(gene.attrib["id"])
 
                 if id_ is not None:
                     if not no_xrefs:
@@ -561,6 +570,8 @@ class OrthoxmlParser(object):
         self._set_context(fn)
 
         if load_species:
+            self._gene2species = {}
+
             p_fn = fn + ".species.p"
             if cache_species and os.path.isfile(p_fn):
                 with open(p_fn, "rb") as fp:
@@ -628,9 +639,19 @@ class OrthoxmlParser(object):
             maxinterval=60,
         ) as pbar:
             for ev, el in self.context:
-                if ev == "end" and is_tag_name(el, "species"):
-                    pbar.update(1)
-                    yield Species(el, no_xrefs, is_oma)
+                if not is_tag_name(el, ["species", "groups"]):
+                    continue
+
+                elif ev == "end" and is_tag_name(el, "species"):
+                    pbar.update()
+                    sp = Species(el, no_xrefs, is_oma)
+
+                    # Make the Gene -> Species mapping
+                    for gene_el in el.iterfind(".//OrthoXML:gene", NS):
+                        gid = int(gene_el.get("id"))
+                        self._gene2species[gid] = sp.name
+
+                    yield sp
 
                     el.clear()
                     while el.getprevious() is not None:

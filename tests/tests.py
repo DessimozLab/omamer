@@ -1,13 +1,9 @@
 import numpy as np
-<<<<<<< HEAD
 import numba
-
-<<<<<<< Updated upstream
-from omamer.index import popcount, select1_in_word
-=======
+import pytest
 from omamer.index import ctz, naive_ctz, popcount, select1_in_word
-from omamer.index import to_elias_fano, from_elias_fano, from_elias_fano_correct
->>>>>>> Stashed changes
+from omamer.index import to_elias_fano, from_elias_fano
+from omamer.merge_search import family_result_sort
 
 
 def popcount_naive(x):
@@ -90,12 +86,8 @@ def test_elias_fano(num_tests=1000, max_len=200, max_val=10**6):
         )
 
         assert np.array_equal(decoded, values), f"FAILED:\nOriginal: {values}\nDecoded: {decoded}"
->>>>>>> Stashed changes
-=======
-import pytest
-from omamer.merge_search import (
-    family_result_sort,
-)
+
+
 
 dtype = [("normcount", float), ("overlap", float), ("pvalue", float)]
 
@@ -175,4 +167,4 @@ def test_ties(seed):
     sorted_auto_k = family_result_sort(random_data, k=k)
     sorted_naive_k = naive_sort(random_data, k=k)
     assert_structs_close(sorted_auto_k, sorted_naive_k)
->>>>>>> orthoxml
+

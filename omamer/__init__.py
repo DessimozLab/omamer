@@ -1,7 +1,7 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2024 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
+    (C) 2024-2025 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
     (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
@@ -24,7 +24,7 @@
 from datetime import date
 
 __packagename__ = "omamer"
-__version__ = "2.1.0"
+__version__ = "2.1.2"
 __copyright__ = "(C) 2019-{:d} Victor Rossier <victor.rossier@unil.ch> and Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk> and Nikolai Romashchenko <nikolai.romashchenko@unil.ch>".format(
     date.today().year
 )

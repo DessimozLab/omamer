@@ -1,7 +1,7 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2024 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
+    (C) 2024-2025 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
     (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
@@ -22,8 +22,8 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
 import numpy as np
+import os
 from omamer.index import update_with_elias_fano
-
 from ._utils import LOG, check_file_exists
 
 
@@ -131,7 +131,7 @@ def mkdb_oma(args):
 
 def search(args):
     from alive_progress import alive_bar
-    from ._utils import print_message, print_line
+    from ._utils import print_message
     import sys
 
     if args.out is None:
@@ -163,6 +163,7 @@ def search(args):
         bar.text(" [DONE]")
 
     print_run_data(args)
+    check_args(args)
 
     t0 = time()
 
@@ -247,7 +248,7 @@ def search(args):
                     # write the top header
                     print("!omamer-version: {}".format(__version__), file=args.out)
                     print(
-                        "!query-md5: {}".format(compute_file_md5(args.query.name)),
+                        "!query-md5: {}".format(compute_file_md5(args.query)),
                         file=args.out,
                     )
                     print(
@@ -415,7 +416,7 @@ def print_run_data(args):
     print_line(80)
     print_message("\nRunning OMAmer on {}, using:".format(platform.node()))
     print_message(" - database: {}".format(args.db))
-    print_message(" - query: {}".format(args.query.name))
+    print_message(" - query: {}".format(args.query))
     print_message(" - version: {}".format(__version__))
     print_message("")
     print_line(80)
@@ -453,3 +454,12 @@ def goodbye(args, time_taken, search_rate):
     )
     print_message("")
     print_line(80)
+
+
+def check_args(args):
+    # Enforce query existence check before loading DB
+    with open(args.query, "r") as _:
+        pass
+
+    if os.path.getsize(args.query) == 0:
+        raise RuntimeError(f"Input file {args.query} is empty")

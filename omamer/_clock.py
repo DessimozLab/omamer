@@ -1,7 +1,7 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2024 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
+    (C) 2024-2025 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
     (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
@@ -23,10 +23,17 @@
 """
 
 import ctypes
+import sys
 
-# Access the _PyTime_AsSecondsDouble and _PyTime_GetSystemClock functions from pythonapi
-clock = ctypes.pythonapi._PyTime_GetSystemClock
-as_seconds = ctypes.pythonapi._PyTime_AsSecondsDouble
+
+if sys.version_info[1] < 13:
+    clock = ctypes.pythonapi._PyTime_GetSystemClock
+    as_seconds = ctypes.pythonapi._PyTime_AsSecondsDouble
+else:
+    # in python 3.13 and later, PyTime C API was made public
+    clock = ctypes.pythonapi.PyTime_TimeRaw
+    as_seconds = ctypes.pythonapi.PyTime_AsSecondsDouble
+
 
 # Set the argument types and return types of the functions
 clock.argtypes = []

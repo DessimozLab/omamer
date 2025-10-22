@@ -1,7 +1,7 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2024 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
+    (C) 2024-2025  Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
     (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
@@ -499,13 +499,13 @@ class Database(object):
             # TODO: check what else would break. this could be used if someone wanted to build a
             # database for flat OGs.
             LOG.warning("No nesting structure in HOGs defined in OrthoXML.")
-        else:
-            self.db.create_carray(
-                "/",
-                "ChildrenHOG",
-                obj=np.array(child_hogs, dtype=np.uint32),
-                filters=self._compr,
-            )
+            child_hogs = [0]  # adding sentinel in case no nested HOGs are defined.
+        self.db.create_carray(
+            "/",
+            "ChildrenHOG",
+            obj=np.array(child_hogs, dtype=np.uint32),
+            filters=self._compr,
+        )
         self.db.create_carray(
             "/",
             "ChildrenProt",
@@ -1063,14 +1063,14 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.include_younger_fams = include_younger_fams
 
     def setup_hogparser(self, oxml_path):
-        from .HOGParser import HOGParser
+        from .orthoxml_parser import OrthoxmlParser
 
         LOG.debug("loading species table from orthoxml")
         self.oxml_path = oxml_path
-        self.hog_parser = HOGParser(oxml_path)
+        self.hog_parser = OrthoxmlParser(oxml_path)
 
     def parse_oxml(self, nspecies_below):
-        from .HOGParser import is_orthologGroup_node
+        from .orthoxml_parser import is_orthologGroup_node
 
         def generate_hog_tab(hog):
             # this is more memory intensive (we cache the results)
@@ -1142,7 +1142,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         hogs = []
         entries = []
         LOG.debug("loading hog structure and membership from orthoxml")
-        for hog in tqdm(self.hog_parser.HOGs(auto_clean=True), desc="Parsing HOGs"):
+        for hog in tqdm(self.hog_parser.iter_hogs(auto_clean=True), desc="Parsing HOGs"):
             hog_data = list(filter(lambda x: x is not None, generate_hog_tab(hog)))
             gene_data = list(generate_prot_tab(hog))
             hog_data += list(generate_hogs_for_prot(hog, gene_data))
@@ -1169,7 +1169,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         # set index as the protein id so that we can look up the hog id.
         ent_tab = ent_tab[ent_tab["hogid"].isin(set(hog_tab["ID"]))].set_index("protId")
 
-        return (hog_tab.to_records(), ent_tab)
+        return hog_tab.to_records(), ent_tab
 
     ### main function ###
     def build_database(self, oxml_path, sequence_files, structure_files, stree_path):
@@ -1183,7 +1183,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.add_taxid_col()
 
         LOG.debug("build hog_table from orthoxml")
-        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+        hog_tab, ent_tab = self.parse_oxml(nspecies_below)
 
         LOG.debug("select and strip OMA HOGs")
         (
@@ -1271,13 +1271,26 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         ent_tab = ent_tab[ent_tab["hogid"].map(lambda x: x in oma_hog2hog)]
 
-        LOG.debug(" - loading proteins from FASTA sequences, for selected HOGs")
+        # Make ent_tab into a dict {protID -> (hogid, species)} as it's
+        # more efficient for querying individual protID than pd.DataFrame.loc
+
+        duplicates = ent_tab[ent_tab.index.duplicated(keep=False)]
+
+        # if found duplicated keys (i.e. protId), raise error
+        if len(duplicates) > 0:
+            nonunique_keys = duplicates.index.unique()
+            error_message = "Found duplicated protein IDs:\n" + "\n\t".join(s for s in nonunique_keys)
+            LOG.error(error_message)
+            raise RuntimeError(error_message)
+
+        ent_tab = ent_tab[~ent_tab.index.duplicated(keep="first")].to_dict("index")
 
         prot_off = 0  # pointer to protein in protein table
 
         # store rows for species and protein tables and sequence buffer
         seq_buffs = []
 
+        LOG.debug(" - loading proteins from FASTA sequences for selected HOGs")
         prot_tab = self.db.create_table(
             "/",
             "Protein",
@@ -1299,20 +1312,20 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                     SeqIO.parse(fp, "fasta"),
                     desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
                 ):
-                    if rec.description in ent_tab.index:
+                    if rec.description in ent_tab:
                         # this seems to be most common, full header is used in standalone orthoXML
                         prot_id = rec.description
-                    elif rec.id in ent_tab.index:
+                    elif rec.id in ent_tab:
                         # otherwise we might only see the first part of the id.
                         prot_id = rec.id
                     else:
                         # otherwise we can't do anything...
                         continue
-
                     # get hog id, skip if we have filtered it out
-                    r = ent_tab.loc[prot_id]
+                    r = ent_tab[prot_id]
                     hog_id = r["hogid"]
                     sp = r["species"]
+
                     # (hog_id, sp) = entry_mapping[prot_id]
                     if hog_id not in oma_hog2hog:
                         continue
@@ -1344,6 +1357,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
                         # update offset of protein row in table
                         prot_off += 1
+
 
         # store species info
         sp_rows = [()] * len(species)  # keep sorted
@@ -1418,6 +1432,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         structure_buff = np.concatenate(ss_buffs)
         return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff, structure_buff
+
 
     def add_taxid_col(self):
         """

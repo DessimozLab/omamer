@@ -920,9 +920,11 @@ class MergeSearch(object):
 
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
 
+        data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
+
         # allocate result arrays
         family_results = np.zeros(
-            (len(sbuff.idx) - 1, top_n_fams),
+            (data_size, top_n_fams),
             dtype=np.dtype(
                 [
                     ("id", np.uint32),
@@ -938,7 +940,7 @@ class MergeSearch(object):
             ),
         )
         subfam_results = np.zeros(
-            (len(sbuff.idx) - 1, top_n_fams),
+            (data_size, top_n_fams),
             dtype=np.dtype(
                 [("id", np.uint32), ("score", np.float64), ("count", np.uint32)]
             ),
@@ -986,7 +988,7 @@ class MergeSearch(object):
         )
 
         return self.output_results(
-            family_results, subfam_results, sbuff, top_n_fams, ref_taxon_off
+            family_results, subfam_results, sbuff, ssbuff, top_n_fams, ref_taxon_off
         )
 
     def output_results(
@@ -994,6 +996,7 @@ class MergeSearch(object):
         family_results,
         subfam_results,
         sbuff,
+        ssbuff,
         top_n_fams,
         ref_taxon_off,
     ):
@@ -1016,7 +1019,8 @@ class MergeSearch(object):
         # Note: missing values are dealt differently by pandas and numpy
 
         def generate():
-            for i in range(0, len(sbuff.idx) - 1):
+            data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
+            for i in range(0, data_size):
                 for j in range(top_n_fams):
                     if (j == 0) or subfam_results["id"][i, j] > 0:
                         yield {
@@ -1049,8 +1053,13 @@ class MergeSearch(object):
 
         # set the query ids
         qseq_offsets = df["qseq_offset"].to_numpy(dtype=np.uint32)
-        df["qseqid"] = sbuff.ids[qseq_offsets - 1]
-        df["qseqlen"] = sbuff.get_seqlen(qseq_offsets)
+
+        if len(sbuff.buff):
+            df["qseqid"] = sbuff.ids[qseq_offsets - 1]
+            df["qseqlen"] = sbuff.get_seqlen(qseq_offsets)
+        else:
+            df["qseqid"] = ssbuff.ids[qseq_offsets - 1]
+            df["qseqlen"] = ssbuff.get_seqlen(qseq_offsets)
 
         # load the hog ids
         hog_f = df["hog_offset"].notna()
@@ -1139,7 +1148,9 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
-            only_sequence = False
+            only_structure = (len(seqs) == 0) and (len(ss_seqs) > 0)
+            only_sequence = (len(seqs) > 0) and (len(ss_seqs) == 0)
+
 
             # Arrays for thread-local data. We allocate them
             # in advance to avoid doing so for every query
@@ -1153,37 +1164,43 @@ class MergeSearch(object):
             num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
             num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
 
-            for sequence_id in numba.prange(len(seqs_idx) - 1):
-                # extract the sequence from the sequence buffer
-                sequence = seqs[seqs_idx[sequence_id]: np.int64(seqs_idx[sequence_id + 1] - 1)]
+            # choose what prange will iterate over, sequence or
+            # structure records. By default, it's sequence if present
+            n_iter = len(ss_seqs_idx) - 1 if only_structure else len(seqs_idx) - 1
 
-                placed = place_sequence(
-                    family_results,
-                    subfam_results,
-                    sequence,
-                    sequence_id,
-                    trans,
-                    table_idx,
-                    table_buff,
-                    k,
-                    DIGITS_AA_LOOKUP,
-                    fam_tab,
-                    hog_tab,
-                    level_arr,
-                    top_n_fams,
-                    ref_fam_prob,
-                    ref_hog_prob,
-                    alpha,
-                    sst,
-                    family_only,
-                    hit_fams,
-                    hit_hogs,
-                    hog_counts,
-                    fam_counts,
-                    fam_lowloc,
-                    fam_highloc,
-                    num_hit_fams,
-                    num_hit_hogs)
+            for sequence_id in numba.prange(n_iter):
+                placed = False
+                if not only_structure:
+                    # extract the sequence from the sequence buffer
+                    sequence = seqs[seqs_idx[sequence_id]: np.int64(seqs_idx[sequence_id + 1] - 1)]
+
+                    placed = place_sequence(
+                        family_results,
+                        subfam_results,
+                        sequence,
+                        sequence_id,
+                        trans,
+                        table_idx,
+                        table_buff,
+                        k,
+                        DIGITS_AA_LOOKUP,
+                        fam_tab,
+                        hog_tab,
+                        level_arr,
+                        top_n_fams,
+                        ref_fam_prob,
+                        ref_hog_prob,
+                        alpha,
+                        sst,
+                        family_only,
+                        hit_fams,
+                        hit_hogs,
+                        hog_counts,
+                        fam_counts,
+                        fam_lowloc,
+                        fam_highloc,
+                        num_hit_fams,
+                        num_hit_hogs)
 
                 if not only_sequence and not placed:
                     structure = ss_seqs[
@@ -1240,5 +1257,5 @@ class MergeSearch(object):
         # process = psutil.Process()
         # print(f"Memory: {process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
 
-        #return func
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return func
+        #return numba.jit(func, parallel=True, nopython=True, nogil=True)

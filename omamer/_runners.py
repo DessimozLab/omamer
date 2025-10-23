@@ -214,19 +214,56 @@ def search(args):
             chunksize=args.chunksize,
             sanitiser=db.ki.alphabet.sanitise_seq,
         )
-        struct_iter = SequenceReader.read(
-            args.structure,
-            k=db.ki.k,
-            format="fasta",
-            chunksize=args.chunksize,
-            sanitiser=db.ki.alphabet.sanitise_seq,
-        )
 
-        # Iterate both in lock-step
-        for (ids_q, seqs_q), (ids_s, struct_seqs) in zip(query_iter, struct_iter):
-            if ids_q != ids_s:
-                #LOG.warning(f"{ids_q} != {ids_s}")
-                raise RuntimeError("Query and structure IDs must match")
+        has_sequence = args.query and os.path.exists(args.query)
+        has_structure = args.structure and os.path.exists(args.structure)
+
+
+        query_iter = None
+        if has_sequence:
+            query_iter = SequenceReader.read(
+                args.query,
+                k=db.ki.k,
+                format="fasta",
+                chunksize=args.chunksize,
+                sanitiser=db.ki.alphabet.sanitise_seq,
+            )
+
+        struct_iter = None
+        if has_structure:
+            struct_iter = SequenceReader.read(
+                args.structure,
+                k=db.ki.k,
+                format="fasta",
+                chunksize=args.chunksize,
+                sanitiser=db.ki.alphabet.sanitise_seq,
+            )
+
+        if not has_sequence and not has_structure:
+            raise RuntimeError("At least one of --query or --structure must be provided")
+
+        # main iterator over sequence records
+        if has_sequence:
+            main_iter = query_iter
+        else:
+            main_iter = struct_iter
+
+        for i, (ids_q, seqs_q) in enumerate(main_iter):
+            struct_seqs = []
+
+            # if both exist, advance structure iterator and
+            # check sequence record IDs match in both
+            # the sequence and structure file
+            if has_sequence and has_structure:
+                ids_s, struct_seqs = next(struct_iter)
+                if ids_q != ids_s:
+                    raise RuntimeError("Query and structure IDs must match")
+
+            # if only structure, swap inputs as the main iterator is
+            # not over sequence
+            elif has_structure and not has_sequence:
+                struct_seqs = seqs_q
+                seqs_q = []
 
             t_search0 = time()
             df = ms.merge_search(
@@ -248,7 +285,7 @@ def search(args):
                     # write the top header
                     print("!omamer-version: {}".format(__version__), file=args.out)
                     print(
-                        "!query-md5: {}".format(compute_file_md5(args.query)),
+                        "!query-md5: {}".format(compute_file_md5(args.query if args.query else args.structure)),
                         file=args.out,
                     )
                     print(
@@ -457,9 +494,11 @@ def goodbye(args, time_taken, search_rate):
 
 
 def check_args(args):
-    # Enforce query existence check before loading DB
-    with open(args.query, "r") as _:
-        pass
+    for filename in [args.query, args.structure]:
+        if filename:
+            # Enforce query existence check before loading DB
+            with open(filename, "r") as _:
+                pass
 
-    if os.path.getsize(args.query) == 0:
-        raise RuntimeError(f"Input file {args.query} is empty")
+            if os.path.getsize(filename) == 0:
+                raise RuntimeError(f"Input file {filename} is empty")

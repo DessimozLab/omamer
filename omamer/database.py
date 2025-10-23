@@ -1386,12 +1386,12 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             with auto_open(fasta_fn, "rt") as fp:
                 for rec in tqdm(
                     SeqIO.parse(fp, "fasta"),
-                    desc="Parsing sequences ({})".format(os.path.basename(fasta_fn)),
+                    desc="Parsing structures ({})".format(os.path.basename(fasta_fn)),
                 ):
-                    if rec.description in ent_tab.index:
+                    if rec.description in ent_tab:
                         # this seems to be most common, full header is used in standalone orthoXML
                         prot_id = rec.description
-                    elif rec.id in ent_tab.index:
+                    elif rec.id in ent_tab:
                         # otherwise we might only see the first part of the id.
                         prot_id = rec.id
                     else:
@@ -1399,7 +1399,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         continue
 
                     # get hog id, skip if we have filtered it out
-                    r = ent_tab.loc[prot_id]
+                    r = ent_tab[prot_id]
                     hog_id = r["hogid"]
                     sp = r["species"]
                     # (hog_id, sp) = entry_mapping[prot_id]
@@ -1411,17 +1411,6 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         seq = sanitiser(str(rec.seq)) + " "  # add the padding
                         seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
                         ss_buffs.append(seq)
-
-                        # store protein information
-                        #prot_id = prot_id.encode("ascii")
-                        #prot_tab.append(
-                        #    [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
-                        #)
-
-                        # store protein id
-                        #prot_id_buff.append(
-                        #    np.frombuffer(prot_id, dtype=tables.StringAtom(1))
-                        #)
 
                         # track hog and family
                         hog = oma_hog2hog[hog_id]

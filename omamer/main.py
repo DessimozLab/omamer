@@ -197,7 +197,7 @@ def main():
     search_parser.add_argument(
         "-q",
         "--query",
-        required=True,
+        required=False,
         help="Path to FASTA formatted sequences",
         type=str,
     )
@@ -207,7 +207,7 @@ def main():
         "--structure",
         required=False,
         help="Path to FASTA formatted 3di sequences",
-        type=FileType("r"),
+        type=str,
     )
 
     search_parser.add_argument(

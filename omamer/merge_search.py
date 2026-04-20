@@ -49,6 +49,16 @@ from ._clock import clock, as_seconds
 # maximum neglogp to set
 MAX_LOGP = 20000.0
 
+QUERY_FAMILY_RESULT_DTYPE = np.dtype(
+    [
+        ("id", np.uint32),
+        ("pvalue", np.float64),
+        ("count", np.uint32),
+        ("normcount", np.float64),
+        ("overlap", np.float64),
+    ]
+)
+
 
 @numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
@@ -294,6 +304,11 @@ def custom_unique1d(ar):
     idx = np.concatenate((np.nonzero(mask)[0], np.array([mask.size])))
 
     return aux[mask], perm[mask], np.diff(idx)
+
+
+@numba.njit
+def init_query_family_results(n):
+    return np.zeros(n, dtype=QUERY_FAMILY_RESULT_DTYPE)
 
 
 @numba.njit
@@ -623,33 +638,33 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
 
 @numba.njit
 def place_sequence(
-    family_results,
-    subfam_results,
-    sequence,
-    sequence_id,
-    trans,
-    table_idx,
-    table_buff,
-    k,
-    DIGITS_AA_LOOKUP,
-    fam_tab,
-    hog_tab,
-    level_arr,
-    top_n_fams,
-    ref_fam_prob,
-    ref_hog_prob,
-    alpha,
-    sst,
-    family_only,
-    hit_fams,
-    hit_hogs,
-    hog_counts,
-    fam_counts,
-    fam_lowloc,
-    fam_highloc,
-    num_hit_fams,
-    num_hit_hogs,
-):
+        family_results,
+        subfam_results,
+        sequence,
+        sequence_id,
+        trans,
+        table_idx,
+        table_buff,
+        k,
+        DIGITS_AA_LOOKUP,
+        fam_tab,
+        hog_tab,
+        level_arr,
+        top_n_fams,
+        ref_fam_prob,
+        ref_hog_prob,
+        alpha,
+        sst,
+        family_only,
+        hit_fams,
+        hit_hogs,
+        hog_counts,
+        fam_counts,
+        fam_lowloc,
+        fam_highloc,
+        num_hit_fams,
+        num_hit_hogs,
+) -> bool:
 
     query_len = sequence.shape[0]
     n_kmers = query_len - (k - 1)
@@ -702,7 +717,7 @@ def place_sequence(
 
     # Identify families of interest
     idx = thread_hit_fams[:thread_num_hit_fams]
-    qres = np.repeat(np.zeros_like(family_results[sequence_id, 0]), len(idx))
+    qres = init_query_family_results(len(idx))
     qres["id"][:] = idx
     qres["count"][:] = thread_fam_counts[idx]
 
@@ -723,7 +738,7 @@ def place_sequence(
             thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k
         ) / query_len
 
-    qres = qres[(qres["overlap"] >= (25 / query_len))]
+    qres = qres[qres["overlap"] >= (25 / query_len)]
 
     if len(qres) == 0:
         return False
@@ -772,14 +787,14 @@ def place_sequence(
 
     # Filter on the actual p-value
     alpha = -1.0 * np.log(alpha)
-    qres = qres[(qres["pvalue"] >= alpha)]
+    qres = qres[qres["pvalue"] >= alpha]
     # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
     qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
 
     if len(qres) == 0:
         return False
 
-    # 4. Compute normalised count
+    # 4. Compute normalized count
     expected_count = ref_fam_prob[qres["id"]] * len(r1)
     qres["normcount"][:] = (qres["count"] - expected_count) / (
            len(r1) - expected_count
@@ -852,6 +867,7 @@ class MergeSearch(object):
         # load ki and db
         self.db = ki.db
         self.ki = ki
+        self.has_structure = self.db.has_structure()
 
         self.include_extant_genes = include_extant_genes
 
@@ -902,6 +918,14 @@ class MergeSearch(object):
     @lazy_property
     def ss_ref_hog_prob(self):
         return self.db._db_Index_HOGSSProbability[:]
+
+    @cached_property
+    def _empty_u32(self):
+        return np.empty(0, dtype=np.uint32)
+
+    @cached_property
+    def _empty_f64(self):
+        return np.empty(0, dtype=np.float64)
 
 
     def merge_search(
@@ -961,8 +985,8 @@ class MergeSearch(object):
             self.kmer_table["idx"],
             self.kmer_table["buff"],
             self.kmer_table["raw_flags"],
-            self.ss_kmer_table["idx"],
-            self.ss_kmer_table["buff"],
+            self.ss_kmer_table["idx"] if self.has_structure else self._empty_u32,
+            self.ss_kmer_table["buff"] if self.has_structure else self._empty_u32,
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
             self.fam_tab,
@@ -971,8 +995,8 @@ class MergeSearch(object):
             top_n_fams=top_n_fams,
             ref_fam_prob=self.ref_fam_prob,
             ref_hog_prob=self.ref_hog_prob,
-            ss_ref_fam_prob=self.ss_ref_fam_prob,
-            ss_ref_hog_prob=self.ss_ref_hog_prob,
+            ss_ref_fam_prob=self.ss_ref_fam_prob if self.has_structure else self._empty_f64,
+            ss_ref_hog_prob=self.ss_ref_hog_prob if self.has_structure else self._empty_f64,
             alpha=alpha,
             sst=sst,
             family_only=family_only,
@@ -1148,9 +1172,15 @@ class MergeSearch(object):
             # flags to ignore k-mers containing X
             x_flag = table_idx.size - 1
 
-            only_structure = (len(seqs) == 0) and (len(ss_seqs) > 0)
-            only_sequence = (len(seqs) > 0) and (len(ss_seqs) == 0)
+            has_structure_index = (
+                (ss_table_idx.size > 0)
+                and (ss_table_buff.size > 0)
+                and (ss_ref_fam_prob.size > 0)
+                and (ss_ref_hog_prob.size > 0)
+            )
 
+            only_structure = (len(seqs) == 0) and (len(ss_seqs) > 0) and has_structure_index
+            only_sequence = (len(seqs) > 0) and ((len(ss_seqs) == 0) or not has_structure_index)
 
             # Arrays for thread-local data. We allocate them
             # in advance to avoid doing so for every query
@@ -1202,7 +1232,7 @@ class MergeSearch(object):
                         num_hit_fams,
                         num_hit_hogs)
 
-                if not only_sequence and not placed:
+                if has_structure_index and not only_sequence and not placed:
                     structure = ss_seqs[
                         ss_seqs_idx[sequence_id] : np.int64(ss_seqs_idx[sequence_id + 1] - 1)
                     ]
@@ -1257,5 +1287,5 @@ class MergeSearch(object):
         # process = psutil.Process()
         # print(f"Memory: {process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
 
-        return func
-        #return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        #return func
+        return numba.jit(func, parallel=True, nopython=True, nogil=True)

@@ -44,7 +44,8 @@ requirements = [
     "scipy",
     "tables",
     "tqdm",
-    "cppyy"
+    "cppyy",
+    "psutil"
 ]
 extra_requirements = {"build": ["pysais"]}
 

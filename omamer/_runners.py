@@ -356,13 +356,18 @@ def _ensure_data_loaded(ms):
     _load("fam_tab", "family information")
     _load("hog_tab", "sub-family information")
     _load("level_arr", "family hierarchy")
+
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
 
-    _load("ss_kmer_table", "structural k-mer index")
-    _load("ss_ref_fam_prob", "structural family probability estimates")
-    _load("ss_ref_hog_prob", "structural sub-family probability estimates")
+    # Databases pre All.Jul2024 didn't have any structure
+    # We keep it backward compatible to make it possible to load
+    # older databases.
+    if ms.db.has_structure():
+        _load("ss_kmer_table", "structural k-mer index")
+        _load("ss_ref_fam_prob", "structural family probability estimates")
+        _load("ss_ref_hog_prob", "structural sub-family probability estimates")
 
 
     from enum import Enum

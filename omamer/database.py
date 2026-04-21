@@ -23,7 +23,6 @@
 """
 from Bio import SeqIO
 from collections import defaultdict
-from itertools import repeat
 from packaging.version import parse as parse_version
 from tqdm.auto import tqdm
 import numpy as np
@@ -39,6 +38,7 @@ from .hierarchy import (
 )
 from .index import Index
 from ._utils import LOG, is_progress_disabled, compute_file_md5, auto_open
+from .h5 import OmaServerAdapter, OmaStructureDBAdapter
 
 
 class Database(object):
@@ -191,6 +191,8 @@ class Database(object):
         """
         except SpeOff column
         """
+        LOG.debug("initiate taxonomy table")
+
         self._check_open_writeable()
 
         def _parse_stree(stree_path, roottax):
@@ -569,6 +571,8 @@ class Database(object):
         """
         add HOGoff column in the protein table
         """
+        LOG.debug("complete protein table")
+
         self._check_open_writeable()
 
         # newer way of doing this
@@ -583,6 +587,8 @@ class Database(object):
         """
         Store taxonomic levels of HOGs.
         """
+        LOG.debug("store HOG taxa")
+
         (hog_taxa_idx, hog_taxa_buff) = get_hog2taxa(
             self._db_HOG[:],
             self._db_Species[:],
@@ -743,6 +749,7 @@ class Database(object):
 
 class DatabaseFromOMA(Database):
     def select_and_strip_OMA_HOGs(self, hog_tab):
+        LOG.debug("select and strip OMA HOGs")
         def _process_oma_hog(
             tax2level,
             curr_oma_taxa,
@@ -1179,7 +1186,6 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self._check_open_writeable()
 
         # build taxonomy table except the SpeOff column
-        LOG.debug("initiate taxonomy table")
         tax2taxoff, species, nspecies_below = self.initiate_tax_tab(stree_path)
 
         self.setup_hogparser(oxml_path)
@@ -1466,77 +1472,73 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         self.include_younger_fams = include_younger_fams
         self.oma_version = ""
 
+
     ### main function ###
-    def build_database(self, oma_h5_path, stree_path):
+    def build_database(self, oma_h5_path, stree_path, structure_h5_path=None):
         self._check_open_writeable()
 
-        # load OMA h5 file
-        h5file = tables.open_file(oma_h5_path, mode="r")
-        try:
-            self.oma_version = h5file.get_node_attr("/", "oma_version")
-        except AttributeError:
-            raise Exception(
-                "Provided file '{}' does not seem to be an OMA HDF5 database".format(
-                    oma_h5_path
-                )
+        with OmaServerAdapter(oma_h5_path) as oma_adapter:
+            oma_server_handle = oma_adapter.handle
+            self.oma_version = oma_adapter.oma_version
+
+            # build taxonomy table except the SpeOff column
+            tax2taxoff, species, nspecies_below = self.initiate_tax_tab(stree_path)
+            self.add_taxid_col(oma_server_handle)
+
+            (
+                fam2hogs,
+                hog2oma_hog,
+                hog2tax,
+                hog2gene_nr,
+                hog2completeness,
+            ) = self.select_and_strip_OMA_HOGs(hog_tab=oma_server_handle.root.HogLevel)
+
+            (
+                fam2hogs,
+                hog2protoffs,
+                hog2tax,
+                hog2oma_hog,
+                seq_buff,
+            ) = self.select_and_filter_proteins(
+                oma_server_handle,
+                fam2hogs,
+                hog2oma_hog,
+                hog2tax,
+                species,
+                self.min_fam_size,
             )
 
-        # build taxonomy table except the SpeOff column
-        LOG.debug("initiate taxonomy table")
-        tax2taxoff, species, nspecies_below = self.initiate_tax_tab(stree_path)
-        self.add_taxid_col(h5file)
+            LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
+            self.add_speoff_col()
+            self.add_taxoff_col()
 
-        LOG.debug("select and strip OMA HOGs")
-        (
-            fam2hogs,
-            hog2oma_hog,
-            hog2tax,
-            hog2gene_nr,
-            hog2completeness,
-        ) = self.select_and_strip_OMA_HOGs(hog_tab=h5file.root.HogLevel)
+            # mapper HOG to taxon offset
+            hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
 
-        LOG.debug("fill sequence buffer, species table and initiate protein table")
-        (
-            fam2hogs,
-            hog2protoffs,
-            hog2tax,
-            hog2oma_hog,
-            seq_buff,
-        ) = self.select_and_filter_OMA_proteins(
-            h5file, fam2hogs, hog2oma_hog, hog2tax, species, self.min_fam_size
-        )
+            LOG.debug("fill family and HOG tables")
+            hog2hogoff = self.update_hog_and_fam_tabs(
+                fam2hogs,
+                hog2taxoff,
+                hog2protoffs,
+                hog2oma_hog,
+                hog2gene_nr,
+                hog2completeness,
+            )
 
-        LOG.debug("add SpeOff and TaxOff columns in taxonomy and species tables")
-        self.add_speoff_col()
-        self.add_taxoff_col()
+            # add family and hog offsets
+            self.update_prot_tab(hog2protoffs, hog2hogoff)
 
-        # mapper HOG to taxon offset
-        hog2taxoff = {h: tax2taxoff.get(t, -1) for h, t in hog2tax.items()}
+            self.store_hog2taxa()
 
-        LOG.debug("fill family and HOG tables")
-        hog2hogoff = self.update_hog_and_fam_tabs(
-            fam2hogs,
-            hog2taxoff,
-            hog2protoffs,
-            hog2oma_hog,
-            hog2gene_nr,
-            hog2completeness,
-        )
-
-        # add family and hog offsets
-        LOG.debug("complete protein table")
-        self.update_prot_tab(hog2protoffs, hog2hogoff)
-
-        LOG.debug("store HOG taxa")
-        self.store_hog2taxa()
-
-        # compute the median sequence length of each HOG
-        self.add_median_seqlen_col()
-
-        # close and open in read mode
-        h5file.close()
+            # compute the median sequence length of each HOG
+            self.add_median_seqlen_col()
 
         structure_buff = None
+        if structure_h5_path:
+            with OmaStructureDBAdapter(structure_h5_path) as tdi_adapter:
+                pass
+
+
         return seq_buff, structure_buff
 
     def add_metadata(self):
@@ -1548,14 +1550,22 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         self.db.set_node_attr("/", "filter_logic", self.logic)
         self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
 
-    def select_and_filter_OMA_proteins(
-        self, h5file, fam2hogs, hog2oma_hog, hog2tax, species, min_fam_size
+    def select_and_filter_proteins(
+        self,
+        oma_server_h5file,
+        fam2hogs,
+        hog2oma_hog,
+        hog2tax,
+        species,
+        min_fam_size,
     ):
-        genome_tab = h5file.root.Genome[:]
-        ent_tab = h5file.root.Protein.Entries
+        LOG.debug("fill sequence buffer, species table and initiate protein table")
+
+        genome_tab = oma_server_h5file.root.Genome[:]
+        ent_tab = oma_server_h5file.root.Protein.Entries
 
         # load entire sequence buffer into memory if we are computing for more than 100 species
-        oma_seq_buffer = h5file.root.Protein.SequenceBuffer
+        oma_seq_buffer = oma_server_h5file.root.Protein.SequenceBuffer
         if len(species) > 100:
             oma_seq_buffer = oma_seq_buffer[:]
 
@@ -1656,7 +1666,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         del genome_tab, ent_tab, oma_seq_buffer
 
         seq_buff = np.concatenate(seq_buffs)
-        return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff
 
     def add_taxid_col(self, h5file):
         """

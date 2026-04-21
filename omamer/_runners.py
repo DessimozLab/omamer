@@ -60,6 +60,14 @@ def mkdb_oma(args):
         check_file_exists(oma_db_fn)
         nwk = os.path.join(args.oma_path, "speciestree.nwk")
         check_file_exists(nwk)
+        structure_h5_fn = None
+        if args.structures:
+            if len(args.structures) != 1:
+                raise ValueError(
+                    "BROWSERBUILD expects exactly one path to 3Di HDF5 file via --structures"
+                )
+            structure_h5_fn = args.structures[0].name
+            check_file_exists(structure_h5_fn)
 
     else:
         if args.orthoxml is None or args.species_tree is None or len(args.sequences) == 0:
@@ -112,7 +120,7 @@ def mkdb_oma(args):
     # add sequences from database
     LOG.info("Loading sequences")
     if browser_db_mode:
-        seq_buff, ss_buff = db.build_database(oma_db_fn, nwk)
+        seq_buff, ss_buff = db.build_database(oma_db_fn, nwk, structure_h5_fn)
     else:
         seq_buff, ss_buff = db.build_database(oxml_fn, sequence_files, structure_files, nwk)
 

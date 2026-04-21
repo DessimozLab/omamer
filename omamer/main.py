@@ -171,7 +171,8 @@ def main():
     mkdb_parser.add_argument(
         "--structures",
         nargs='*',
-        help="Paths to 3di structure files (1 or multiple, only for non-browser build). [OXMLBUILD]",
+        help="""Paths to 3di structure files (1 or multiple) for OXMLBUILD. 
+        Provide exactly one 3di HDF5 file for BROWSERBUILD.""",
         type=FileType("r")
     )
     mkdb_parser.add_argument(

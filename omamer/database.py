@@ -112,8 +112,86 @@ class Database(object):
 
         if "/Index" in self.db:
             self.ki = Index(self)
+
         if self.mode == "r":
             self._check_db_version()
+
+    #################################################
+    # Properties to support typing.OMAmerDBLike
+
+    @property
+    def protein_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Protein"))
+
+    @property
+    def hog_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/HOG"))
+
+    @property
+    def family_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Family"))
+
+    @property
+    def species_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Species"))
+
+    @property
+    def taxonomy_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Taxonomy"))
+
+    @property
+    def children_tax_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/ChildrenTax"))
+
+    @property
+    def children_hog_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/ChildrenHOG"))
+
+    @property
+    def children_prot_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/ChildrenProt"))
+
+    @property
+    def level_offset_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/LevelOffsets"))
+
+    @property
+    def hog_taxa_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/HOGtaxa"))
+
+    @property
+    def seq_table_index_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/Index/TableIndex"))
+
+    @property
+    def seq_table_buffer_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/Index/TableBuffer"))
+
+    @property
+    def seq_family_probability_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/Index/FamilyProbability"))
+
+    @property
+    def seq_hog_probability_carray(self) -> tables.CArray:
+        return cast(tables.CArray, self.db.get_node("/Index/HOGProbability"))
+
+    @property
+    def hog_id_buffer(self) -> tables.EArray:
+        return cast(tables.EArray, self.db.get_node("/HOGIDBuffer"))
+
+    @property
+    def protein_id_buffer(self) -> tables.EArray:
+        return cast(tables.EArray, self.db.get_node("/ProteinIDBuffer"))
+
+    @property
+    def compression_filters(self) -> tables.Filters:
+        return self._compr
+
+    @property
+    def access_mode(self) -> str:
+        return self.mode
+
+    #################################################
 
     def _check_db_version(self):
         # check that the database version is the same minor version as us.
@@ -150,31 +228,6 @@ class Database(object):
     def __exit__(self, *_):
         self.close()
 
-    #################################################
-    # Properties to support typing.OMAmerDatabaseLike
-
-    @property
-    def protein_table(self) -> tables.Table:
-        return cast(tables.Table, self.db.get_node("/Protein"))
-
-    @property
-    def hog_table(self) -> tables.Table:
-        return cast(tables.Table, self.db.get_node("/HOG"))
-
-    @property
-    def family_table(self) -> tables.Table:
-        return cast(tables.Table, self.db.get_node("/Family"))
-
-    @property
-    def species_table(self) -> tables.Table:
-        return cast(tables.Table, self.db.get_node("/Species"))
-
-    @property
-    def taxonomy_table(self) -> tables.Table:
-        return cast(tables.Table, self.db.get_node("/Taxonomy"))
-
-    #################################################
-
     def __getattr__(self, attr):
         # make paths in the database accessible as attributes
         if attr.startswith("_db_"):
@@ -196,7 +249,7 @@ class Database(object):
         x = self.hog_table[i]
         s = x["IDBufferOff"]
         e = s + x["IDLen"]
-        return self._db_HOGIDBuffer[s:e].tobytes().decode("ascii")
+        return np.asarray(self.hog_id_buffer[s:e]).tobytes().decode("ascii")
 
     def get_prot_id(self, i):
         if "ID" not in self.protein_table.colinstances:
@@ -204,10 +257,10 @@ class Database(object):
             x = self.protein_table[i]
             s = x["IDBufferOff"]
             e = s + x["IDLen"]
-            return self._db_ProteinIDBuffer[s:e].tobytes().decode("ascii")
+            return np.asarray(self.protein_id_buffer[s:e]).tobytes().decode("ascii")
         else:
             # backwards compatability, as 2.3.0 introduced the above ID storage
-            return self.protein_table[i]["ID"].decode("ascii")
+            return bytes(self.protein_table[i]["ID"]).decode("ascii")
 
     def initiate_tax_tab(self, stree_path):
         """
@@ -244,7 +297,7 @@ class Database(object):
                 else:
                     nspecies_below[tl.name.encode("ascii")] = sum(1 for _ in tl.iter_leaves())
 
-            return (tax2parent, tax2children, tax2level, species, nspecies_below)
+            return tax2parent, tax2children, tax2level, species, nspecies_below
 
         # create tax table
         tax_tab = self.db.create_table(
@@ -303,7 +356,7 @@ class Database(object):
             filters=self._compr,
         )
 
-        return (tax2taxoff, species, nspecies_below)
+        return tax2taxoff, species, nspecies_below
 
     def update_hog_and_fam_tabs(
         self,
@@ -419,7 +472,7 @@ class Database(object):
         level_offsets = [0]
         level_offsets_off = 0
 
-        # initialise hog id buffer
+        # initialize hog id buffer
         hog_id_buff = self.db.create_earray(
             "/", "HOGIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
         )
@@ -473,7 +526,7 @@ class Database(object):
                 ]
             )
 
-            # store sub-family information
+            # store subfamily information
             for i in range(len(hogs)):
                 oma_hog_id = hog2oma_hog[hogs[i]]
                 oma_hog_size = hog2gene_nr[hogs[i]]
@@ -615,9 +668,9 @@ class Database(object):
             self.hog_table[:],
             self.species_table[:],
             self.protein_table.col("SpeOff"),
-            self._db_ChildrenProt[:],
+            self.children_prot_carray[:],
             self.taxonomy_table[:],
-            self._db_ChildrenHOG[:],
+            self.children_hog_carray[:],
         )
 
         # this is already a uint32
@@ -706,8 +759,8 @@ class Database(object):
 
         fam_tab = self.family_table[:]
         hog_tab = self.hog_table[:]
-        chog_buff = self._db_ChildrenHOG[:]
-        cprot_buff = self._db_ChildrenProt[:]
+        chog_buff = self.children_hog_carray[:]
+        cprot_buff = self.children_prot_carray[:]
         prot_seq_lens = self.protein_table.col("SeqLen")
 
         median_seq_lengths = np.zeros(hog_tab.size, dtype=np.uint32)
@@ -728,7 +781,6 @@ class Database(object):
         Store metadata within the database to track the versioning / build time.
         """
         from datetime import datetime
-
         from . import __version__
 
         self.db.set_node_attr("/", "omamer_version", __version__)
@@ -743,15 +795,19 @@ class Database(object):
         meta = {
             k.replace("_", " "): attrs[k] for k in attrs._f_list() if k != "oma_version"
         }
+
         if "source" in meta:
             src_version = "_".join(meta["source"].lower().split(" ")) + "_version"
             meta["source"] += " / {}".format(attrs[src_version])
         if "omamer version" not in meta:
             meta["omamer version"] = "<= 0.2.3"
+
         meta["k-mer length"] = self.ki.k
         meta["alphabet size"] = self.ki.alphabet.n
         meta["nr species"] = len(self.species_table)
-        meta["nr indexed species"] = (len(self.species_table) - np.sum(self.ki.sp_filter))
+
+        sp_filter = np.asarray(self.ki.sp_filter, dtype=bool)
+        meta["nr indexed species"] = len(self.species_table) - int(np.count_nonzero(sp_filter))
         meta["hidden taxa"] = self.ki.hidden_taxa
         return meta
 

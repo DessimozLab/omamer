@@ -28,6 +28,7 @@ from property_manager import lazy_property
 from ._utils import LOG
 from .alphabets import Alphabet, get_transform
 from .hierarchy import get_lca_off, get_leaves
+from .typing import OMAmerDatabaseLike
 
 
 ## functions to cumulate HOG k-mer counts
@@ -55,7 +56,7 @@ def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
 
 
 class Index(object):
-    def __init__(self, db, k=6, reduced_alphabet=False, hidden_taxa=()):
+    def __init__(self, db: OMAmerDatabaseLike, k=6, reduced_alphabet=False, hidden_taxa=()):
         # load database object
         self.db = db
 
@@ -73,9 +74,9 @@ class Index(object):
 
     @lazy_property
     def sp_filter(self):
-        sp_filter = np.full((len(self.db._db_Species),), False)
+        sp_filter = np.full((len(self.db.species_table),), False)
         if len(self.hidden_taxa) > 0:
-            tax_tab = self.db._db_Taxonomy[:]
+            tax_tab = self.db.taxonomy_table[:]
             child_tax = self.db._db_ChildrenTax[:]
 
             if len(self.hidden_taxa) > 0:
@@ -94,12 +95,12 @@ class Index(object):
 
                 if sp_ii >= 0:
                     # leaf (i.e., extant species listed)
-                    LOG.debug('     - hiding {}'.format(self.db._db_Species[sp_ii]['ID'].decode('ascii')))
+                    LOG.debug('     - hiding {}'.format(self.db.species_table[sp_ii]['ID'].decode('ascii')))
                     sp_filter[sp_ii] = True
                 else:
                     # filter all leaves below declared taxon
                     for sp_jj in tax_tab["SpeOff"][get_leaves(tax_ii, tax_tab, child_tax)]:
-                        LOG.debug('     - hiding {}'.format(self.db._db_Species[sp_jj]['ID'].decode('ascii')))
+                        LOG.debug('     - hiding {}'.format(self.db.species_table[sp_jj]['ID'].decode('ascii')))
                         sp_filter[sp_jj] = True
         return sp_filter
 

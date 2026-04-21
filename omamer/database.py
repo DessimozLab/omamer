@@ -21,21 +21,18 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+import numpy as np
+import os
+import tables
 from Bio import SeqIO
 from collections import defaultdict
 from packaging.version import parse as parse_version
 from tqdm.auto import tqdm
-import numpy as np
-import os
-import tables
+from typing import cast
 
 from . import __version__
 from .alphabets import Alphabet
-from .hierarchy import (
-    get_hog_child_prots,
-    get_hog2taxa,
-    traverse,
-)
+from .hierarchy import get_hog_child_prots, get_hog2taxa, traverse
 from .index import Index
 from ._utils import LOG, is_progress_disabled, compute_file_md5, auto_open
 from .h5 import OmaServerAdapter, OmaStructureDBAdapter
@@ -47,7 +44,7 @@ class Database(object):
     """
 
     class ProteinTableFormat(tables.IsDescription):
-        # Note, the ID field could be generalised and replaced with a SequenceBuffer,
+        # Note, the ID field could be generalized and replaced with a SequenceBuffer,
         # for now use OMA formatted sequence identifiers. 5CHAR + max 7digit.
         # ID = tables.StringCol(PROT_ID_LEN, pos=1, dflt=b"")
         IDBufferOff = tables.UInt64Col(pos=1)
@@ -153,6 +150,31 @@ class Database(object):
     def __exit__(self, *_):
         self.close()
 
+    #################################################
+    # Properties to support typing.OMAmerDatabaseLike
+
+    @property
+    def protein_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Protein"))
+
+    @property
+    def hog_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/HOG"))
+
+    @property
+    def family_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Family"))
+
+    @property
+    def species_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Species"))
+
+    @property
+    def taxonomy_table(self) -> tables.Table:
+        return cast(tables.Table, self.db.get_node("/Taxonomy"))
+
+    #################################################
+
     def __getattr__(self, attr):
         # make paths in the database accessible as attributes
         if attr.startswith("_db_"):
@@ -171,21 +193,21 @@ class Database(object):
 
     def get_hog_id(self, i):
         # extract the hog id from the hog id buffer
-        x = self._db_HOG[i]
+        x = self.hog_table[i]
         s = x["IDBufferOff"]
         e = s + x["IDLen"]
         return self._db_HOGIDBuffer[s:e].tobytes().decode("ascii")
 
     def get_prot_id(self, i):
-        if "ID" not in self._db_Protein.colinstances:
+        if "ID" not in self.protein_table.colinstances:
             # extract the protein id from the protein id buffer
-            x = self._db_Protein[i]
+            x = self.protein_table[i]
             s = x["IDBufferOff"]
             e = s + x["IDLen"]
             return self._db_ProteinIDBuffer[s:e].tobytes().decode("ascii")
         else:
             # backwards compatability, as 2.3.0 introduced the above ID storage
-            return self._db_Protein[i]["ID"].decode("ascii")
+            return self.protein_table[i]["ID"].decode("ascii")
 
     def initiate_tax_tab(self, stree_path):
         """
@@ -299,9 +321,11 @@ class Database(object):
             parent2child_hogs = defaultdict(list)
 
             # sort alphabetically and track their true offsets
-            alpha_hogs, alpha_hogs_offs = map(
-                np.array, zip(*sorted(zip(hogs, range(hog_num))))
+            alpha_hogs_raw, alpha_hogs_offs_raw = zip(
+                *sorted(zip(hogs, range(hog_num)))
             )
+            alpha_hogs = np.asarray(alpha_hogs_raw)
+            alpha_hogs_offs = np.asarray(alpha_hogs_offs_raw)
 
             for i, hog_id in enumerate(hogs):
                 child_hog = hog_off + i
@@ -411,7 +435,7 @@ class Database(object):
 
             # levels
             hog_levels = list(map(lambda x: len(x.split(b".")), hogs))
-            hog_level_offsets = np.cumsum(np.unique(hog_levels, return_counts=True)[1]) + hog_off
+            hog_level_offsets = np.asarray(np.cumsum(np.unique(hog_levels, return_counts=True)[1]) + hog_off)
             hog_level_offsets_num = len(hog_level_offsets)
             level_offsets.extend(hog_level_offsets)
 
@@ -531,8 +555,8 @@ class Database(object):
         to the taxonomy table
         """
         # load species and taxa
-        species = self._db_Species.col("ID")
-        taxa = self._db_Taxonomy.col("ID")
+        species = self.species_table.col("ID")
+        taxa = self.taxonomy_table.col("ID")
 
         # potential idx of each taxon in species
         species_idx = np.searchsorted(species, taxa)
@@ -551,19 +575,19 @@ class Database(object):
         speoff_col[species_mask] = spe_offsets
 
         # update tax table
-        self._db_Taxonomy.modify_column(colname="SpeOff", column=speoff_col)
+        self.taxonomy_table.modify_column(colname="SpeOff", column=speoff_col)
 
     def add_taxoff_col(self):
         """
         to the species table
         """
         # load species and taxa
-        species = self._db_Species.col("ID")
-        taxa = self._db_Taxonomy.col("ID")
+        species = self.species_table.col("ID")
+        taxa = self.taxonomy_table.col("ID")
 
         tax_offsets = np.searchsorted(taxa, species)
 
-        self._db_Species.modify_column(colname="TaxOff", column=tax_offsets)
+        self.species_table.modify_column(colname="TaxOff", column=tax_offsets)
 
     def update_prot_tab(self, hog2protoffs, hog2hogoff):
         """
@@ -574,12 +598,12 @@ class Database(object):
         self._check_open_writeable()
 
         # newer way of doing this
-        hogoff_col = np.zeros(len(self._db_Protein), dtype=np.uint32)
+        hogoff_col = np.zeros(len(self.protein_table), dtype=np.uint32)
         for hog, protoffs in hog2protoffs.items():
             hogoff_col[np.array(list(protoffs), dtype=np.uint64)] = hog2hogoff[hog]
 
         # replace the empty columns
-        self._db_Protein.modify_column(colname="HOGoff", column=hogoff_col)
+        self.protein_table.modify_column(colname="HOGoff", column=hogoff_col)
 
     def store_hog2taxa(self):
         """
@@ -588,20 +612,20 @@ class Database(object):
         LOG.debug("store HOG taxa")
 
         (hog_taxa_idx, hog_taxa_buff) = get_hog2taxa(
-            self._db_HOG[:],
-            self._db_Species[:],
-            self._db_Protein.col("SpeOff"),
+            self.hog_table[:],
+            self.species_table[:],
+            self.protein_table.col("SpeOff"),
             self._db_ChildrenProt[:],
-            self._db_Taxonomy[:],
+            self.taxonomy_table[:],
             self._db_ChildrenHOG[:],
         )
 
         # this is already a uint32
         self.db.create_carray("/", "HOGtaxa", obj=hog_taxa_buff, filters=self._compr)
 
-        self._db_HOG.modify_column(colname="HOGtaxaOff", column=hog_taxa_idx[:-1])
-        self._db_HOG.modify_column(
-            colname="HOGtaxaNum", column=hog_taxa_idx[1:] - hog_taxa_idx[:-1]
+        self.hog_table.modify_column(colname="HOGtaxaOff", column=hog_taxa_idx[:-1])
+        self.hog_table.modify_column(colname="HOGtaxaNum",
+                                     column=hog_taxa_idx[1:] - hog_taxa_idx[:-1]
         )
 
     ### generic functions ###
@@ -680,11 +704,11 @@ class Database(object):
                 median_seq_lengths=median_seq_lengths,
             )
 
-        fam_tab = self._db_Family[:]
-        hog_tab = self._db_HOG[:]
+        fam_tab = self.family_table[:]
+        hog_tab = self.hog_table[:]
         chog_buff = self._db_ChildrenHOG[:]
         cprot_buff = self._db_ChildrenProt[:]
-        prot_seq_lens = self._db_Protein.col("SeqLen")
+        prot_seq_lens = self.protein_table.col("SeqLen")
 
         median_seq_lengths = np.zeros(hog_tab.size, dtype=np.uint32)
         for hog_off in fam_tab["HOGoff"]:
@@ -697,7 +721,7 @@ class Database(object):
                 median_seq_lengths,
             )
 
-        self._db_HOG.modify_column(colname="MedianSeqLen", column=median_seq_lengths)
+        self.hog_table.modify_column(colname="MedianSeqLen", column=median_seq_lengths)
 
     def add_metadata(self):
         """
@@ -726,8 +750,8 @@ class Database(object):
             meta["omamer version"] = "<= 0.2.3"
         meta["k-mer length"] = self.ki.k
         meta["alphabet size"] = self.ki.alphabet.n
-        meta["nr species"] = len(self._db_Species)
-        meta["nr indexed species"] = (len(self._db_Species) - np.sum(self.ki.sp_filter))
+        meta["nr species"] = len(self.species_table)
+        meta["nr indexed species"] = (len(self.species_table) - np.sum(self.ki.sp_filter))
         meta["hidden taxa"] = self.ki.hidden_taxa
         return meta
 
@@ -976,7 +1000,7 @@ class DatabaseFromOMA(Database):
             return fam
 
         #
-        tax2level = dict(zip(self._db_Taxonomy[:]["ID"], self._db_Taxonomy[:]["Level"]))
+        tax2level = dict(zip(self.taxonomy_table[:]["ID"], self.taxonomy_table[:]["Level"]))
         # hog_tab = h5file.root.HogLevel
 
         # containers
@@ -1209,7 +1233,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             hog2oma_hog,
             seq_buff,
             structure_buff
-        ) = self.select_and_filter_OMA_proteins(
+        ) = self.select_and_filter_oma_proteins(
             ent_tab,
             sequence_files,
             structure_files,
@@ -1258,7 +1282,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.db.set_node_attr("/", "filter_logic", self.logic)
         self.db.set_node_attr("/", "include_younger_fams", self.include_younger_fams)
 
-    def select_and_filter_OMA_proteins(
+    def select_and_filter_oma_proteins(
         self,
         ent_tab,
         sequence_files,
@@ -1436,7 +1460,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         """
         taxid_column = []
         i = -100
-        for tax_name in self._db_Taxonomy.col("ID"):
+        for tax_name in self.taxonomy_table.col("ID"):
             sp = self.hog_parser.species[tax_name]
             if sp is not None and hasattr(sp, "NCBITaxID"):
                 taxid_column.append(sp.NCBITaxID)
@@ -1444,7 +1468,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                 taxid_column.append(i)
                 i -= 1
 
-        self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)
+        self.taxonomy_table.modify_column(colname="TaxID", column=taxid_column)
 
 
 class DatabaseFromOMABrowser(DatabaseFromOMA):
@@ -1677,7 +1701,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         # quick check that the values are positives
         # if (oma_tax_tab["NCBITaxonId"][0] >= 0) and (oma_sp_tab["NCBITaxonId"][0] >= 0):
         taxid_column = []
-        for tax_name in self._db_Taxonomy.col("ID"):
+        for tax_name in self.taxonomy_table.col("ID"):
             if tax_name == b"LUCA":
                 taxid_column.append(0)  # -1)  # 0 is unused.
             else:
@@ -1696,4 +1720,4 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                             ][0]
                         ]
                     )
-        self._db_Taxonomy.modify_column(colname="TaxID", column=taxid_column)
+        self.taxonomy_table.modify_column(colname="TaxID", column=taxid_column)

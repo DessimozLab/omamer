@@ -375,10 +375,10 @@ class Database(object):
             return children_offsets, children_numbers, children, children_off
 
         hog_tab = self.db.create_table(
-            "/", "HOG", self.HOGTableFormat, filters=self._compr, expectedrows=1e7
+            "/", "HOG", self.HOGTableFormat, filters=self._compr, expectedrows=int(1e7)
         )
         fam_tab = self.db.create_table(
-            "/", "Family", self.FamilyTableFormat, filters=self._compr, expectedrows=1e6
+            "/", "Family", self.FamilyTableFormat, filters=self._compr, expectedrows=int(1e6)
         )
         hog_tab.autoindex = fam_tab.autoindex = False
 
@@ -411,9 +411,7 @@ class Database(object):
 
             # levels
             hog_levels = list(map(lambda x: len(x.split(b".")), hogs))
-            hog_level_offsets = (
-                np.cumsum(np.unique(hog_levels, return_counts=True)[1]) + hog_off
-            )
+            hog_level_offsets = np.cumsum(np.unique(hog_levels, return_counts=True)[1]) + hog_off
             hog_level_offsets_num = len(hog_level_offsets)
             level_offsets.extend(hog_level_offsets)
 
@@ -1305,7 +1303,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             "Protein",
             self.ProteinTableFormat,
             filters=self._compr,
-            expectedrows=25e6,
+            expectedrows=int(25e6),
         )
 
         prot_id_buff = self.db.create_earray(
@@ -1589,7 +1587,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
             "Protein",
             self.ProteinTableFormat,
             filters=self._compr,
-            expectedrows=25e6,
+            expectedrows=int(25e6),
         )
 
         prot_id_buff = self.db.create_earray(

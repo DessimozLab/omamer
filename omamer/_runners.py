@@ -23,9 +23,17 @@
 """
 import numpy as np
 import os
-from omamer.index import update_with_elias_fano
+import psutil
+from enum import Enum
 from ._utils import LOG, check_file_exists
 
+
+class Compression(Enum):
+    NONE = 0
+    ELIAS_FANO = 1
+    HUFFMAN = 2
+
+compression = Compression.NONE
 
 
 def mkdb_oma(args):
@@ -44,7 +52,7 @@ def mkdb_oma(args):
         LOG.info(" - {}: {}".format(k, v))
 
     # work out mode
-    browser_db_mode = (args.oma_path is not None)
+    browser_db_mode = args.oma_path is not None
 
     if browser_db_mode:
         Database = DatabaseFromOMABrowser
@@ -83,7 +91,7 @@ def mkdb_oma(args):
             if args.structures else []
         nwk = args.species_tree.name
 
-    # check if root_taxon in tree
+    # check if root_taxon in tree
     t = Tree(nwk, format=1, quoted_node_names=True)
     if args.root_taxon is not None:
         pruned_t = t.search_nodes(name=args.root_taxon)
@@ -377,23 +385,17 @@ def _ensure_data_loaded(ms):
         _load("ss_ref_fam_prob", "structural family probability estimates")
         _load("ss_ref_hog_prob", "structural sub-family probability estimates")
 
-
-    from enum import Enum
-    class Compression(Enum):
-        NONE = 0
-        ELIAS_FANO = 1
-        HUFFMAN = 2
-
-
-    import psutil
     process = psutil.Process()
     LOG.info(f"Memory after loading DB: "
                  f"{process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
 
-    #compression = Compression.ELIAS_FANO
-    compression = Compression.NONE
-
     if compression == Compression.ELIAS_FANO:
+        # TODO:
+        # Conditional import as cppyy can give problems on
+        # certain architectures. Until we polish this code and
+        # it works everywhere, keep it here
+        from .compression import update_with_elias_fano
+
         # Replace the original kmer_index with a more
         # compact Elias-Fano representation.
         buff, new_idx, raw_flags = update_with_elias_fano(

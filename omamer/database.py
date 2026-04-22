@@ -25,7 +25,7 @@ import numpy as np
 import os
 import tables
 from Bio import SeqIO
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from packaging.version import parse as parse_version
 from tqdm.auto import tqdm
 from typing import cast
@@ -35,7 +35,13 @@ from .alphabets import Alphabet
 from .hierarchy import get_hog_child_prots, get_hog2taxa, traverse
 from .index import Index
 from ._utils import LOG, is_progress_disabled, compute_file_md5, auto_open
-from .h5 import OmaServerAdapter, OmaStructureDBAdapter
+from .h5 import OmaServerAdapter
+
+
+SelectedBrowserProtein = namedtuple(
+    "SelectedBrowserProtein",
+    ["oma_id", "sp_off", "hog", "entry_nr", "seq_len"],
+)
 
 
 class Database(object):
@@ -1577,6 +1583,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                 hog2tax,
                 hog2oma_hog,
                 seq_buff,
+                selected_proteins,
             ) = self.select_and_filter_proteins(
                 oma_server_handle,
                 fam2hogs,
@@ -1611,13 +1618,15 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
             # compute the median sequence length of each HOG
             self.add_median_seqlen_col()
 
-        structure_buff = None
+        ss_buff = None
         if structure_h5_path:
-            with OmaStructureDBAdapter(structure_h5_path) as tdi_adapter:
-                pass
+            with tables.open_file(structure_h5_path, mode="r") as structure_h5file:
+                ss_buff = self.load_selected_3di_sequences(
+                    structure_h5file,
+                    selected_proteins,
+                )
 
-
-        return seq_buff, structure_buff
+        return seq_buff, ss_buff
 
     def add_metadata(self):
         super().add_metadata()
@@ -1639,6 +1648,62 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
     ):
         LOG.debug("fill sequence buffer, species table and initiate protein table")
 
+        (
+            hog2protoffs,
+            sp_rows,
+            seq_buffs,
+            selected_proteins,
+        ) = self._collect_selected_proteins(
+            oma_server_h5file,
+            hog2oma_hog,
+            species,
+        )
+
+        prot_tab = self.db.create_table(
+            "/",
+            "Protein",
+            self.ProteinTableFormat,
+            filters=self._compr,
+            expectedrows=int(25e6),
+        )
+
+        prot_id_buff = self.db.create_earray(
+            "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
+        )
+
+        for prot in selected_proteins:
+            prot_tab.append(
+                [(len(prot_id_buff), len(prot.oma_id), prot.sp_off, 0, prot.seq_len)]
+            )
+            prot_id_buff.append(
+                np.frombuffer(prot.oma_id.encode("ascii"), dtype=tables.StringAtom(1))
+            )
+
+        # fill species and protein tables
+        sp_tab = self.db.create_table(
+            "/", "Species", self.SpeciesTableFormat, filters=self._compr
+        )
+        sp_tab.append(sp_rows)
+        sp_tab.flush()
+
+        prot_tab.flush()
+
+        seq_buff = np.concatenate(seq_buffs) if seq_buffs else np.empty((0,), dtype="S1")
+        return (
+            fam2hogs,
+            hog2protoffs,
+            hog2tax,
+            hog2oma_hog,
+            seq_buff,
+            selected_proteins,
+        )
+
+    def _collect_selected_proteins(
+        self,
+        oma_server_h5file,
+        hog2oma_hog,
+        species,
+    ):
         genome_tab = oma_server_h5file.root.Genome[:]
         ent_tab = oma_server_h5file.root.Protein.Entries
 
@@ -1661,18 +1726,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         # store rows for species and protein tables and sequence buffer
         sp_rows = [()] * len(species)  # keep sorted
         seq_buffs = []
-
-        prot_tab = self.db.create_table(
-            "/",
-            "Protein",
-            self.ProteinTableFormat,
-            filters=self._compr,
-            expectedrows=int(25e6),
-        )
-
-        prot_id_buff = self.db.create_earray(
-            "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
-        )
+        selected_proteins = []
 
         for r in tqdm(
             genome_tab,
@@ -1704,25 +1758,25 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
                     # sequence
                     oma_seq_off = rr["SeqBufferOffset"]
-                    seq_len = rr["SeqBufferLength"] - np.uint64(1)
+                    seq_len = int(rr["SeqBufferLength"] - np.uint64(1))
                     seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len + np.uint64(1)]
                     seq_buffs.append(seq)
 
-                    # store protein row
                     oma_id = "{}{:05d}".format(
                         sp_code.decode("ascii"), rr["EntryNr"] - entry_off
                     )
-                    prot_tab.append(
-                        [(len(prot_id_buff), len(oma_id), sp_off, 0, seq_len)]
-                    )
-
-                    # store protein id
-                    prot_id_buff.append(
-                        np.frombuffer(oma_id.encode("ascii"), dtype=tables.StringAtom(1))
+                    hog = oma_hog2hog[oma_hog]
+                    selected_proteins.append(
+                        SelectedBrowserProtein(
+                            oma_id=oma_id,
+                            sp_off=sp_off,
+                            hog=hog,
+                            entry_nr=int(rr["EntryNr"]),
+                            seq_len=seq_len,
+                        )
                     )
 
                     # track hog and family
-                    hog = oma_hog2hog[oma_hog]
                     hog2protoffs[hog].add(prot_off)
 
                     # update offset of protein row in table
@@ -1731,20 +1785,72 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                 # store species info
                 sp_rows[sp2sp_off[sp]] = (sp, 0)
 
-        # fill species and protein tables
-        sp_tab = self.db.create_table(
-            "/", "Species", self.SpeciesTableFormat, filters=self._compr
-        )
-        sp_tab.append(sp_rows)
-        sp_tab.flush()
-
-        prot_tab.flush()
-
         # cleanup, ensure gc
         del genome_tab, ent_tab, oma_seq_buffer
 
-        seq_buff = np.concatenate(seq_buffs)
-        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff
+        return hog2protoffs, sp_rows, seq_buffs, selected_proteins
+
+    def load_selected_3di_sequences(self, structure_h5file, selected_proteins):
+        structure_index = structure_h5file.root.index
+        structure_buffer = structure_h5file.root.sequences_3di
+        sanitiser = Alphabet(n=21).sanitise_seq
+        ss_buffs = []
+
+        for prot in tqdm(
+            selected_proteins,
+            disable=is_progress_disabled(),
+            mininterval=1,
+            desc="Parsing 3Di sequences",
+        ):
+            seq = self._load_3di_sequence(
+                structure_index,
+                structure_buffer,
+                prot.entry_nr,
+            )
+            if seq is None:
+                raise ValueError(
+                    "Did not find 3Di sequence for selected protein {} (EntryNr={})".format(
+                        prot.oma_id, prot.entry_nr
+                    )
+                )
+            ss_buffs.append(self._normalise_structure_sequence(seq, sanitiser))
+
+        return np.concatenate(ss_buffs) if ss_buffs else np.empty((0,), dtype="S1")
+
+    @staticmethod
+    def _load_3di_sequence(ss_index, ss_buffer, entry_nr):
+        matches = ss_index.read_where(f"EntryNr == {int(entry_nr)}")
+        if len(matches) == 0:
+            return None
+        if len(matches) != 1:
+            raise ValueError(
+                "Found multiple 3Di index rows for EntryNr={}".format(entry_nr)
+            )
+
+        match = matches[0]
+        seq_off = int(match["Offset_3DI"])
+        seq_len = int(match["Length_3DI"])
+        if seq_len <= 0:
+            return None
+
+        return ss_buffer[seq_off: seq_off + seq_len]
+
+    @staticmethod
+    def _normalise_structure_sequence(seq, sanitiser):
+        if isinstance(seq, np.ndarray):
+            raw = seq.astype("S1", copy=False).tobytes().decode("ascii", "ignore")
+        elif isinstance(seq, bytes):
+            raw = seq.decode("ascii", "ignore")
+        else:
+            raw = str(seq)
+
+        raw = raw.rstrip("\x00")
+        if raw.endswith(" "):
+            raw = sanitiser(raw[:-1]) + " "
+        else:
+            raw = sanitiser(raw) + " "
+
+        return np.frombuffer(raw.encode("ascii"), dtype="S1")
 
     def add_taxid_col(self, h5file):
         """

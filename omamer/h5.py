@@ -73,10 +73,6 @@ class OmaStructureDBAdapter(H5Adapter):
     """
     Wrapper for the OMA 3di structure database file.
     Takes ${OMA_RELEASE}/structure/structure_db.h5 file as input
-    and provides access to 3di seqs.
     """
     def __init__(self, filename):
         super().__init__(filename)
-
-    def load_seq(self, entry_nr):
-        pass

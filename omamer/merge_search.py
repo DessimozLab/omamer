@@ -32,7 +32,7 @@ import numba
 import numpy as np
 import pandas as pd
 
-from omamer.index import retrieve_list, cumulate_counts_1fam, batch_decode
+from omamer.index import cumulate_counts_1fam
 
 from ._utils import LOG
 from .alphabets import get_transform
@@ -913,11 +913,11 @@ class MergeSearch(object):
 
     @lazy_property
     def ss_ref_fam_prob(self):
-        return self.db._db_Index_FamilySSProbability[:]
+        return self.db._db_Index_SSFamilyProbability[:]
 
     @lazy_property
     def ss_ref_hog_prob(self):
-        return self.db._db_Index_HOGSSProbability[:]
+        return self.db._db_Index_SSHOGProbability[:]
 
     @cached_property
     def _empty_u32(self):

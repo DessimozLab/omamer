@@ -117,8 +117,8 @@ class Index(object):
     @property
     def ss_kmer_table(self):
         return {
-            "buff": self.db._db_Index_TableSSBuffer,
-            "idx": self.db._db_Index_TableSSIndex,
+            "buff": self.db._db_Index_SSTableBuffer,
+            "idx": self.db._db_Index_SSTableIndex,
         }
 
     ### main function to build the index ###
@@ -401,68 +401,70 @@ class Index(object):
 
         ############################
         # structure index
-        ss_sa_mask = np.zeros(ss_sa.shape, dtype=np.uint32)
-        ss_sa_filter = np.zeros(ss_sa.shape, dtype=np.bool_)
 
-        _compute_mask_and_filter(
-            ss_sa,
-            ss_sa_mask,
-            ss_sa_filter,
-            self.k,
-            n,
-            self.db.protein_table.col("SpeOff"),
-            self.db.protein_table.col("HOGoff"),
-            self.sp_filter,
-        )
-        ss_sa = ss_sa[~ss_sa_filter[ss_sa]]
-        ss_sa_mask = ss_sa_mask[ss_sa]
+        if ss_sa is not None and ss_buff is not None:
+            ss_sa_mask = np.zeros(ss_sa.shape, dtype=np.uint32)
+            ss_sa_filter = np.zeros(ss_sa.shape, dtype=np.bool_)
 
-        LOG.debug(" - compute 3di k-mer table")
-        table_ss_idx = np.zeros(
-            (len(self.alphabet.DIGITS_AA) ** self.k + 1), dtype=np.uint32
-        )
+            _compute_mask_and_filter(
+                ss_sa,
+                ss_sa_mask,
+                ss_sa_filter,
+                self.k,
+                n,
+                self.db.protein_table.col("SpeOff"),
+                self.db.protein_table.col("HOGoff"),
+                self.sp_filter,
+            )
+            ss_sa = ss_sa[~ss_sa_filter[ss_sa]]
+            ss_sa_mask = ss_sa_mask[ss_sa]
 
-        # initiate buffer of size sa_mask, which is maximum size if all suffixes are from different HOGs
-        table_ss_buff = np.zeros((len(sa_mask)), dtype=np.uint32)
-        hog_ss_kmer_counts = np.zeros(len(self.db.hog_table), dtype=np.uint64)
-        h2f = self.db.hog_table.col("FamOff")
-        ii_table_ss_buff = _compute_kmer_table(
-            ss_sa,
-            ss_buff,
-            ss_sa_mask,
-            h2f,
-            self.db.hog_table.col("ParentOff"),
-            table_ss_idx,
-            table_ss_buff,
-            hog_ss_kmer_counts,
-            self.k,
-            self.alphabet.DIGITS_AA,
-            self.alphabet.DIGITS_AA_LOOKUP,
-        )
+            LOG.debug(" - compute 3di k-mer table")
+            ss_table_idx = np.zeros(
+                (len(self.alphabet.DIGITS_AA) ** self.k + 1), dtype=np.uint32
+            )
 
-        table_ss_buff = table_ss_buff[:ii_table_ss_buff]
+            # initiate buffer of size sa_mask, which is maximum size if all suffixes are from different HOGs
+            ss_table_buff = np.zeros((len(ss_sa_mask)), dtype=np.uint32)
+            ss_hog_kmer_counts = np.zeros(len(self.db.hog_table), dtype=np.uint64)
+            h2f = self.db.hog_table.col("FamOff")
+            ss_ii_table_buff = _compute_kmer_table(
+                ss_sa,
+                ss_buff,
+                ss_sa_mask,
+                h2f,
+                self.db.hog_table.col("ParentOff"),
+                ss_table_idx,
+                ss_table_buff,
+                ss_hog_kmer_counts,
+                self.k,
+                self.alphabet.DIGITS_AA,
+                self.alphabet.DIGITS_AA_LOOKUP,
+            )
 
-        LOG.debug(" - write structure k-mer table")
-        self.db.db.create_carray(
-            idx, "TableSSIndex", obj=table_ss_idx, filters=self.db.compression_filters
-        )
-        self.db.db.create_carray(
-            idx, "TableSSBuffer", obj=table_ss_buff, filters=self.db.compression_filters
-        )
+            ss_table_buff = ss_table_buff[:ss_ii_table_buff]
 
-        fam_ss_prob = estimate_family_prob(table_ss_buff, table_ss_idx, h2f)
-        self.db.db.create_carray(
-            idx, "FamilySSProbability", obj=fam_ss_prob, filters=self.db.compression_filters
-        )
+            LOG.debug(" - write structure k-mer table")
+            self.db.db.create_carray(
+                idx, "SSTableIndex", obj=ss_table_idx, filters=self.db.compression_filters
+            )
+            self.db.db.create_carray(
+                idx, "SSTableBuffer", obj=ss_table_buff, filters=self.db.compression_filters
+            )
 
-        hog_ss_prob = estimate_hog_prob(
-            table_ss_idx,
-            hog_ss_kmer_counts,
-            self.db.family_table,
-            self.db.level_offset_carray,
-            self.db.hog_table.col("ParentOff"),
-        )
-        self.db.db.create_carray(
-            idx, "HOGSSProbability", obj=hog_ss_prob, filters=self.db.compression_filters
-        )
+            fam_ss_prob = estimate_family_prob(ss_table_buff, ss_table_idx, h2f)
+            self.db.db.create_carray(
+                idx, "SSFamilyProbability", obj=fam_ss_prob, filters=self.db.compression_filters
+            )
+
+            hog_ss_prob = estimate_hog_prob(
+                ss_table_idx,
+                ss_hog_kmer_counts,
+                self.db.family_table,
+                self.db.level_offset_carray,
+                self.db.hog_table.col("ParentOff"),
+            )
+            self.db.db.create_carray(
+                idx, "SSHOGProbability", obj=hog_ss_prob, filters=self.db.compression_filters
+            )
         ############################

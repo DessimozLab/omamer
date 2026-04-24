@@ -248,7 +248,7 @@ class Database(object):
         return self.__getattribute__(attr)
 
     def has_structure(self):
-        return "/ss_kmer_table" in self.db
+        return "/Index/SSTableIndex" in self.db
 
     def get_hog_id(self, i):
         # extract the hog id from the hog id buffer

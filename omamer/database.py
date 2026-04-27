@@ -1745,8 +1745,8 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                 sp_off = sp2sp_off[sp]
 
                 # load sub entry table for species
-                entry_off = r["EntryOff"]
-                entry_num = r["TotEntries"]
+                entry_off = int(r["EntryOff"])
+                entry_num = int(r["TotEntries"])
                 sp_ent_tab = ent_tab[entry_off : entry_off + entry_num]
 
                 for rr in sp_ent_tab:
@@ -1757,9 +1757,10 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                         continue
 
                     # sequence
-                    oma_seq_off = rr["SeqBufferOffset"]
-                    seq_len = int(rr["SeqBufferLength"] - np.uint64(1))
-                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len + np.uint64(1)]
+                    oma_seq_off = int(rr["SeqBufferOffset"])
+                    seq_buffer_len = int(rr["SeqBufferLength"])
+                    seq_len = seq_buffer_len - 1
+                    seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_buffer_len]
                     seq_buffs.append(seq)
 
                     oma_id = "{}{:05d}".format(
@@ -1793,7 +1794,6 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
     def load_selected_3di_sequences(self, structure_h5file, selected_proteins):
         structure_index = structure_h5file.root.index
         structure_buffer = structure_h5file.root.sequences_3di
-        sanitiser = Alphabet(n=21).sanitise_seq
         ss_buffs = []
 
         for prot in tqdm(
@@ -1813,7 +1813,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                         prot.oma_id, prot.entry_nr
                     )
                 )
-            ss_buffs.append(self._normalise_structure_sequence(seq, sanitiser))
+            ss_buffs.append(self._normalise_structure_sequence(seq))
 
         return np.concatenate(ss_buffs) if ss_buffs else np.empty((0,), dtype="S1")
 
@@ -1836,19 +1836,30 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         return ss_buffer[seq_off: seq_off + seq_len]
 
     @staticmethod
-    def _normalise_structure_sequence(seq, sanitiser):
+    def _decode_structure_sequence(seq):
         if isinstance(seq, np.ndarray):
-            raw = seq.astype("S1", copy=False).tobytes().decode("ascii", "ignore")
+            if seq.dtype.kind in {"u", "i"}:
+                raw = bytes(seq.tolist()).decode("ascii", "ignore")
+            else:
+                raw = seq.tobytes().decode("ascii", "ignore")
         elif isinstance(seq, bytes):
             raw = seq.decode("ascii", "ignore")
         else:
             raw = str(seq)
+        return raw
 
+    @staticmethod
+    def _structure_sanitise_seq(seq):
+        return Alphabet(n=21).sanitise_seq(seq)
+
+    @classmethod
+    def _normalise_structure_sequence(cls, seq):
+        raw = cls._decode_structure_sequence(seq)
         raw = raw.rstrip("\x00")
         if raw.endswith(" "):
-            raw = sanitiser(raw[:-1]) + " "
+            raw = cls._structure_sanitise_seq(raw[:-1]) + " "
         else:
-            raw = sanitiser(raw) + " "
+            raw = cls._structure_sanitise_seq(raw) + " "
 
         return np.frombuffer(raw.encode("ascii"), dtype="S1")
 

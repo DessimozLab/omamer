@@ -1,8 +1,10 @@
 import numpy as np
 import numba
 import pytest
-from omamer.index import ctz, naive_ctz, popcount, select1_in_word
-from omamer.index import to_elias_fano, from_elias_fano
+from omamer.alphabets import Alphabet
+from omamer.database import DatabaseFromOMABrowser
+from omamer.compression import ctz, naive_ctz, popcount, select1_in_word
+from omamer.compression import to_elias_fano, from_elias_fano
 from omamer.merge_search import family_result_sort
 
 
@@ -168,3 +170,23 @@ def test_ties(seed):
     sorted_naive_k = naive_sort(random_data, k=k)
     assert_structs_close(sorted_auto_k, sorted_naive_k)
 
+
+def test_decode_structure_sequence_from_uint8_ascii():
+    seq = np.frombuffer(b"DEAEA ", dtype=np.uint8)
+    decoded = DatabaseFromOMABrowser._decode_structure_sequence(seq)
+    assert decoded == "DEAEA "
+
+
+def test_normalise_structure_sequence_from_uint8_ascii():
+    seq = np.frombuffer(b"DEAEA ", dtype=np.uint8)
+    norm = DatabaseFromOMABrowser._normalise_structure_sequence(seq)
+    assert bytes(norm).decode("ascii") == "DEAEA "
+
+
+def test_normalise_structure_sequence_preserves_existing_string_path():
+    seq = np.frombuffer(
+        (Alphabet(n=21).sanitise_seq("MREIVL") + " ").encode("ascii"),
+        dtype="S1",
+    )
+    norm = DatabaseFromOMABrowser._normalise_structure_sequence(seq)
+    assert bytes(norm).decode("ascii") == "MREIVL "

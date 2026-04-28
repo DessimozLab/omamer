@@ -127,6 +127,8 @@ class Index(object):
         assert "/Index" not in self.db.db, "Index has already been computed"
 
         # build suffix array with option to translate the sequence buffer first
+
+        LOG.debug(" - building suffix array for sequences")
         sa = self._build_suffixarray(
             self.alphabet.translate(seq_buff), len(self.db.protein_table)
         )
@@ -134,6 +136,7 @@ class Index(object):
         # structure suffix array
         ss_sa = None
         if ss_buff is not None:
+            LOG.debug(" - building suffix array for structures")
             ss_sa = self._build_suffixarray(
                 self.alphabet.translate(ss_buff), len(self.db.protein_table)
             )
@@ -143,7 +146,6 @@ class Index(object):
     @staticmethod
     def _build_suffixarray(seqs, n):
         # Build suffix array
-        LOG.debug(" - building suffix array for sequences")
 
         from PySAIS import sais
         # import sais here, otherwise we need it for search-time dependency

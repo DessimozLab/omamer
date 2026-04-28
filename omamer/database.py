@@ -1626,6 +1626,11 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                     selected_proteins,
                 )
 
+                LOG.debug(
+                    "Assembled structure buffer %.2f MB",
+                    ss_buff.nbytes / (1024 * 1024),
+                )
+
         return seq_buff, ss_buff
 
     def add_metadata(self):
@@ -1651,12 +1656,17 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         (
             hog2protoffs,
             sp_rows,
-            seq_buffs,
+            seq_buff,
             selected_proteins,
         ) = self._collect_selected_proteins(
             oma_server_h5file,
             hog2oma_hog,
             species,
+        )
+        LOG.debug(
+            " - selected %d proteins; assembled sequence buffer %.2f MB",
+            len(selected_proteins),
+            seq_buff.nbytes / (1024 * 1024),
         )
 
         prot_tab = self.db.create_table(
@@ -1688,7 +1698,6 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
         prot_tab.flush()
 
-        seq_buff = np.concatenate(seq_buffs) if seq_buffs else np.empty((0,), dtype="S1")
         return (
             fam2hogs,
             hog2protoffs,
@@ -1725,7 +1734,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
         # store rows for species and protein tables and sequence buffer
         sp_rows = [()] * len(species)  # keep sorted
-        seq_buffs = []
+        seq_bytes = bytearray()
         selected_proteins = []
 
         for r in tqdm(
@@ -1761,7 +1770,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                     seq_buffer_len = int(rr["SeqBufferLength"])
                     seq_len = seq_buffer_len - 1
                     seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_buffer_len]
-                    seq_buffs.append(seq)
+                    seq_bytes.extend(np.asarray(seq).tobytes())
 
                     oma_id = "{}{:05d}".format(
                         sp_code.decode("ascii"), rr["EntryNr"] - entry_off
@@ -1789,33 +1798,92 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         # cleanup, ensure gc
         del genome_tab, ent_tab, oma_seq_buffer
 
-        return hog2protoffs, sp_rows, seq_buffs, selected_proteins
+        seq_buff = (
+            np.frombuffer(memoryview(seq_bytes), dtype="S1")
+            if seq_bytes
+            else np.empty((0,), dtype="S1")
+        )
+        return hog2protoffs, sp_rows, seq_buff, selected_proteins
 
     def load_selected_3di_sequences(self, structure_h5file, selected_proteins):
         structure_index = structure_h5file.root.index
         structure_buffer = structure_h5file.root.sequences_3di
-        ss_buffs = []
+        (
+            sorted_entry_nrs,
+            sorted_offsets,
+            sorted_lengths,
+        ) = self._build_3di_entry_lookup(structure_index)
 
-        for prot in tqdm(
-            selected_proteins,
+        selected_entry_nrs = np.fromiter(
+            (prot.entry_nr for prot in selected_proteins),
+            dtype=sorted_entry_nrs.dtype,
+            count=len(selected_proteins),
+        )
+        match_positions = np.searchsorted(sorted_entry_nrs, selected_entry_nrs)
+        ss_bytes = bytearray()
+
+        for prot, match_pos in tqdm(
+            zip(selected_proteins, match_positions),
+            total=len(selected_proteins),
             disable=is_progress_disabled(),
             mininterval=1,
             desc="Parsing 3Di sequences",
         ):
-            seq = self._load_3di_sequence(
-                structure_index,
-                structure_buffer,
-                prot.entry_nr,
-            )
-            if seq is None:
+            if match_pos >= len(sorted_entry_nrs) or (
+                sorted_entry_nrs[match_pos] != prot.entry_nr
+            ):
                 raise ValueError(
                     "Did not find 3Di sequence for selected protein {} (EntryNr={})".format(
                         prot.oma_id, prot.entry_nr
                     )
                 )
-            ss_buffs.append(self._normalise_structure_sequence(seq))
 
-        return np.concatenate(ss_buffs) if ss_buffs else np.empty((0,), dtype="S1")
+            seq_len = int(sorted_lengths[match_pos])
+            if seq_len <= 0:
+                raise ValueError(
+                    "Did not find 3Di sequence for selected protein {} (EntryNr={})".format(
+                        prot.oma_id, prot.entry_nr
+                    )
+                )
+
+            seq_off = int(sorted_offsets[match_pos])
+            seq = structure_buffer[seq_off : seq_off + seq_len]
+            ss_bytes.extend(self._normalise_structure_sequence(seq).tobytes())
+
+        ss_buff = (
+            np.frombuffer(memoryview(ss_bytes), dtype="S1")
+            if ss_bytes
+            else np.empty((0,), dtype="S1")
+        )
+        LOG.debug(
+            " - assembled 3Di buffer %.2f MiB for %d proteins",
+            ss_buff.nbytes / (1024 * 1024),
+            len(selected_proteins),
+        )
+        return ss_buff
+
+    @staticmethod
+    def _build_3di_entry_lookup(ss_index):
+        entry_nrs = np.asarray(ss_index.col("EntryNr"))
+        offsets = np.asarray(ss_index.col("Offset_3DI"))
+        lengths = np.asarray(ss_index.col("Length_3DI"))
+
+        sort_order = np.argsort(entry_nrs, kind="mergesort")
+        sorted_entry_nrs = entry_nrs[sort_order]
+        sorted_offsets = offsets[sort_order]
+        sorted_lengths = lengths[sort_order]
+
+        if len(sorted_entry_nrs) > 1:
+            duplicate_mask = sorted_entry_nrs[1:] == sorted_entry_nrs[:-1]
+            if np.any(duplicate_mask):
+                duplicate_entry_nr = int(sorted_entry_nrs[1:][duplicate_mask][0])
+                raise ValueError(
+                    "Found multiple 3Di index rows for EntryNr={}".format(
+                        duplicate_entry_nr
+                    )
+                )
+
+        return sorted_entry_nrs, sorted_offsets, sorted_lengths
 
     @staticmethod
     def _load_3di_sequence(ss_index, ss_buffer, entry_nr):
@@ -1833,7 +1901,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         if seq_len <= 0:
             return None
 
-        return ss_buffer[seq_off: seq_off + seq_len]
+        return ss_buffer[seq_off : seq_off + seq_len]
 
     @staticmethod
     def _decode_structure_sequence(seq):

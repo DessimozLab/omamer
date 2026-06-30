@@ -438,6 +438,42 @@ def info_db(args):
         print_line(80, file=sys.stdout)
 
 
+def import_bbinom(args):
+    from .bbinom_coefficients import import_bbinom_coefficients
+    from .database import Database
+
+    with Database(args.db, mode="a") as db:
+        written = import_bbinom_coefficients(db, args.coefficients)
+
+    for modality, count in sorted(written.items()):
+        LOG.info("Imported {} beta-binomial coefficient rows for {}".format(count, modality))
+
+
+def compute_bbinom(args):
+    from .bbinom_fit import compute_bbinom_coefficients
+    from .database import Database
+
+    with Database(args.db, mode="r") as db:
+        compute_bbinom_coefficients(
+            db,
+            sequence_paths=args.sequences,
+            output_path=args.out,
+            family_offsets_path=args.family_offsets,
+            max_families=args.max_families,
+            min_family_prob=args.min_family_prob,
+            n_values=args.n_values,
+            n_buckets=args.n_buckets,
+            min_records_per_n=args.min_records_per_n,
+            max_records_per_n=args.max_records_per_n,
+            chunksize=args.chunksize,
+            seed=args.seed,
+            min_nonzero_queries=args.min_nonzero_queries,
+            workers=args.fit_workers,
+            n_summary_path=args.n_summary_out,
+            modality=args.modality,
+        )
+
+
 # welcome / goodbye messages for omamer search
 def welcome():
     from . import __version__

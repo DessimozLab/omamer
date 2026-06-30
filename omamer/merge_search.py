@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from omamer.index import cumulate_counts_1fam
+from omamer.stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
 
 from ._utils import LOG
 from .alphabets import get_transform
@@ -73,6 +74,47 @@ def binom_neglogccdf(x, n, p):
     # pbinom(n - 1, m, m/N, 0, 0)
     # phyper(n - 1, m, N - m, m, 0, 0)
     #return -1.0 * phyper(x - 1, n, n/p - n, n, 0, 1)
+
+
+@numba.njit(nogil=True)
+def has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
+    return (
+        valid.size > family_id
+        and q_coef.shape[0] > family_id
+        and kappa_coef.shape[0] > family_id
+        and center.size > family_id
+        and scale.size > family_id
+        and valid[family_id]
+        and scale[family_id] > 0.0
+    )
+
+
+@numba.njit(nogil=True)
+def family_expected_count(family_id, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid):
+    if has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
+        _, _, q = beta_binomial_params_for_n(
+            n,
+            q_coef[family_id],
+            kappa_coef[family_id],
+            center[family_id],
+            scale[family_id],
+        )
+        return q * n
+    return ref_fam_prob[family_id] * n
+
+
+@numba.njit(nogil=True)
+def family_neglogccdf(family_id, x, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid):
+    if has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
+        alpha, beta, _ = beta_binomial_params_for_n(
+            n,
+            q_coef[family_id],
+            kappa_coef[family_id],
+            center[family_id],
+            scale[family_id],
+        )
+        return beta_binomial_neglogccdf(x, n, alpha, beta)
+    return binom_neglogccdf(x, n, ref_fam_prob[family_id])
 
 
 # ----
@@ -653,6 +695,12 @@ def place_sequence(
         top_n_fams,
         ref_fam_prob,
         ref_hog_prob,
+        fam_bbinom_q_coef,
+        fam_bbinom_kappa_coef,
+        fam_bbinom_center,
+        fam_bbinom_scale,
+        fam_bbinom_valid,
+        decision_source,
         alpha,
         sst,
         family_only,
@@ -726,8 +774,21 @@ def place_sequence(
     #     that have at least their expected number of k-mer matches,
     #     because that number should be already given by random
     #     (however is still insignificant).
-    mu = ref_fam_prob[qres["id"]] * len(r1)
-    qres = qres[qres["count"] >= mu]
+    n = len(r1)
+    expected_count = np.empty(len(qres), dtype=np.float64)
+    for i in range(len(qres)):
+        family_id = qres["id"][i]
+        expected_count[i] = family_expected_count(
+            family_id,
+            n,
+            ref_fam_prob,
+            fam_bbinom_q_coef,
+            fam_bbinom_kappa_coef,
+            fam_bbinom_center,
+            fam_bbinom_scale,
+            fam_bbinom_valid,
+        )
+    qres = qres[qres["count"] >= expected_count]
 
     #     - b. filter by sequence coverage. There is no point to
     #     compute p-value for families that are going to be hard
@@ -752,15 +813,26 @@ def place_sequence(
     # in logarithms later. For the other edge case, we already have k > 0
     # guaranteed, so we're good here
     epsilon = 1e-10
-    n = len(r1)
     k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
     # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
     # There is a theoretical chance of that P < alpha <= bound, and the test will
     # fail with a false negative. I could not observe any instances of this.
     p = ref_fam_prob[qres["id"]]
-    kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
-    qres = qres[kl_div > -np.log(alpha) / n]
+    keep = np.full(len(qres), True)
+    for i in range(len(qres)):
+        family_id = qres["id"][i]
+        if not has_family_bbinom(
+            family_id,
+            fam_bbinom_q_coef,
+            fam_bbinom_kappa_coef,
+            fam_bbinom_center,
+            fam_bbinom_scale,
+            fam_bbinom_valid,
+        ):
+            kl_div = k_n[i] * np.log(k_n[i] / p[i]) + (1 - k_n[i]) * np.log((1 - k_n[i]) / (1 - p[i]))
+            keep[i] = kl_div > -np.log(alpha) / n
+    qres = qres[keep]
 
     if len(qres) == 0:
         return False
@@ -770,18 +842,23 @@ def place_sequence(
     # 3. compute p-value for each family. note: in negative log units
     correction_factor = np.log(len(ref_fam_prob))
     for i in range(len(qres)):
+        family_id = qres["id"][i]
+        neglog_tail = family_neglogccdf(
+            family_id,
+            qres["count"][i],
+            len(r1),
+            ref_fam_prob,
+            fam_bbinom_q_coef,
+            fam_bbinom_kappa_coef,
+            fam_bbinom_center,
+            fam_bbinom_scale,
+            fam_bbinom_valid,
+        )
         qres["pvalue"][i] = min(
             float(MAX_LOGP),
             max(
                 0.0,
-                (
-                    binom_neglogccdf(
-                        qres["count"][i],
-                        len(r1),
-                        ref_fam_prob[qres["id"][i]],
-                    )
-                    - correction_factor
-                ),
+                neglog_tail - correction_factor,
             ),
         )
 
@@ -795,7 +872,19 @@ def place_sequence(
         return False
 
     # 4. Compute normalized count
-    expected_count = ref_fam_prob[qres["id"]] * len(r1)
+    expected_count = np.empty(len(qres), dtype=np.float64)
+    for i in range(len(qres)):
+        family_id = qres["id"][i]
+        expected_count[i] = family_expected_count(
+            family_id,
+            len(r1),
+            ref_fam_prob,
+            fam_bbinom_q_coef,
+            fam_bbinom_kappa_coef,
+            fam_bbinom_center,
+            fam_bbinom_scale,
+            fam_bbinom_valid,
+        )
     qres["normcount"][:] = (qres["count"] - expected_count) / (
            len(r1) - expected_count
     )
@@ -810,6 +899,7 @@ def place_sequence(
     family_results["count"][sequence_id, :top_n_fams] = qres["count"][:top_n_fams]
     family_results["normcount"][sequence_id, :top_n_fams] = qres["normcount"][:top_n_fams]
     family_results["overlap"][sequence_id, :top_n_fams] = qres["overlap"][:top_n_fams]
+    family_results["decision_source"][sequence_id, :top_n_fams] = decision_source
 
     # 5. Place within families
     for i in range(min(len(qres), top_n_fams)):
@@ -919,6 +1009,66 @@ class MergeSearch(object):
     def ss_ref_hog_prob(self):
         return self.db._db_Index_SSHOGProbability[:]
 
+    @lazy_property
+    def ref_fam_bbinom_q_coef(self):
+        if "/Index/FamilyBBinomQCoef" in self.db.db:
+            return self.db._db_Index_FamilyBBinomQCoef[:]
+        return np.empty((0, 0), dtype=np.float64)
+
+    @lazy_property
+    def ref_fam_bbinom_kappa_coef(self):
+        if "/Index/FamilyBBinomKappaCoef" in self.db.db:
+            return self.db._db_Index_FamilyBBinomKappaCoef[:]
+        return np.empty((0, 0), dtype=np.float64)
+
+    @lazy_property
+    def ref_fam_bbinom_center(self):
+        if "/Index/FamilyBBinomLogNCenter" in self.db.db:
+            return self.db._db_Index_FamilyBBinomLogNCenter[:]
+        return np.empty(0, dtype=np.float64)
+
+    @lazy_property
+    def ref_fam_bbinom_scale(self):
+        if "/Index/FamilyBBinomLogNScale" in self.db.db:
+            return self.db._db_Index_FamilyBBinomLogNScale[:]
+        return np.empty(0, dtype=np.float64)
+
+    @lazy_property
+    def ref_fam_bbinom_valid(self):
+        if "/Index/FamilyBBinomValid" in self.db.db:
+            return self.db._db_Index_FamilyBBinomValid[:]
+        return np.empty(0, dtype=np.bool_)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_q_coef(self):
+        if "/Index/SSFamilyBBinomQCoef" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomQCoef[:]
+        return np.empty((0, 0), dtype=np.float64)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_kappa_coef(self):
+        if "/Index/SSFamilyBBinomKappaCoef" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomKappaCoef[:]
+        return np.empty((0, 0), dtype=np.float64)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_center(self):
+        if "/Index/SSFamilyBBinomLogNCenter" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomLogNCenter[:]
+        return np.empty(0, dtype=np.float64)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_scale(self):
+        if "/Index/SSFamilyBBinomLogNScale" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomLogNScale[:]
+        return np.empty(0, dtype=np.float64)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_valid(self):
+        if "/Index/SSFamilyBBinomValid" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomValid[:]
+        return np.empty(0, dtype=np.bool_)
+
     @cached_property
     def _empty_u32(self):
         return np.empty(0, dtype=np.uint32)
@@ -926,6 +1076,14 @@ class MergeSearch(object):
     @cached_property
     def _empty_f64(self):
         return np.empty(0, dtype=np.float64)
+
+    @cached_property
+    def _empty_f64_2d(self):
+        return np.empty((0, 0), dtype=np.float64)
+
+    @cached_property
+    def _empty_bool(self):
+        return np.empty(0, dtype=np.bool_)
 
 
     def merge_search(
@@ -960,6 +1118,7 @@ class MergeSearch(object):
                     ("ss_score", np.uint32),
                     ("normcount", np.float64),
                     ("overlap", np.float64),
+                    ("decision_source", np.uint8),
                 ]
             ),
         )
@@ -995,8 +1154,18 @@ class MergeSearch(object):
             top_n_fams=top_n_fams,
             ref_fam_prob=self.ref_fam_prob,
             ref_hog_prob=self.ref_hog_prob,
+            ref_fam_bbinom_q_coef=self.ref_fam_bbinom_q_coef,
+            ref_fam_bbinom_kappa_coef=self.ref_fam_bbinom_kappa_coef,
+            ref_fam_bbinom_center=self.ref_fam_bbinom_center,
+            ref_fam_bbinom_scale=self.ref_fam_bbinom_scale,
+            ref_fam_bbinom_valid=self.ref_fam_bbinom_valid,
             ss_ref_fam_prob=self.ss_ref_fam_prob if self.has_structure else self._empty_f64,
             ss_ref_hog_prob=self.ss_ref_hog_prob if self.has_structure else self._empty_f64,
+            ss_ref_fam_bbinom_q_coef=self.ss_ref_fam_bbinom_q_coef if self.has_structure else self._empty_f64_2d,
+            ss_ref_fam_bbinom_kappa_coef=self.ss_ref_fam_bbinom_kappa_coef if self.has_structure else self._empty_f64_2d,
+            ss_ref_fam_bbinom_center=self.ss_ref_fam_bbinom_center if self.has_structure else self._empty_f64,
+            ss_ref_fam_bbinom_scale=self.ss_ref_fam_bbinom_scale if self.has_structure else self._empty_f64,
+            ss_ref_fam_bbinom_valid=self.ss_ref_fam_bbinom_valid if self.has_structure else self._empty_bool,
             alpha=alpha,
             sst=sst,
             family_only=family_only,
@@ -1031,6 +1200,7 @@ class MergeSearch(object):
             "family_p",
             "family_count",
             "family_normcount",
+            "decision_source",
             "ss_count",
             "ss_family_p",
             "subfamily_score",
@@ -1057,6 +1227,7 @@ class MergeSearch(object):
                             "ss_count": family_results["ss_count"][i, j],
                             "ss_family_p": family_results["ss_pvalue"][i, j],
                             "family_normcount": family_results["normcount"][i, j],
+                            "decision_source": family_results["decision_source"][i, j],
                             "subfamily_count": subfam_results["count"][i, j],
                         }
 
@@ -1074,6 +1245,8 @@ class MergeSearch(object):
         na_value = 0
         for k in df.keys():
             df.loc[df[k] == na_value, k] = pd.NA
+
+        df["decision_source"] = df["decision_source"].map({1: "seq", 2: "ss"})
 
         # set the query ids
         qseq_offsets = df["qseq_offset"].to_numpy(dtype=np.uint32)
@@ -1160,8 +1333,18 @@ class MergeSearch(object):
                 top_n_fams,
                 ref_fam_prob,
                 ref_hog_prob,
+                ref_fam_bbinom_q_coef,
+                ref_fam_bbinom_kappa_coef,
+                ref_fam_bbinom_center,
+                ref_fam_bbinom_scale,
+                ref_fam_bbinom_valid,
                 ss_ref_fam_prob,
                 ss_ref_hog_prob,
+                ss_ref_fam_bbinom_q_coef,
+                ss_ref_fam_bbinom_kappa_coef,
+                ss_ref_fam_bbinom_center,
+                ss_ref_fam_bbinom_scale,
+                ss_ref_fam_bbinom_valid,
                 alpha,
                 sst,
                 family_only,
@@ -1220,6 +1403,12 @@ class MergeSearch(object):
                         top_n_fams,
                         ref_fam_prob,
                         ref_hog_prob,
+                        ref_fam_bbinom_q_coef,
+                        ref_fam_bbinom_kappa_coef,
+                        ref_fam_bbinom_center,
+                        ref_fam_bbinom_scale,
+                        ref_fam_bbinom_valid,
+                        1,
                         alpha,
                         sst,
                         family_only,
@@ -1252,6 +1441,12 @@ class MergeSearch(object):
                         top_n_fams,
                         ss_ref_fam_prob,
                         ss_ref_hog_prob,
+                        ss_ref_fam_bbinom_q_coef,
+                        ss_ref_fam_bbinom_kappa_coef,
+                        ss_ref_fam_bbinom_center,
+                        ss_ref_fam_bbinom_scale,
+                        ss_ref_fam_bbinom_valid,
+                        2,
                         alpha,
                         sst,
                         family_only,

@@ -101,7 +101,8 @@ class Database(object):
         assert mode in {
             "r",
             "w",
-        }, "Databased must only be opened in read or write mode."
+            "a",
+        }, "Databased must only be opened in read, write, or append mode."
         assert (
             mode != "w" or root_taxon
         ), "A root_taxon must be defined when building the database"
@@ -119,7 +120,7 @@ class Database(object):
         if "/Index" in self.db:
             self.ki = Index(self)
 
-        if self.mode == "r":
+        if self.mode in {"r", "a"}:
             self._check_db_version()
 
     #################################################

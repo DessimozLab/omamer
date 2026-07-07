@@ -103,6 +103,10 @@ def parse_n_values(value):
 def choose_sequence_n_values(n_unique, min_records_per_n=50, n_buckets=24, requested_n_values=None):
     hist = np.bincount(np.asarray(n_unique, dtype=np.int64))
     eligible = np.flatnonzero(hist >= int(min_records_per_n))
+
+    # N=0 has no k-mer trials; log(0) is undefined
+    eligible = eligible[eligible > 0]
+
     if eligible.size == 0:
         raise RuntimeError("No exact N value has enough records for fitting")
 

@@ -33,7 +33,11 @@ import numpy as np
 import pandas as pd
 
 from omamer.index import cumulate_counts_1fam
-from omamer.stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
+from omamer.stat_models import (
+    beta_binomial_neglogccdf,
+    beta_binomial_logpmf,
+    beta_binomial_params_for_n,
+)
 
 from ._utils import LOG
 from .alphabets import get_transform
@@ -119,6 +123,22 @@ def family_expected_count(family_id, n, ref_fam_prob, q_coef, kappa_coef, center
         )
         return q * n
     return ref_fam_prob[family_id] * n
+
+
+@numba.njit(nogil=True)
+def family_bbinom_neglogpmf(family_id, x, n, q_coef, kappa_coef, center, scale, valid, n_min, n_max):
+    """
+    Single-term (-log P(X = x)) for a Beta-Binomial family.
+    """
+    n_eval = bbinom_eval_n(family_id, n, n_min, n_max)
+    alpha, beta, _ = beta_binomial_params_for_n(
+        n_eval,
+        q_coef[family_id],
+        kappa_coef[family_id],
+        center[family_id],
+        scale[family_id],
+    )
+    return -beta_binomial_logpmf(float(x), float(n), alpha, beta)
 
 
 @numba.njit(nogil=True)
@@ -827,25 +847,21 @@ def place_sequence(
     if len(qres) == 0:
         return False
 
-    # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
-    # that is, the Chernoff upper bound for the binomial X:
-    #     P(X >= k) <= exp(-n D(k/n || p))
-    # where D is Kullback-Leibler divergence.
-    # First, compute k / n, the empirical proportion of Bernoulli successes.
+    # Prepare filtering process: compute k / n,
+    # the empirical proportion of Bernoulli successes.
     # We need to clip it a little for the case n = k, because it's used
     # in logarithms later. For the other edge case, we already have k > 0
-    # guaranteed, so we're good here
+    # guaranteed, so we're good here.
     epsilon = 1e-10
     k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
-    # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
-    # There is a theoretical chance of that P < alpha <= bound, and the test will
-    # fail with a false negative. I could not observe any instances of this.
+    alpha_neglog = -np.log(alpha)
+    correction_factor = np.log(len(ref_fam_prob))
     p = ref_fam_prob[qres["id"]]
     keep = np.full(len(qres), True)
     for i in range(len(qres)):
         family_id = qres["id"][i]
-        if not has_family_bbinom(
+        if has_family_bbinom(
             family_id,
             fam_bbinom_q_coef,
             fam_bbinom_kappa_coef,
@@ -853,8 +869,41 @@ def place_sequence(
             fam_bbinom_scale,
             fam_bbinom_valid,
         ):
+            # If beta binomial is used, use the 1-pmf-value filter:
+            #       P(X >= k) >= P(X = k)
+            # The exact p-value (step 3) keeps a family only when
+            #     -log P(X >= k) - correction >= -log(alpha).
+            # where 'correction' is Bonferroni = logN
+            #
+            # Check if:
+            #       -log P(X = x) - logN >= -log(alpha)
+            #
+            # which doesn't require the rest of the Binomial tail
+            # (i.e. P(X > k)) to be computed. If it doesn't hold, step cannot hold.
+            # This is an exact test.
+            neglogpmf_ub = family_bbinom_neglogpmf(
+                family_id,
+                qres["count"][i],
+                n,
+                fam_bbinom_q_coef,
+                fam_bbinom_kappa_coef,
+                fam_bbinom_center,
+                fam_bbinom_scale,
+                fam_bbinom_valid,
+                fam_bbinom_n_min,
+                fam_bbinom_n_max,
+            )
+            keep[i] = (neglogpmf_ub - correction_factor) >= alpha_neglog
+        else:
+            # If binomial is used, perform the Chernoff KL-div test.
+            # That is, the Chernoff upper bound for the binomial X:
+            #     P(X >= k) <= exp(-n D(k/n || p))
+            # where D is Kullback-Leibler divergence.
+            # By demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
+            # There is a theoretical chance of that P < alpha <= bound, and the test will
+            # fail with a false negative. I could not observe any instances of this.
             kl_div = k_n[i] * np.log(k_n[i] / p[i]) + (1 - k_n[i]) * np.log((1 - k_n[i]) / (1 - p[i]))
-            keep[i] = kl_div > -np.log(alpha) / n
+            keep[i] = kl_div > alpha_neglog / n
     qres = qres[keep]
 
     if len(qres) == 0:
@@ -863,7 +912,6 @@ def place_sequence(
     t0 = clock()
 
     # 3. compute p-value for each family. note: in negative log units
-    correction_factor = np.log(len(ref_fam_prob))
     for i in range(len(qres)):
         family_id = qres["id"][i]
         neglog_tail = family_neglogccdf(

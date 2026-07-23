@@ -57,19 +57,35 @@ def beta_binomial_logpmf(x, n, alpha, beta):
 
 @numba.njit(nogil=True)
 def beta_binomial_neglogccdf(x, n, alpha, beta):
+    """
+    Neg-log of the upper tail P(X >= x) of the Beta-Binomial(n, alpha, beta).
+
+    We anchor on the single term P(x) -- one ``lgamma``-heavy call --
+    and walk the rest of the tail with the closed-form PMF ratio
+
+        P(k+1)/P(k) = (n - k)/(k + 1) * (k + alpha)/(n - k - 1 + beta)
+
+    which costs a handful of multiplications per term. OMAmer only evaluates
+    this in the upper tail (the count filter guarantees x >= expected mean,
+    i.e. x is at or above the mode), so P(x) is the largest term and factoring
+    it out keeps the running sum in [1, ~few) with no overflow. Once the tail
+    is decaying and the next contribution is negligible we stop early.
+    """
     if x <= 0:
         return 0.0
     if x > n:
         return np.inf
 
-    max_logp = -np.inf
-    for k in range(x, n + 1):
-        logp = beta_binomial_logpmf(float(k), float(n), alpha, beta)
-        if logp > max_logp:
-            max_logp = logp
+    log_px = beta_binomial_logpmf(float(x), float(n), alpha, beta)
 
-    acc = 0.0
-    for k in range(x, n + 1):
-        acc += math.exp(beta_binomial_logpmf(float(k), float(n), alpha, beta) - max_logp)
+    acc = 1.0
+    term = 1.0
+    for k in range(x, n):
+        ratio = ((n - k) / (k + 1.0)) * ((k + alpha) / (n - k - 1.0 + beta))
+        term *= ratio
+        acc += term
+        # tail is decaying and this term no longer moves the sum -> stop
+        if ratio < 1.0 and term < acc * 1e-16:
+            break
 
-    return -(max_logp + math.log(acc))
+    return -(log_px + math.log(acc))

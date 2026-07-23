@@ -375,3 +375,48 @@ def test_modality_index_arrays_selects_structure_or_raises():
     no_ss = FakeDB(has_ss=False)
     with pytest.raises(ValueError):
         _modality_index_arrays(no_ss, "ss")
+
+
+def test_bbinom_eval_n_clamps_to_trained_range():
+    from omamer.merge_search import bbinom_eval_n
+
+    n_min = np.asarray([0, 45], dtype=np.uint32)
+    n_max = np.asarray([0, 1096], dtype=np.uint32)
+
+    # family 1 has a trained range [45, 1096].
+    assert bbinom_eval_n(1, 30, n_min, n_max) == 45      # below -> clamp up
+    assert bbinom_eval_n(1, 500, n_min, n_max) == 500    # inside -> unchanged
+    assert bbinom_eval_n(1, 5000, n_min, n_max) == 1096  # above -> clamp down
+    # family 0 has no range (n_max == 0) -> never clamp.
+    assert bbinom_eval_n(0, 5000, n_min, n_max) == 5000
+
+
+def test_family_neglogccdf_clamps_out_of_range_n():
+    from omamer.merge_search import (
+        family_neglogccdf,
+        family_expected_count,
+    )
+
+    q_coef = np.asarray([[0.0, 0.1, -0.05]], dtype=np.float64)
+    kappa_coef = np.asarray([[np.log(20.0), 0.25]], dtype=np.float64)
+    center = np.asarray([np.log(100.0)], dtype=np.float64)
+    scale = np.asarray([1.0], dtype=np.float64)
+    valid = np.asarray([True])
+    ref = np.asarray([0.01])
+    n_min = np.asarray([50], dtype=np.uint32)
+    n_max = np.asarray([200], dtype=np.uint32)
+
+    # Query N=400 is above the trained max -> q/kappa evaluated at N=200, but the
+    # Beta-Binomial tail and count still use the actual N=400. This must equal
+    # scoring an in-range query of N=200 evaluated at the same boundary.
+    out_of_range = family_neglogccdf(0, 30, 400, ref, q_coef, kappa_coef, center, scale, valid, n_min, n_max)
+    at_boundary = family_neglogccdf(0, 30, 200, ref, q_coef, kappa_coef, center, scale, valid, n_min, n_max)
+    alpha, beta, q = beta_binomial_params_for_n(200, q_coef[0], kappa_coef[0], center[0], scale[0])
+    expected = beta_binomial_neglogccdf(30, 400, alpha, beta)
+    np.testing.assert_allclose(out_of_range, expected, rtol=1e-9)
+    # The boundary (in-range) query uses N=200 for the tail, so it differs.
+    assert not np.isclose(out_of_range, at_boundary)
+
+    # Expected count uses clamped q but actual N.
+    ec = family_expected_count(0, 400, ref, q_coef, kappa_coef, center, scale, valid, n_min, n_max)
+    np.testing.assert_allclose(ec, q * 400, rtol=1e-9)

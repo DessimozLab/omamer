@@ -90,10 +90,28 @@ def has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
 
 
 @numba.njit(nogil=True)
-def family_expected_count(family_id, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid):
+def bbinom_eval_n(family_id, n, n_min, n_max):
+    # Clamp the query unique-kmer count to the family's trained N range
+    # before evaluating the smooth q(N)/kappa(N) curve, so the length-aware
+    # model is never extrapolated outside the range it was fitted on. The
+    # Beta-Binomial support and observed count still use the actual N.
+    n_eval = n
+    if n_max.size > family_id and n_max[family_id] > 0:
+        lo = n_min[family_id]
+        hi = n_max[family_id]
+        if n_eval < lo:
+            n_eval = lo
+        elif n_eval > hi:
+            n_eval = hi
+    return n_eval
+
+
+@numba.njit(nogil=True)
+def family_expected_count(family_id, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid, n_min, n_max):
     if has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
+        n_eval = bbinom_eval_n(family_id, n, n_min, n_max)
         _, _, q = beta_binomial_params_for_n(
-            n,
+            n_eval,
             q_coef[family_id],
             kappa_coef[family_id],
             center[family_id],
@@ -104,10 +122,11 @@ def family_expected_count(family_id, n, ref_fam_prob, q_coef, kappa_coef, center
 
 
 @numba.njit(nogil=True)
-def family_neglogccdf(family_id, x, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid):
+def family_neglogccdf(family_id, x, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid, n_min, n_max):
     if has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
+        n_eval = bbinom_eval_n(family_id, n, n_min, n_max)
         alpha, beta, _ = beta_binomial_params_for_n(
-            n,
+            n_eval,
             q_coef[family_id],
             kappa_coef[family_id],
             center[family_id],
@@ -700,6 +719,8 @@ def place_sequence(
         fam_bbinom_center,
         fam_bbinom_scale,
         fam_bbinom_valid,
+        fam_bbinom_n_min,
+        fam_bbinom_n_max,
         decision_source,
         alpha,
         sst,
@@ -787,6 +808,8 @@ def place_sequence(
             fam_bbinom_center,
             fam_bbinom_scale,
             fam_bbinom_valid,
+            fam_bbinom_n_min,
+            fam_bbinom_n_max,
         )
     qres = qres[qres["count"] >= expected_count]
 
@@ -853,6 +876,8 @@ def place_sequence(
             fam_bbinom_center,
             fam_bbinom_scale,
             fam_bbinom_valid,
+            fam_bbinom_n_min,
+            fam_bbinom_n_max,
         )
         qres["pvalue"][i] = min(
             float(MAX_LOGP),
@@ -884,6 +909,8 @@ def place_sequence(
             fam_bbinom_center,
             fam_bbinom_scale,
             fam_bbinom_valid,
+            fam_bbinom_n_min,
+            fam_bbinom_n_max,
         )
     qres["normcount"][:] = (qres["count"] - expected_count) / (
            len(r1) - expected_count
@@ -1040,6 +1067,18 @@ class MergeSearch(object):
         return np.empty(0, dtype=np.bool_)
 
     @lazy_property
+    def ref_fam_bbinom_n_min(self):
+        if "/Index/FamilyBBinomNTrainMin" in self.db.db:
+            return self.db._db_Index_FamilyBBinomNTrainMin[:]
+        return np.empty(0, dtype=np.uint32)
+
+    @lazy_property
+    def ref_fam_bbinom_n_max(self):
+        if "/Index/FamilyBBinomNTrainMax" in self.db.db:
+            return self.db._db_Index_FamilyBBinomNTrainMax[:]
+        return np.empty(0, dtype=np.uint32)
+
+    @lazy_property
     def ss_ref_fam_bbinom_q_coef(self):
         if "/Index/SSFamilyBBinomQCoef" in self.db.db:
             return self.db._db_Index_SSFamilyBBinomQCoef[:]
@@ -1068,6 +1107,18 @@ class MergeSearch(object):
         if "/Index/SSFamilyBBinomValid" in self.db.db:
             return self.db._db_Index_SSFamilyBBinomValid[:]
         return np.empty(0, dtype=np.bool_)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_n_min(self):
+        if "/Index/SSFamilyBBinomNTrainMin" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomNTrainMin[:]
+        return np.empty(0, dtype=np.uint32)
+
+    @lazy_property
+    def ss_ref_fam_bbinom_n_max(self):
+        if "/Index/SSFamilyBBinomNTrainMax" in self.db.db:
+            return self.db._db_Index_SSFamilyBBinomNTrainMax[:]
+        return np.empty(0, dtype=np.uint32)
 
     @cached_property
     def _empty_u32(self):
@@ -1159,6 +1210,8 @@ class MergeSearch(object):
             ref_fam_bbinom_center=self.ref_fam_bbinom_center,
             ref_fam_bbinom_scale=self.ref_fam_bbinom_scale,
             ref_fam_bbinom_valid=self.ref_fam_bbinom_valid,
+            ref_fam_bbinom_n_min=self.ref_fam_bbinom_n_min,
+            ref_fam_bbinom_n_max=self.ref_fam_bbinom_n_max,
             ss_ref_fam_prob=self.ss_ref_fam_prob if self.has_structure else self._empty_f64,
             ss_ref_hog_prob=self.ss_ref_hog_prob if self.has_structure else self._empty_f64,
             ss_ref_fam_bbinom_q_coef=self.ss_ref_fam_bbinom_q_coef if self.has_structure else self._empty_f64_2d,
@@ -1166,6 +1219,8 @@ class MergeSearch(object):
             ss_ref_fam_bbinom_center=self.ss_ref_fam_bbinom_center if self.has_structure else self._empty_f64,
             ss_ref_fam_bbinom_scale=self.ss_ref_fam_bbinom_scale if self.has_structure else self._empty_f64,
             ss_ref_fam_bbinom_valid=self.ss_ref_fam_bbinom_valid if self.has_structure else self._empty_bool,
+            ss_ref_fam_bbinom_n_min=self.ss_ref_fam_bbinom_n_min if self.has_structure else self._empty_u32,
+            ss_ref_fam_bbinom_n_max=self.ss_ref_fam_bbinom_n_max if self.has_structure else self._empty_u32,
             alpha=alpha,
             sst=sst,
             family_only=family_only,
@@ -1338,6 +1393,8 @@ class MergeSearch(object):
                 ref_fam_bbinom_center,
                 ref_fam_bbinom_scale,
                 ref_fam_bbinom_valid,
+                ref_fam_bbinom_n_min,
+                ref_fam_bbinom_n_max,
                 ss_ref_fam_prob,
                 ss_ref_hog_prob,
                 ss_ref_fam_bbinom_q_coef,
@@ -1345,6 +1402,8 @@ class MergeSearch(object):
                 ss_ref_fam_bbinom_center,
                 ss_ref_fam_bbinom_scale,
                 ss_ref_fam_bbinom_valid,
+                ss_ref_fam_bbinom_n_min,
+                ss_ref_fam_bbinom_n_max,
                 alpha,
                 sst,
                 family_only,
@@ -1408,6 +1467,8 @@ class MergeSearch(object):
                         ref_fam_bbinom_center,
                         ref_fam_bbinom_scale,
                         ref_fam_bbinom_valid,
+                        ref_fam_bbinom_n_min,
+                        ref_fam_bbinom_n_max,
                         1,
                         alpha,
                         sst,
@@ -1446,6 +1507,8 @@ class MergeSearch(object):
                         ss_ref_fam_bbinom_center,
                         ss_ref_fam_bbinom_scale,
                         ss_ref_fam_bbinom_valid,
+                        ss_ref_fam_bbinom_n_min,
+                        ss_ref_fam_bbinom_n_max,
                         2,
                         alpha,
                         sst,

@@ -832,21 +832,26 @@ def place_sequence(
     # any promiscuous k-mers dropped by the document-frequency cap (n_capped is
     # 0 when capping is disabled, so this matches the original n = len(r1)).
     n = len(r1) - n_capped
-    expected_count = np.empty(len(qres), dtype=np.float64)
-    for i in range(len(qres)):
-        family_id = qres["id"][i]
-        expected_count[i] = family_expected_count(
-            family_id,
-            n,
-            ref_fam_prob,
-            fam_bbinom_q_coef,
-            fam_bbinom_kappa_coef,
-            fam_bbinom_center,
-            fam_bbinom_scale,
-            fam_bbinom_valid,
-            fam_bbinom_n_min,
-            fam_bbinom_n_max,
-        )
+    if fam_bbinom_valid.size == 0:
+        # For the binomial model, expected k-mer count is simply p_fam * n
+        expected_count = ref_fam_prob[qres["id"]] * n
+    else:
+        # Expected count for the beta binomial model
+        expected_count = np.empty(len(qres), dtype=np.float64)
+        for i in range(len(qres)):
+            family_id = qres["id"][i]
+            expected_count[i] = family_expected_count(
+                family_id,
+                n,
+                ref_fam_prob,
+                fam_bbinom_q_coef,
+                fam_bbinom_kappa_coef,
+                fam_bbinom_center,
+                fam_bbinom_scale,
+                fam_bbinom_valid,
+                fam_bbinom_n_min,
+                fam_bbinom_n_max,
+            )
     qres = qres[qres["count"] >= expected_count]
 
     #     - b. filter by sequence coverage. There is no point to
@@ -961,21 +966,24 @@ def place_sequence(
         return False
 
     # 4. Compute normalized count
-    expected_count = np.empty(len(qres), dtype=np.float64)
-    for i in range(len(qres)):
-        family_id = qres["id"][i]
-        expected_count[i] = family_expected_count(
-            family_id,
-            n,
-            ref_fam_prob,
-            fam_bbinom_q_coef,
-            fam_bbinom_kappa_coef,
-            fam_bbinom_center,
-            fam_bbinom_scale,
-            fam_bbinom_valid,
-            fam_bbinom_n_min,
-            fam_bbinom_n_max,
-        )
+    if fam_bbinom_valid.size == 0:
+        expected_count = ref_fam_prob[qres["id"]] * n
+    else:
+        expected_count = np.empty(len(qres), dtype=np.float64)
+        for i in range(len(qres)):
+            family_id = qres["id"][i]
+            expected_count[i] = family_expected_count(
+                family_id,
+                n,
+                ref_fam_prob,
+                fam_bbinom_q_coef,
+                fam_bbinom_kappa_coef,
+                fam_bbinom_center,
+                fam_bbinom_scale,
+                fam_bbinom_valid,
+                fam_bbinom_n_min,
+                fam_bbinom_n_max,
+            )
     qres["normcount"][:] = (qres["count"] - expected_count) / (
            n - expected_count
     )

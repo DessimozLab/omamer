@@ -229,7 +229,7 @@ def main():
         type=int,
         help="Skip k-mers whose document frequency exceeds this cap. "
              "Allows to ignore promiscuous k-mers present in many families. "
-             "Recommended values: 0 (default, disables capping), 10000. ",
+             "Recommended values: 0 (default, disables capping), 10000, 100000. ",
     )
     search_parser.add_argument(
         "-fo",

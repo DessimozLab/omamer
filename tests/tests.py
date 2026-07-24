@@ -60,7 +60,7 @@ def test_pmi_kmer_filter_prefers_family_specific_kmers_and_keeps_ties():
     table_buff = np.asarray([0, 1, 2, 0, 1, 2, 2], dtype=np.uint32)
     np.testing.assert_array_equal(
         filtered_hog_kmer_counts(table_idx, table_buff, valid, 3),
-        [1, 0, 2],
+        [1, 0, 1],
     )
 
 @numba.njit

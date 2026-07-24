@@ -235,9 +235,9 @@ def main():
         "--kmer_percentage",
         default=100.0,
         type=float,
-        help="For 3Di searches, retain the most informative percentage of indexed "
-             "k-mer types, ranked by pointwise mutual information / inverse family "
-             "document frequency. 100 (default) disables this filter; values must "
+        help="For sequence and 3Di searches, retain the most informative percentage "
+             "of indexed k-mer types, ranked by pointwise mutual information / inverse "
+             "family document frequency. 100 (default) disables this filter; values must "
              "be in (0, 100].",
     )
     search_parser.add_argument(

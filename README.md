@@ -28,6 +28,18 @@ Note: databases included in the [Zenodo upload](https://zenodo.org/record/459370
 # omamer search - Searching a Database
 Assign proteins to families and subfamilies in a pre-existing database.
 
+### Filtering promiscuous k-mers
+
+`--kmer_percentage P` retains the most family-specific `P` percent of indexed
+sequence or 3Di k-mer types (`100`, the default, keeps historical unfiltered
+behaviour). A retained hit has
+`log2(number_of_families / family_document_frequency)` bits under a uniform
+family prior, so the filter removes broad posting lists; this is especially
+useful for 3Di. Ties at the cut-off are retained. For beta-binomial structural
+search, fit and import coefficients with the same value, e.g.
+`compute-bbinom --modality ss --kmer_percentage 80`; otherwise OMAmer uses the
+recalibrated binomial background.
+
 ## Usage
 Required arguments: ``--db``, ``--query``
 

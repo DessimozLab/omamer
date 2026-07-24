@@ -190,7 +190,7 @@ def search(args):
     ms = MergeSearch(
         ki=db.ki,
         include_extant_genes=args.include_extant_genes,
-        ss_kmer_percentage=args.kmer_percentage,
+        kmer_percentage=args.kmer_percentage,
     )
 
     # only print header for file output
@@ -209,7 +209,7 @@ def search(args):
     else:
         ref_taxoff = None
 
-    _ensure_data_loaded(ms)
+    _ensure_data_loaded(ms, load_structure=bool(args.structure))
 
     search_times = []
 
@@ -340,7 +340,7 @@ def _ensure_db_build_dependencies_available():
         sys.exit(1)
 
 
-def _ensure_data_loaded(ms):
+def _ensure_data_loaded(ms, load_structure=True):
     from alive_progress import alive_bar
     import sys
 
@@ -372,15 +372,20 @@ def _ensure_data_loaded(ms):
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
+    if ms.kmer_filter_active:
+        _load("valid_kmers", "sequence k-mer information filter")
+        _load("filtered_reference_probabilities", "filtered sequence probability estimates")
 
     # Databases pre All.Jul2024 didn't have any structure
     # We keep it backward compatible to make it possible to load
     # older databases.
-    if ms.db.has_structure():
+    # A sequence-only query does not need to materialize a structural index
+    # merely because the database happens to contain one.
+    if load_structure and ms.db.has_structure():
         _load("ss_kmer_table", "structural k-mer index")
         _load("ss_ref_fam_prob", "structural family probability estimates")
         _load("ss_ref_hog_prob", "structural sub-family probability estimates")
-        if ms.ss_kmer_filter_active:
+        if ms.kmer_filter_active:
             _load("ss_valid_kmers", "3Di k-mer information filter")
             _load("ss_filtered_reference_probabilities", "filtered 3Di probability estimates")
 

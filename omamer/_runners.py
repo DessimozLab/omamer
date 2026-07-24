@@ -223,17 +223,8 @@ def search(args):
 
     print_message("")
     with alive_bar(**search_pbar_kwargs) as pbar:
-        query_iter = SequenceReader.read(
-            args.query,
-            k=db.ki.k,
-            format="fasta",
-            chunksize=args.chunksize,
-            sanitiser=db.ki.alphabet.sanitise_seq,
-        )
-
         has_sequence = args.query and os.path.exists(args.query)
         has_structure = args.structure and os.path.exists(args.structure)
-
 
         query_iter = None
         if has_sequence:
@@ -291,6 +282,7 @@ def search(args):
                 sst=args.threshold,
                 family_only=args.family_only,
                 ref_taxon_off=ref_taxoff,
+                ss_kmer_df_cap=args.df_cap,
             )
             t_search1 = time()
 
@@ -527,7 +519,7 @@ def goodbye(args, time_taken, search_rate):
     if args.out.name != sys.stdout.name:
         print_message(" - results written to: {}".format(args.out.name))
     print_message(f" - total {time_taken:.02f} seconds")
-    print_message(f" - search phase only {search_rate:.02f} queries/s")
+    print_message(f" - search phase {search_rate:.02f} queries/s")
     print_message("\n\nNote: family p-values are stated in negative log units.")
     print_line(80)
     print_message(

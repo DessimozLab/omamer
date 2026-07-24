@@ -545,7 +545,8 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
                      thread_hog_counts, thread_fam_counts,
                      thread_fam_lowloc, thread_fam_highloc,
                      thread_hit_fams, thread_num_hit_fams,
-                     thread_hit_hogs, thread_num_hit_hogs):
+                     thread_hit_hogs, thread_num_hit_hogs,
+                     kmer_df_cap):
     """
     Perform the kmer search, using the index.
     """
@@ -562,6 +563,7 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
 
     thread_num_hit_fams = 0
     thread_num_hit_hogs = 0
+    n_capped = 0
 
     # iterate unique k-mers
     for m in range(r1.shape[0]):
@@ -574,6 +576,15 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
 
         # get mapping to HOGs
         x = table_idx[kmer: kmer + 2]
+
+        # skip promiscuous "stop-k-mers" when a document-frequency cap is set.
+        # These are also removed from the effective query length (n_capped),
+        # so the count/length ratios stay calibrated.
+        # If cap = 0, skip this step.
+        if 0 < kmer_df_cap < (x[1] - x[0]):
+            n_capped += 1
+            continue
+
         hogs = table_buff[x[0]: x[1]]
         fams = hog_tab["FamOff"][hogs]
 
@@ -602,7 +613,7 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
             elif loc > thread_fam_highloc[fam_off]:
                 thread_fam_highloc[fam_off] = loc
 
-    return thread_num_hit_fams, thread_num_hit_hogs
+    return thread_num_hit_fams, thread_num_hit_hogs, n_capped
 
 
 
@@ -753,6 +764,7 @@ def place_sequence(
         fam_highloc,
         num_hit_fams,
         num_hit_hogs,
+        kmer_df_cap,
 ) -> bool:
 
     query_len = sequence.shape[0]
@@ -784,7 +796,7 @@ def place_sequence(
     thread_num_hit_fams = num_hit_fams[numba.get_thread_id()]
     thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
 
-    thread_num_hit_fams, thread_num_hit_hogs = search_seq_kmers(
+    thread_num_hit_fams, thread_num_hit_hogs, n_capped = search_seq_kmers(
         r1,
         p1,
         hog_tab,
@@ -799,6 +811,7 @@ def place_sequence(
         thread_num_hit_fams,
         thread_hit_hogs,
         thread_num_hit_hogs,
+        kmer_df_cap,
     )
 
     num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
@@ -815,7 +828,10 @@ def place_sequence(
     #     that have at least their expected number of k-mer matches,
     #     because that number should be already given by random
     #     (however is still insignificant).
-    n = len(r1)
+    # Effective query length: unique k-mers actually searched, i.e. excluding
+    # any promiscuous k-mers dropped by the document-frequency cap (n_capped is
+    # 0 when capping is disabled, so this matches the original n = len(r1)).
+    n = len(r1) - n_capped
     expected_count = np.empty(len(qres), dtype=np.float64)
     for i in range(len(qres)):
         family_id = qres["id"][i]
@@ -917,7 +933,7 @@ def place_sequence(
         neglog_tail = family_neglogccdf(
             family_id,
             qres["count"][i],
-            len(r1),
+            n,
             ref_fam_prob,
             fam_bbinom_q_coef,
             fam_bbinom_kappa_coef,
@@ -950,7 +966,7 @@ def place_sequence(
         family_id = qres["id"][i]
         expected_count[i] = family_expected_count(
             family_id,
-            len(r1),
+            n,
             ref_fam_prob,
             fam_bbinom_q_coef,
             fam_bbinom_kappa_coef,
@@ -961,7 +977,7 @@ def place_sequence(
             fam_bbinom_n_max,
         )
     qres["normcount"][:] = (qres["count"] - expected_count) / (
-           len(r1) - expected_count
+           n - expected_count
     )
 
     # 5. Store results
@@ -998,7 +1014,7 @@ def place_sequence(
         # new expected count, but using old cumulation
         (fam_hog_scores, fam_bestpath) = hog_path_placement(
             c,
-            r1.size,
+            n,
             fam_level_offsets,
             fam_hog2parent,
             thread_hog_counts[hog_s:hog_e],
@@ -1195,6 +1211,7 @@ class MergeSearch(object):
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
+        ss_kmer_df_cap=0,
     ):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
@@ -1272,6 +1289,7 @@ class MergeSearch(object):
             alpha=alpha,
             sst=sst,
             family_only=family_only,
+            ss_kmer_df_cap=np.int64(ss_kmer_df_cap),
         )
 
         t1 = time()
@@ -1455,12 +1473,11 @@ class MergeSearch(object):
                 alpha,
                 sst,
                 family_only,
+                ss_kmer_df_cap,
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
             """
-            # flags to ignore k-mers containing X
-            x_flag = table_idx.size - 1
 
             has_structure_index = (
                 (ss_table_idx.size > 0)
@@ -1528,7 +1545,8 @@ class MergeSearch(object):
                         fam_lowloc,
                         fam_highloc,
                         num_hit_fams,
-                        num_hit_hogs)
+                        num_hit_hogs,
+                        0)  # never cap the sequence (protein) k-mer search
 
                 if has_structure_index and not only_sequence and not placed:
                     structure = ss_seqs[
@@ -1569,25 +1587,8 @@ class MergeSearch(object):
                         fam_highloc,
                         num_hit_fams,
                         num_hit_hogs,
+                        ss_kmer_df_cap,
                     )
-
-
-            #total_time = parse_time + search_time + filter_time + pvalue_time + place_time + sort_time
-
-            #print()
-            #print("Select time\t", as_seconds(select_time))
-            #print("Bits time\t", as_seconds(bits_time))
-            # print()
-            # print("Parse time\t", as_seconds(parse_time))
-            # print("Search time\t", as_seconds(search_time))
-            # print("Filter time\t", as_seconds(filter_time))
-            # print("Pvalue time\t", as_seconds(pvalue_time))
-            # print("Sort time\t", as_seconds(sort_time))
-            # print("Place time\t", as_seconds(place_time))
-            # #print("Batch total\t", as_seconds(total_time))
-
-            #print("Average hit fams:", stats_hit_fams / len(seqs_idx))
-            #print("Average hit fams (ss):", stats_ss_hit_fams / len(seqs_idx))
 
         # import psutil
         # process = psutil.Process()

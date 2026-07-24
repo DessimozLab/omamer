@@ -224,6 +224,14 @@ def main():
         help="Significance threshold used when filtering families.",
     )
     search_parser.add_argument(
+        "--df_cap",
+        default=0,
+        type=int,
+        help="Skip k-mers whose document frequency exceeds this cap. "
+             "Allows to ignore promiscuous k-mers present in many families. "
+             "Recommended values: 0 (default, disables capping), 10000. ",
+    )
+    search_parser.add_argument(
         "-fo",
         "--family_only",
         action="store_true",

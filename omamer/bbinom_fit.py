@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 
 from ._utils import LOG, is_progress_disabled
 from .alphabets import get_transform
-from .merge_search import parse_seq
+from .merge_search import parse_seq, select_kmers_by_pmi
 from .sequence_reader import SequenceReader
 
 
@@ -71,16 +71,19 @@ def _iter_sequences(paths, k, chunksize, sanitiser):
                 record_i += 1
 
 
-def _unique_valid_codes(seq, k, trans, digits_lookup, x_flag):
+def _unique_valid_codes(seq, k, trans, digits_lookup, x_flag, valid_kmers=None):
     n_kmers = len(seq) - (k - 1)
     if n_kmers <= 0:
         return np.empty(0, dtype=np.uint32)
     seq_arr = np.frombuffer(seq.encode("ascii"), dtype=np.uint8)
     codes, _, _ = parse_seq(seq_arr, digits_lookup, n_kmers, k, trans, x_flag)
-    return codes[codes != x_flag]
+    codes = codes[codes != x_flag]
+    if valid_kmers is not None:
+        codes = codes[valid_kmers[codes]]
+    return codes
 
 
-def scan_sequence_unique_counts(paths, k, alphabet, table_index_size, chunksize):
+def scan_sequence_unique_counts(paths, k, alphabet, table_index_size, chunksize, valid_kmers=None):
     trans = get_transform(k, alphabet.DIGITS_AA)
     digits_lookup = alphabet.DIGITS_AA_LOOKUP
     x_flag = table_index_size - 1
@@ -90,7 +93,7 @@ def scan_sequence_unique_counts(paths, k, alphabet, table_index_size, chunksize)
         desc="scan exact unique-kmer counts",
         disable=is_progress_disabled(),
     ):
-        counts.append(int(_unique_valid_codes(seq, k, trans, digits_lookup, x_flag).size))
+        counts.append(int(_unique_valid_codes(seq, k, trans, digits_lookup, x_flag, valid_kmers).size))
     return np.asarray(counts, dtype=np.uint32)
 
 
@@ -207,6 +210,7 @@ def collect_family_hit_histograms(
     db,
     chunksize=10000,
     modality="seq",
+    valid_kmers=None,
 ):
     selected_lookup = {int(idx): int(n) for n, indices in sampled_by_n.items() for idx in indices}
     selected_indices = set(selected_lookup)
@@ -237,7 +241,7 @@ def collect_family_hit_histograms(
         if record_i not in selected_indices:
             continue
         n = selected_lookup[record_i]
-        codes = _unique_valid_codes(seq, k, trans, digits_lookup, x_flag)
+        codes = _unique_valid_codes(seq, k, trans, digits_lookup, x_flag, valid_kmers)
         if int(codes.size) != n or n not in selected_n:
             continue
         n_query_counts[n] += 1
@@ -297,6 +301,7 @@ def fit_family_bbinom_from_hist(
     kappa_degree=1,
     min_nonzero_queries=1,
     modality="seq",
+    kmer_percentage=100.0,
 ):
     nonzero_queries = int(sum(count for _, _, count in records))
     if nonzero_queries < int(min_nonzero_queries):
@@ -363,6 +368,7 @@ def fit_family_bbinom_from_hist(
     row = {
         "family_offset": int(family_offset),
         "modality": modality,
+        "kmer_percentage": float(kmer_percentage),
         "model": "length_aware_beta_binomial",
         "q_degree": int(q_degree),
         "kappa_degree": int(kappa_degree),
@@ -386,7 +392,7 @@ def _fit_family_worker(args):
     return fit_family_bbinom_from_hist(*args)
 
 
-def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_degree=1, min_nonzero_queries=1, workers=1, modality="seq"):
+def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_degree=1, min_nonzero_queries=1, workers=1, modality="seq", kmer_percentage=100.0):
     by_rank = defaultdict(list)
     for (rank, n, x), count in hist.items():
         by_rank[int(rank)].append((int(n), int(x), int(count)))
@@ -400,6 +406,7 @@ def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_d
             int(kappa_degree),
             int(min_nonzero_queries),
             modality,
+            float(kmer_percentage),
         )
         for rank, records in sorted(by_rank.items())
     ]
@@ -437,6 +444,7 @@ def compute_bbinom_coefficients(
     workers=1,
     n_summary_path=None,
     modality="seq",
+    kmer_percentage=100.0,
 ):
     if not sequence_paths:
         raise ValueError("At least one sequence FASTA path is required")
@@ -444,6 +452,10 @@ def compute_bbinom_coefficients(
         raise ValueError("modality must be 'seq' or 'ss', got {!r}".format(modality))
     if modality == "ss" and not db.has_structure():
         raise ValueError("Database has no structure index; cannot fit ss coefficients")
+    if not 0.0 < float(kmer_percentage) <= 100.0:
+        raise ValueError("kmer_percentage must be in (0, 100]")
+    if modality == "seq" and float(kmer_percentage) != 100.0:
+        raise ValueError("kmer_percentage filtering is only supported for modality='ss'")
     if db.ki.alphabet.n != 21:
         LOG.warning("Computing coefficients with alphabet size {}".format(db.ki.alphabet.n))
     LOG.info("Fitting beta-binomial coefficients for modality '{}'".format(modality))
@@ -461,12 +473,23 @@ def compute_bbinom_coefficients(
     LOG.info("Selected {} families for beta-binomial fitting".format(families.size))
 
     index_node, _ = _modality_index_arrays(db, modality)
+    valid_kmers = None
+    if modality == "ss" and float(kmer_percentage) < 100.0:
+        valid_kmers, n_present, n_retained, max_df = select_kmers_by_pmi(
+            index_node[:], db.family_table.nrows, float(kmer_percentage)
+        )
+        LOG.info(
+            "Fitting with {} of {} 3Di k-mers retained (df <= {})".format(
+                n_retained, n_present, max_df
+            )
+        )
     n_unique = scan_sequence_unique_counts(
         sequence_paths,
         db.ki.k,
         db.ki.alphabet,
         index_node.shape[0],
         chunksize,
+        valid_kmers,
     )
     summary, selected_n = choose_sequence_n_values(
         n_unique,
@@ -493,6 +516,7 @@ def compute_bbinom_coefficients(
         db,
         chunksize=chunksize,
         modality=modality,
+        valid_kmers=valid_kmers,
     )
     LOG.info("Collected {} nonzero family/N/X histogram bins".format(len(hist)))
 
@@ -505,6 +529,7 @@ def compute_bbinom_coefficients(
         min_nonzero_queries=min_nonzero_queries,
         workers=workers,
         modality=modality,
+        kmer_percentage=kmer_percentage,
     )
     rows.to_csv(output_path, sep="\t", index=False)
     LOG.info("Wrote {} coefficient rows to {}".format(len(rows), output_path))

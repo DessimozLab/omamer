@@ -14,7 +14,11 @@ from omamer.database import DatabaseFromOMABrowser
 from omamer.stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
 from omamer.compression import ctz, naive_ctz, popcount, select1_in_word
 from omamer.compression import to_elias_fano, from_elias_fano
-from omamer.merge_search import family_result_sort
+from omamer.merge_search import (
+    family_result_sort,
+    filtered_hog_kmer_counts,
+    select_kmers_by_pmi,
+)
 
 
 def popcount_naive(x):
@@ -38,6 +42,26 @@ def test_popcount():
         expected = popcount_naive(x)
         actual = popcount(x)
         assert expected == actual
+
+
+def test_pmi_kmer_filter_prefers_family_specific_kmers_and_keeps_ties():
+    # Four indexed codes have family document frequencies 1, 2, 3 and 1;
+    # code 3 is absent.  At 50%, both df=1 codes are retained, while absent
+    # codes remain valid because they do not add posting-list work.
+    table_idx = np.asarray([0, 1, 3, 6, 6, 7], dtype=np.uint32)
+    valid, n_present, n_retained, max_df = select_kmers_by_pmi(
+        table_idx, 6, 50.0
+    )
+    assert (n_present, n_retained, max_df) == (4, 2, 1)
+    np.testing.assert_array_equal(valid, [True, False, False, True, True])
+
+    # This also verifies that conditional background construction counts only
+    # retained postings, not an entry for every possible k-mer code.
+    table_buff = np.asarray([0, 1, 2, 0, 1, 2, 2], dtype=np.uint32)
+    np.testing.assert_array_equal(
+        filtered_hog_kmer_counts(table_idx, table_buff, valid, 3),
+        [1, 0, 2],
+    )
 
 @numba.njit
 def select1_in_word_naive(word, rank):
@@ -273,6 +297,9 @@ def test_import_bbinom_coefficients_writes_modality_arrays(tmp_path):
         written = import_bbinom_coefficients(FakeDB(h5), coeff_path)
         assert written == {"seq": 1, "ss": 1}
         assert h5.root.Index._v_attrs["bbinom_model"] == "length_aware_beta_binomial"
+        # Old coefficient TSVs omit the column and are explicitly marked as
+        # compatible with the unfiltered structural search.
+        assert h5.root.Index._v_attrs["ss_bbinom_kmer_percentage"] == 100.0
         np.testing.assert_array_equal(h5.root.Index.FamilyBBinomValid[:], [False, True, False])
         np.testing.assert_array_equal(h5.root.Index.SSFamilyBBinomValid[:], [False, False, True])
         np.testing.assert_allclose(h5.root.Index.FamilyBBinomQCoef[1], [0.1, 0.2, 0.3])
@@ -328,6 +355,7 @@ def test_fit_family_bbinom_from_hist_returns_importable_row():
     assert row is not None
     assert row["family_offset"] == 7
     assert row["modality"] == "seq"
+    assert row["kmer_percentage"] == 100.0
     assert row["q_degree"] == 2
     assert row["kappa_degree"] == 1
     for key in ["q_coef_0", "q_coef_1", "q_coef_2", "kappa_coef_0", "kappa_coef_1"]:

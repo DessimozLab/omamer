@@ -187,7 +187,11 @@ def search(args):
     db = Database(args.db)
 
     # setup search
-    ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
+    ms = MergeSearch(
+        ki=db.ki,
+        include_extant_genes=args.include_extant_genes,
+        ss_kmer_percentage=args.kmer_percentage,
+    )
 
     # only print header for file output
     print_header = args.out.name != sys.stdout.name
@@ -376,6 +380,9 @@ def _ensure_data_loaded(ms):
         _load("ss_kmer_table", "structural k-mer index")
         _load("ss_ref_fam_prob", "structural family probability estimates")
         _load("ss_ref_hog_prob", "structural sub-family probability estimates")
+        if ms.ss_kmer_filter_active:
+            _load("ss_valid_kmers", "3Di k-mer information filter")
+            _load("ss_filtered_reference_probabilities", "filtered 3Di probability estimates")
 
     process = psutil.Process()
     LOG.info(f"Memory after loading DB: "
@@ -463,6 +470,7 @@ def compute_bbinom(args):
             workers=args.fit_workers,
             n_summary_path=args.n_summary_out,
             modality=args.modality,
+            kmer_percentage=args.kmer_percentage,
         )
 
 

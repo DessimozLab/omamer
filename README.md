@@ -27,6 +27,7 @@ Note: databases included in the [Zenodo upload](https://zenodo.org/record/459370
 
 # omamer search - Searching a Database
 Assign proteins to families and subfamilies in a pre-existing database.
+
 ## Usage
 Required arguments: ``--db``, ``--query``
 

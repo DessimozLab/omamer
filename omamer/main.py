@@ -232,6 +232,15 @@ def main():
              "Recommended values: 0 (default, disables capping), 10000, 100000. ",
     )
     search_parser.add_argument(
+        "--kmer_percentage",
+        default=100.0,
+        type=float,
+        help="For 3Di searches, retain the most informative percentage of indexed "
+             "k-mer types, ranked by pointwise mutual information / inverse family "
+             "document frequency. 100 (default) disables this filter; values must "
+             "be in (0, 100].",
+    )
+    search_parser.add_argument(
         "-fo",
         "--family_only",
         action="store_true",
@@ -328,7 +337,7 @@ def main():
         "compute-bbinom",
         formatter_class=ArgumentDefaultsHelpFormatter,
         help="Fit precomputed beta-binomial family coefficients from sequence FASTA records.",
-        description="Fit sequence-only length-aware beta-binomial coefficients using an existing OMAmer sequence index and external sequence FASTA records.",
+        description="Fit length-aware beta-binomial coefficients for amino-acid or 3Di searches using an existing OMAmer index and external query-like FASTA records.",
     )
     compute_bbinom_parser.set_defaults(func=compute_bbinom)
     compute_bbinom_parser.add_argument(
@@ -349,6 +358,13 @@ def main():
         default="seq",
         choices=["seq", "ss"],
         help="Which family background to fit: seq (amino-acid index) or ss (3Di structure index).",
+    )
+    compute_bbinom_parser.add_argument(
+        "--kmer_percentage",
+        default=100.0,
+        type=float,
+        help="For --modality ss, fit against the same PMI-filtered 3Di k-mers "
+             "used by search. Must match the search value; 100 disables filtering.",
     )
     compute_bbinom_parser.add_argument(
         "-o",

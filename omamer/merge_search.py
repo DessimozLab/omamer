@@ -565,6 +565,10 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
     thread_num_hit_hogs = 0
     n_capped = 0
 
+    # define the HOG->family column view out of the loop
+    # (to avoid refetching the struct field on every k-mer)
+    hog2fam = hog_tab["FamOff"]
+
     # iterate unique k-mers
     for m in range(r1.shape[0]):
         kmer = r1[m]
@@ -575,31 +579,32 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
             continue
 
         # get mapping to HOGs
-        x = table_idx[kmer: kmer + 2]
+        lo = table_idx[kmer]
+        hi = table_idx[kmer + 1]
 
         # skip promiscuous "stop-k-mers" when a document-frequency cap is set.
         # These are also removed from the effective query length (n_capped),
         # so the count/length ratios stay calibrated.
         # If cap = 0, skip this step.
-        if 0 < kmer_df_cap < (x[1] - x[0]):
+        if 0 < kmer_df_cap < (hi - lo):
             n_capped += 1
             continue
 
-        hogs = table_buff[x[0]: x[1]]
-        fams = hog_tab["FamOff"][hogs]
+        # Single fused pass over the k-mer's HOGs. Each HOG maps to exactly one
+        # family, so we update the HOG and family counters together
+        for j in range(lo, hi):
+            hog = table_buff[j]
 
-        for hog in hogs:
             if not thread_hog_counts[hog]:
                 thread_hit_hogs[thread_num_hit_hogs] = hog
                 thread_num_hit_hogs += 1
-
             thread_hog_counts[hog] += 1
 
-        for fam_off in fams:
+            fam_off = hog2fam[hog]
+
             if not thread_fam_counts[fam_off]:
                 thread_hit_fams[thread_num_hit_fams] = fam_off
                 thread_num_hit_fams += 1
-
             thread_fam_counts[fam_off] += 1
 
             # initiate first location
@@ -890,7 +895,7 @@ def place_sequence(
             fam_bbinom_scale,
             fam_bbinom_valid,
         ):
-            # If beta binomial is used, use the 1-pmf-value filter:
+            # If Beta-Binomial is used, use the 1-pmf-value filter:
             #       P(X >= k) >= P(X = k)
             # The exact p-value (step 3) keeps a family only when
             #     -log P(X >= k) - correction >= -log(alpha).
@@ -899,8 +904,8 @@ def place_sequence(
             # Check if:
             #       -log P(X = x) - logN >= -log(alpha)
             #
-            # which doesn't require the rest of the Binomial tail
-            # (i.e. P(X > k)) to be computed. If it doesn't hold, step cannot hold.
+            # which doesn't require the rest of the Beta-Binomial tail
+            # (i.e. P(X > k)) to be computed. If it doesn't hold, step 3 cannot hold.
             # This is an exact test.
             neglogpmf_ub = family_bbinom_neglogpmf(
                 family_id,

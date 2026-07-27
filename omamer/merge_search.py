@@ -22,8 +22,8 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
 import sys
+import math
 
-from Rmath4 import pbinom, phyper
 from numba.tests.support import captured_stdout
 from numba.typed import List, Dict
 from property_manager import lazy_property, cached_property
@@ -48,7 +48,6 @@ from .hierarchy import (
     is_taxon_implied,
     get_children,
 )
-from ._clock import clock, as_seconds
 
 
 # maximum neglogp to set
@@ -68,16 +67,35 @@ QUERY_FAMILY_RESULT_DTYPE = np.dtype(
 @numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
-    Use pbinom from RMath4
+    Pure-numba implementation for the neg-log of the upper tail 
+    P(X >= x) of a Binomial(n, p).
+    Stops early once the decaying tail is negligible.
     """
-    # bdtrc does not support high precision (so for v small p fails)
-    # bdtrc supports (float64, long, float64)
-    # return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
-    return -1.0 * pbinom(x - 1, n, p, 0, 1)
+    if x <= 0:
+        return 0.0
+    if x > n:
+        return np.inf
 
-    # pbinom(n - 1, m, m/N, 0, 0)
-    # phyper(n - 1, m, N - m, m, 0, 0)
-    #return -1.0 * phyper(x - 1, n, n/p - n, n, 0, 1)
+    log_px = (
+        math.lgamma(n + 1.0)
+        - math.lgamma(x + 1.0)
+        - math.lgamma(n - x + 1.0)
+        + x * math.log(p)
+        + (n - x) * math.log1p(-p)
+    )
+
+    odds = p / (1.0 - p)
+    acc = 1.0
+    term = 1.0
+    for k in range(x, n):
+        ratio = ((n - k) / (k + 1.0)) * odds
+        term *= ratio
+        acc += term
+        # tail is decaying and this term no longer moves the sum -> stop
+        if ratio < 1.0 and term < acc * 1e-16:
+            break
+
+    return -(log_px + math.log(acc))
 
 
 @numba.njit(nogil=True)
@@ -780,8 +798,6 @@ def place_sequence(
     if n_kmers == 0:
         return False
 
-    t0 = clock()
-
     # get sequence k-mers
     (r1, p1, _) = parse_seq(sequence, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
 
@@ -934,8 +950,6 @@ def place_sequence(
 
     if len(qres) == 0:
         return False
-
-    t0 = clock()
 
     # 3. compute p-value for each family. note: in negative log units
     for i in range(len(qres)):
@@ -1303,6 +1317,7 @@ class MergeSearch(object):
             sst=sst,
             family_only=family_only,
             ss_kmer_df_cap=np.int64(ss_kmer_df_cap),
+            num_threads=numba.get_num_threads(),
         )
 
         t1 = time()
@@ -1487,6 +1502,7 @@ class MergeSearch(object):
                 sst,
                 family_only,
                 ss_kmer_df_cap,
+                num_threads,
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
@@ -1503,8 +1519,12 @@ class MergeSearch(object):
             only_sequence = (len(seqs) > 0) and ((len(ss_seqs) == 0) or not has_structure_index)
 
             # Arrays for thread-local data. We allocate them
-            # in advance to avoid doing so for every query
-            num_threads = numba.get_num_threads()
+            # in advance to avoid doing so for every query.
+            # num_threads is passed in (computed by the caller with
+            # numba.get_num_threads()) rather than called here: that threading-
+            # layer intrinsic embeds a runtime function pointer, which numba
+            # counts as a "dynamic global" and would make this kernel
+            # non-cacheable, forcing a full recompile on every process start.
             hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
             fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
             fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
@@ -1608,4 +1628,4 @@ class MergeSearch(object):
         # print(f"Memory: {process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
 
         #return func
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return numba.jit(func, parallel=True, nopython=True, nogil=True, cache=True)

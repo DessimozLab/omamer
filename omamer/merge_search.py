@@ -22,8 +22,8 @@
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
 import sys
+import math
 
-from Rmath4 import pbinom, phyper
 from numba.tests.support import captured_stdout
 from numba.typed import List, Dict
 from property_manager import lazy_property, cached_property
@@ -48,7 +48,6 @@ from .hierarchy import (
     is_taxon_implied,
     get_children,
 )
-from ._clock import clock, as_seconds
 
 
 # maximum neglogp to set
@@ -68,16 +67,35 @@ QUERY_FAMILY_RESULT_DTYPE = np.dtype(
 @numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
-    Use pbinom from RMath4
+    Pure-numba implementation for the neg-log of the upper tail
+    P(X >= x) of a Binomial(n, p).
+    Stops early once the decaying tail is negligible.
     """
-    # bdtrc does not support high precision (so for v small p fails)
-    # bdtrc supports (float64, long, float64)
-    # return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
-    return -1.0 * pbinom(x - 1, n, p, 0, 1)
+    if x <= 0:
+        return 0.0
+    if x > n:
+        return np.inf
 
-    # pbinom(n - 1, m, m/N, 0, 0)
-    # phyper(n - 1, m, N - m, m, 0, 0)
-    #return -1.0 * phyper(x - 1, n, n/p - n, n, 0, 1)
+    log_px = (
+        math.lgamma(n + 1.0)
+        - math.lgamma(x + 1.0)
+        - math.lgamma(n - x + 1.0)
+        + x * math.log(p)
+        + (n - x) * math.log1p(-p)
+    )
+
+    odds = p / (1.0 - p)
+    acc = 1.0
+    term = 1.0
+    for k in range(x, n):
+        ratio = ((n - k) / (k + 1.0)) * odds
+        term *= ratio
+        acc += term
+        # tail is decaying and this term no longer moves the sum -> stop
+        if ratio < 1.0 and term < acc * 1e-16:
+            break
+
+    return -(log_px + math.log(acc))
 
 
 @numba.njit(nogil=True)
@@ -627,6 +645,10 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
     thread_num_hit_hogs = 0
     n_skipped = 0
 
+    # define the HOG->family column view out of the loop
+    # (to avoid refetching the struct field on every k-mer)
+    hog2fam = hog_tab["FamOff"]
+
     # iterate unique k-mers
     for m in range(r1.shape[0]):
         kmer = r1[m]
@@ -636,39 +658,40 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
         if kmer == x_flag:
             continue
 
-        # The information filter applies to structural k-mers only.  It is a
-        # precomputed boolean array because the lookup is in the inner loop.
+        # The information filter is a precomputed boolean array because the
+        # lookup is in the inner loop.
         # Empty ``valid_kmers`` means no information filtering.
         if valid_kmers.size > 0 and not valid_kmers[kmer]:
             n_skipped += 1
             continue
 
         # get mapping to HOGs
-        x = table_idx[kmer: kmer + 2]
+        lo = table_idx[kmer]
+        hi = table_idx[kmer + 1]
 
         # skip promiscuous "stop-k-mers" when a document-frequency cap is set.
-        # These are also removed from the effective query length (n_capped),
+        # These are also removed from the effective query length (n_skipped),
         # so the count/length ratios stay calibrated.
         # If cap = 0, skip this step.
-        if 0 < kmer_df_cap < (x[1] - x[0]):
+        if 0 < kmer_df_cap < (hi - lo):
             n_skipped += 1
             continue
 
-        hogs = table_buff[x[0]: x[1]]
-        fams = hog_tab["FamOff"][hogs]
+        # Single fused pass over the k-mer's HOGs. Each HOG maps to exactly one
+        # family, so we update the HOG and family counters together
+        for j in range(lo, hi):
+            hog = table_buff[j]
 
-        for hog in hogs:
             if not thread_hog_counts[hog]:
                 thread_hit_hogs[thread_num_hit_hogs] = hog
                 thread_num_hit_hogs += 1
-
             thread_hog_counts[hog] += 1
 
-        for fam_off in fams:
+            fam_off = hog2fam[hog]
+
             if not thread_fam_counts[fam_off]:
                 thread_hit_fams[thread_num_hit_fams] = fam_off
                 thread_num_hit_fams += 1
-
             thread_fam_counts[fam_off] += 1
 
             # initiate first location
@@ -845,8 +868,6 @@ def place_sequence(
     if n_kmers == 0:
         return False
 
-    t0 = clock()
-
     # get sequence k-mers
     (r1, p1, _) = parse_seq(sequence, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
 
@@ -961,7 +982,7 @@ def place_sequence(
             fam_bbinom_scale,
             fam_bbinom_valid,
         ):
-            # If beta binomial is used, use the 1-pmf-value filter:
+            # If Beta-Binomial is used, use the 1-pmf-value filter:
             #       P(X >= k) >= P(X = k)
             # The exact p-value (step 3) keeps a family only when
             #     -log P(X >= k) - correction >= -log(alpha).
@@ -970,8 +991,8 @@ def place_sequence(
             # Check if:
             #       -log P(X = x) - logN >= -log(alpha)
             #
-            # which doesn't require the rest of the Binomial tail
-            # (i.e. P(X > k)) to be computed. If it doesn't hold, step cannot hold.
+            # which doesn't require the rest of the Beta-Binomial tail
+            # (i.e. P(X > k)) to be computed. If it doesn't hold, step 3 cannot hold.
             # This is an exact test.
             neglogpmf_ub = family_bbinom_neglogpmf(
                 family_id,
@@ -1000,8 +1021,6 @@ def place_sequence(
 
     if len(qres) == 0:
         return False
-
-    t0 = clock()
 
     # 3. compute p-value for each family. note: in negative log units
     for i in range(len(qres)):
@@ -1564,6 +1583,7 @@ class MergeSearch(object):
             sst=sst,
             family_only=family_only,
             ss_kmer_df_cap=np.int64(ss_kmer_df_cap),
+            num_threads=numba.get_num_threads(),
         )
 
         t1 = time()
@@ -1752,6 +1772,7 @@ class MergeSearch(object):
                 sst,
                 family_only,
                 ss_kmer_df_cap,
+                num_threads,
         ):
             """
             top_n_fams: number of family for which HOG scores are computed
@@ -1768,8 +1789,12 @@ class MergeSearch(object):
             only_sequence = (len(seqs) > 0) and ((len(ss_seqs) == 0) or not has_structure_index)
 
             # Arrays for thread-local data. We allocate them
-            # in advance to avoid doing so for every query
-            num_threads = numba.get_num_threads()
+            # in advance to avoid doing so for every query.
+            # num_threads is passed in (computed by the caller with
+            # numba.get_num_threads()) rather than called here: that threading-
+            # layer intrinsic embeds a runtime function pointer, which numba
+            # counts as a "dynamic global" and would make this kernel
+            # non-cacheable, forcing a full recompile on every process start.
             hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
             fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
             fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
@@ -1876,4 +1901,4 @@ class MergeSearch(object):
         # print(f"Memory: {process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
 
         #return func
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)
+        return numba.jit(func, parallel=True, nopython=True, nogil=True, cache=True)

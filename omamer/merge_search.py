@@ -1599,6 +1599,69 @@ class MergeSearch(object):
             family_results, subfam_results, sbuff, ssbuff, top_n_fams, ref_taxon_off
         )
 
+    @cached_property
+    def _hog_id_buff(self):
+        # the HOG id character buffer, kept in memory: decoding ids from it is
+        # ~1000x cheaper than a per-row lookup in the (compressed) HDF5 table
+        return self.db.hog_id_buffer[:]
+
+    @cached_property
+    def _hog_id_cache(self):
+        return {}
+
+    @cached_property
+    def _tax_ids(self):
+        # taxon ids are few and reused by almost every query: decode once
+        return [x.decode("ascii") for x in self.tax_tab["ID"]]
+
+    @cached_property
+    def _children_hog(self):
+        return self.db._db_ChildrenHOG[:]
+
+    @cached_property
+    def _children_prot(self):
+        return self.db._db_ChildrenProt[:]
+
+    @cached_property
+    def _prot_id_cols(self):
+        # (offset, length, buffer) of the protein ids, or None on databases
+        # that predate the id buffer (<2.3.0) and store the id inline
+        prot_tab = self.db.protein_table
+        if "ID" in prot_tab.colinstances:
+            return None
+        return (
+            prot_tab.col("IDBufferOff"),
+            prot_tab.col("IDLen"),
+            self.db.protein_id_buffer[:],
+        )
+
+    def get_hog_ids(self, hog_offs):
+        """Decode the ids of the given (0-based) HOG offsets."""
+        cache = self._hog_id_cache
+        buff = self._hog_id_buff
+        hog_tab = self.hog_tab
+        ids = []
+        for off in hog_offs:
+            hog_id = cache.get(off)
+            if hog_id is None:
+                ent = hog_tab[off]
+                s = ent["IDBufferOff"]
+                hog_id = buff[s : s + ent["IDLen"]].tobytes().decode("ascii")
+                cache[off] = hog_id
+            ids.append(hog_id)
+        return ids
+
+    def get_prot_ids(self, prot_offs):
+        """Decode the ids of the given (0-based) protein offsets."""
+        cols = self._prot_id_cols
+        if cols is None:
+            return [self.db.get_prot_id(i) for i in prot_offs]
+        (id_off, id_len, buff) = cols
+        return [
+            buff[id_off[i] : id_off[i] + id_len[i]].tobytes().decode("ascii")
+            for i in prot_offs
+        ]
+
     def output_results(
         self,
         family_results,
@@ -1624,106 +1687,133 @@ class MergeSearch(object):
             "subfamily_medianseqlen",
             "qseq_overlap",
         ]
+        data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
 
-        # Note: missing values are dealt differently by pandas and numpy
-
-        def generate():
-            data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
-            for i in range(0, data_size):
-                for j in range(top_n_fams):
-                    if (j == 0) or subfam_results["id"][i, j] > 0:
-                        yield {
-                            "qseq_offset": i + 1,
-                            "hog_offset": subfam_results["id"][i, j],
-                            "qseq_overlap": family_results["overlap"][i, j],
-                            "family_p": family_results["pvalue"][i, j],
-                            "subfamily_score": subfam_results["score"][i, j],
-                            "family_count": family_results["count"][i, j],
-                            "ss_count": family_results["ss_count"][i, j],
-                            "ss_family_p": family_results["ss_pvalue"][i, j],
-                            "family_normcount": family_results["normcount"][i, j],
-                            "decision_source": family_results["decision_source"][i, j],
-                            "subfamily_count": subfam_results["count"][i, j],
-                        }
-
-        df = pd.DataFrame(generate())
-        if len(df) == 0:
-            return df
-
-        # cast to pd dtype so that we can use pd.NA...
-        df["qseq_offset"] = df["qseq_offset"].astype("UInt32")
-        df["hog_offset"] = df["hog_offset"].astype("UInt32")
-        df["family_count"] = df["family_count"].astype("UInt32")
-        df["subfamily_count"] = df["subfamily_count"].astype("UInt32")
-
-        # set empty as NA
-        na_value = 0
-        for k in df.keys():
-            df.loc[df[k] == na_value, k] = pd.NA
-
-        df["decision_source"] = df["decision_source"].map({1: "seq", 2: "ss"})
-
-        # set the query ids
-        qseq_offsets = df["qseq_offset"].to_numpy(dtype=np.uint32)
-
-        if len(sbuff.buff):
-            df["qseqid"] = sbuff.ids[qseq_offsets - 1]
-            df["qseqlen"] = sbuff.get_seqlen(qseq_offsets)
+        # rows are (query, family rank) pairs: the best family is always
+        # reported, the other ranks only when they carry a subfamily placement
+        if top_n_fams == 1:
+            qseq_off = np.arange(data_size, dtype=np.int64)
+            rank_off = np.zeros(data_size, dtype=np.int64)
         else:
-            df["qseqid"] = ssbuff.ids[qseq_offsets - 1]
-            df["qseqlen"] = ssbuff.get_seqlen(qseq_offsets)
+            keep = subfam_results["id"][:data_size] > 0
+            keep[:, 0] = True
+            (qseq_off, rank_off) = np.nonzero(keep)
 
-        # load the hog ids
-        hog_f = df["hog_offset"].notna()
-        df.loc[hog_f, "subfamily_medianseqlen"] = (
-            df.loc[hog_f, "hog_offset"]
-            .apply(lambda i: self.hog_tab["MedianSeqLen"][i - 1])
-            .astype("UInt32")
-        )
+        nrows = len(qseq_off)
+        if nrows == 0:
+            return pd.DataFrame()
+
+        def nullable_uint(values, na_mask=None):
+            arr = pd.array(values, dtype="UInt32")
+            if na_mask is None:
+                na_mask = values == 0
+            if np.any(na_mask):
+                arr[na_mask] = pd.NA
+            return arr
+
+        def float_with_na(values):
+            values = values.copy()
+            values[values == 0] = np.nan
+            return values
+
+        # query ids and lengths (structure-only searches have no sequence)
+        qbuff = sbuff if len(sbuff.buff) else ssbuff
+        qseqid = qbuff.ids[qseq_off].tolist()
+        if qbuff.ids.dtype.kind != "U":
+            qseqid = list(map(str, qseqid))
+        qseqlen = qbuff.idx[qseq_off + 1] - qbuff.idx[qseq_off]
+
+        # placed queries: everything below is only defined for those
+        hog_off = subfam_results["id"][qseq_off, rank_off].astype(np.int64) - 1
+        unplaced = hog_off < 0
+        placed_rows = np.nonzero(~unplaced)[0]
+        placed_hogs = hog_off[placed_rows]
+
+        hogid = [None] * nrows
+        hoglevel = [None] * nrows
+        tax_ids = self._tax_ids
+        tax_offs = self.hog_tab["TaxOff"][placed_hogs].tolist()
+        hog_ids = self.get_hog_ids(placed_hogs.tolist())
+        for (i, row) in enumerate(placed_rows.tolist()):
+            hogid[row] = hog_ids[i]
+            hoglevel[row] = tax_ids[tax_offs[i]]
+
+        subfamily_medianseqlen = pd.array(np.zeros(nrows, dtype=np.uint32), dtype="UInt32")
+        subfamily_medianseqlen[unplaced] = pd.NA
+        subfamily_medianseqlen[placed_rows] = self.hog_tab["MedianSeqLen"][placed_hogs]
+
+        decision_raw = family_results["decision_source"][qseq_off, rank_off]
+        decision_source = np.empty(nrows, dtype=object)
+        decision_source[:] = pd.NA
+        decision_source[decision_raw == 1] = "seq"
+        decision_source[decision_raw == 2] = "ss"
+
+        data = {
+            "qseqid": qseqid,
+            "hogid": hogid,
+            "hoglevel": hoglevel,
+            "family_p": float_with_na(family_results["pvalue"][qseq_off, rank_off]),
+            "family_count": nullable_uint(family_results["count"][qseq_off, rank_off]),
+            "family_normcount": float_with_na(
+                family_results["normcount"][qseq_off, rank_off]
+            ),
+            "decision_source": decision_source,
+            "ss_count": float_with_na(
+                family_results["ss_count"][qseq_off, rank_off].astype(np.float64)
+            ),
+            "ss_family_p": float_with_na(
+                family_results["ss_pvalue"][qseq_off, rank_off]
+            ),
+            "subfamily_score": float_with_na(
+                subfam_results["score"][qseq_off, rank_off]
+            ),
+            "subfamily_count": nullable_uint(
+                subfam_results["count"][qseq_off, rank_off]
+            ),
+            "qseqlen": qseqlen,
+            "subfamily_medianseqlen": subfamily_medianseqlen,
+            "qseq_overlap": float_with_na(
+                family_results["overlap"][qseq_off, rank_off]
+            ),
+        }
+
         if self.include_extant_genes:
             # add extant gene list if necessary
             HEADER.append("subfamily_geneset")
-            df.loc[hog_f, "subfamily_geneset"] = df.loc[hog_f, "hog_offset"].apply(
-                lambda i: ",".join(
-                    map(
-                        self.db.get_prot_id,
+            geneset = np.empty(nrows, dtype=object)
+            geneset[:] = pd.NA
+            for (i, row) in enumerate(placed_rows.tolist()):
+                geneset[row] = ",".join(
+                    self.get_prot_ids(
                         get_hog_member_prots(
-                            i-1,
+                            placed_hogs[i].item(),
                             self.hog_tab,
-                                self.db._db_ChildrenHOG[:],
-                                self.db._db_ChildrenProt[:],
-                            ))))
-
-        # add the hog id
-        df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(
-            lambda i: self.db.get_hog_id(i - 1)
-        )
-        # add the hog level
-        df.loc[hog_f, "hoglevel"] = df.loc[hog_f, "hog_offset"].apply(
-            lambda i: self.tax_tab[self.hog_tab[i - 1]["TaxOff"]]["ID"].decode("ascii")
-        )
+                            self._children_hog,
+                            self._children_prot,
+                        )
+                    )
+                )
+            data["subfamily_geneset"] = geneset
 
         # compute taxonomic congruences
         if ref_taxon_off:
-            q2hog_off = df.loc[hog_f, "hog_offset"].to_numpy(dtype=np.uint32)
             q2closest_taxon = get_closest_taxa_from_ref(
-                q2hog_off,
+                (placed_hogs + 1).astype(np.uint32),
                 ref_taxon_off,
                 self.tax_tab,
                 self.hog_tab,
-                self.db._db_ChildrenHOG[:],
+                self._children_hog,
             )
             HEADER.append("closest_taxa")
-            df.loc[hog_f, "closest_taxa"] = list(
-                map(
-                    lambda x: self.tax_tab["ID"][x].decode("ascii")
-                    if x != -1
-                    else pd.NA,
-                    q2closest_taxon,
-                )
-            )
+            closest_taxa = np.empty(nrows, dtype=object)
+            closest_taxa[:] = pd.NA
+            for (i, row) in enumerate(placed_rows.tolist()):
+                x = q2closest_taxon[i]
+                if x != -1:
+                    closest_taxa[row] = tax_ids[x]
+            data["closest_taxa"] = closest_taxa
 
-        return df[HEADER]
+        return pd.DataFrame(data)[HEADER]
 
     @lazy_property
     def _lookup(self):
@@ -1774,10 +1864,6 @@ class MergeSearch(object):
                 ss_kmer_df_cap,
                 num_threads,
         ):
-            """
-            top_n_fams: number of family for which HOG scores are computed
-            """
-
             has_structure_index = (
                 (ss_table_idx.size > 0)
                 and (ss_table_buff.size > 0)

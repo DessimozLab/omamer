@@ -32,7 +32,6 @@ import numba
 import numpy as np
 import pandas as pd
 
-from omamer.index import cumulate_counts_1fam
 from omamer.stat_models import (
     beta_binomial_neglogccdf,
     beta_binomial_logpmf,
@@ -469,68 +468,6 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     return unique1d_linear(r)
 
 
-@numba.njit(cache=True)
-def select_kmers_by_pmi(table_idx, n_families, kmer_percentage):
-    """Select indexed k-mers by the information carried by an observed hit.
-
-    A posting list contains one LCA HOG per family, so its length is the
-    k-mer's family document frequency ``df``.  Under a uniform family prior,
-    observing that k-mer carries ``log2(n_families / df)`` bits about the
-    family.  This is pointwise mutual information for the *present* event.
-
-    The score is monotonic in df.  Building a histogram of df values avoids
-    allocating a floating-point score for every possible k-mer code (there can
-    be tens of millions of those for 3Di).  All ties at the cut-off are kept;
-    consequently the actual retained percentage can be slightly larger than
-    requested.  K-mers absent from the reference index remain valid: they
-    have no posting-list cost and preserving them leaves the query trial count
-    compatible with unfiltered searches.
-    """
-    n_kmers = table_idx.size - 1
-    valid = np.ones(n_kmers, dtype=np.bool_)
-
-    # A k-mer maps to at most one LCA HOG per family, hence df <= n_families.
-    df_hist = np.zeros(n_families + 1, dtype=np.uint64)
-    n_present = 0
-    for kmer in range(n_kmers):
-        df = table_idx[kmer + 1] - table_idx[kmer]
-        if df > 0:
-            df_hist[df] += 1
-            n_present += 1
-
-    n_keep = int(np.ceil(n_present * kmer_percentage / 100.0))
-    if n_keep < 1:
-        n_keep = 1
-
-    cumulative = 0
-    max_df = 1
-    for df in range(1, n_families + 1):
-        cumulative += df_hist[df]
-        if cumulative >= n_keep:
-            max_df = df
-            break
-
-    n_retained = 0
-    for kmer in range(n_kmers):
-        if table_idx[kmer + 1] - table_idx[kmer] > max_df:
-            valid[kmer] = False
-        elif table_idx[kmer + 1] > table_idx[kmer]:
-            n_retained += 1
-
-    return valid, n_present, n_retained, max_df
-
-
-@numba.njit(cache=True, nogil=True)
-def filtered_hog_kmer_counts(table_idx, table_buff, valid_kmers, n_hogs):
-    """Count retained index postings at their LCA HOGs."""
-    hog_counts = np.zeros(n_hogs, dtype=np.uint64)
-    for kmer in range(table_idx.size - 1):
-        if valid_kmers[kmer]:
-            for pos in range(table_idx[kmer], table_idx[kmer + 1]):
-                hog_counts[table_buff[pos]] += 1
-    return hog_counts
-
-
 @numba.njit
 def search_seq_kmers_ef(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
                      hog_counts, fam_counts, fam_lowloc, fam_highloc,
@@ -626,7 +563,7 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
                      thread_fam_lowloc, thread_fam_highloc,
                      thread_hit_fams, thread_num_hit_fams,
                      thread_hit_hogs, thread_num_hit_hogs,
-                     kmer_df_cap, valid_kmers):
+                     kmer_df_cap, kmer_filter_max_df):
     """
     Perform the kmer search, using the index.
     """
@@ -658,22 +595,23 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
         if kmer == x_flag:
             continue
 
-        # The information filter is a precomputed boolean array because the
-        # lookup is in the inner loop.
-        # Empty ``valid_kmers`` means no information filtering.
-        if valid_kmers.size > 0 and not valid_kmers[kmer]:
-            n_skipped += 1
-            continue
-
         # get mapping to HOGs
         lo = table_idx[kmer]
         hi = table_idx[kmer + 1]
+        df = hi - lo
+
+        # The build-time information filter is represented by its maximum
+        # family document frequency. This is equivalent to the PMI threshold
+        # selected by mkdb and keeps all ties at the cutoff.
+        if 0 < kmer_filter_max_df < df:
+            n_skipped += 1
+            continue
 
         # skip promiscuous "stop-k-mers" when a document-frequency cap is set.
         # These are also removed from the effective query length (n_skipped),
         # so the count/length ratios stay calibrated.
         # If cap = 0, skip this step.
-        if 0 < kmer_df_cap < (hi - lo):
+        if 0 < kmer_df_cap < df:
             n_skipped += 1
             continue
 
@@ -857,7 +795,7 @@ def place_sequence(
         num_hit_fams,
         num_hit_hogs,
         kmer_df_cap,
-        valid_kmers,
+        kmer_filter_max_df,
 ) -> bool:
 
     query_len = sequence.shape[0]
@@ -903,7 +841,7 @@ def place_sequence(
         thread_hit_hogs,
         thread_num_hit_hogs,
         kmer_df_cap,
-        valid_kmers,
+        kmer_filter_max_df,
     )
 
     num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
@@ -1140,10 +1078,13 @@ def place_sequence(
 
 
 class MergeSearch(object):
-    def __init__(self, ki, include_extant_genes=False, kmer_percentage=100.0):
+    def __init__(
+        self,
+        ki,
+        include_extant_genes=False,
+        kmer_percentage=None,
+    ):
         assert ki.db.db.mode == "r", "Database must be opened in read mode."
-        if not 0.0 < float(kmer_percentage) <= 100.0:
-            raise ValueError("kmer_percentage must be in (0, 100]")
 
         # load ki and db
         self.db = ki.db
@@ -1151,7 +1092,39 @@ class MergeSearch(object):
         self.has_structure = self.db.has_structure()
 
         self.include_extant_genes = include_extant_genes
-        self.kmer_percentage = float(kmer_percentage)
+        if (
+            kmer_percentage is not None
+            and not np.isclose(float(kmer_percentage), self.ki.kmer_percentage)
+        ):
+            raise ValueError(
+                "Requested kmer_percentage={} does not match the database's "
+                "build-time kmer_percentage={}".format(
+                    kmer_percentage,
+                    self.ki.kmer_percentage,
+                )
+            )
+        self._validate_bbinom_filter_compatibility()
+
+    def _validate_bbinom_filter_compatibility(self):
+        """Reject coefficient arrays calibrated for another index filter."""
+        attrs = self.db.db.root.Index._v_attrs
+        for modality, valid_node, attr_name in (
+            ("seq", "/Index/FamilyBBinomValid", "seq_bbinom_kmer_percentage"),
+            ("ss", "/Index/SSFamilyBBinomValid", "ss_bbinom_kmer_percentage"),
+        ):
+            if valid_node not in self.db.db:
+                continue
+            fitted_percentage = float(getattr(attrs, attr_name, 100.0))
+            if not np.isclose(fitted_percentage, self.ki.kmer_percentage):
+                raise ValueError(
+                    "{} beta-binomial coefficients use kmer_percentage={}, "
+                    "but the database index uses {}. Rebuild the database and "
+                    "refit/import matching coefficients.".format(
+                        modality,
+                        fitted_percentage,
+                        self.ki.kmer_percentage,
+                    )
+                )
 
     # want to cache these, so that we don't load multiple times when chunking queries
     @cached_property
@@ -1189,126 +1162,9 @@ class MergeSearch(object):
         return self.db._db_Index_HOGProbability[:]
 
     @cached_property
-    def valid_kmers(self):
-        """Sequence k-mers retained by the PMI/IDF information filter."""
-        table_idx = self.kmer_table["idx"]
-        if not self.kmer_filter_active:
-            return np.ones(table_idx.size - 1, dtype=np.bool_)
-
-        valid, n_present, n_retained, max_df = select_kmers_by_pmi(
-            table_idx, self.fam_tab.size, self.kmer_percentage
-        )
-        threshold = np.log2(self.fam_tab.size / max_df)
-        LOG.info(
-            "Sequence information filter: retained {} of {} indexed k-mers "
-            "({:.2f}%; df <= {}; PMI >= {:.3f} bits)".format(
-                n_retained,
-                n_present,
-                100.0 * n_retained / n_present if n_present else 0.0,
-                max_df,
-                threshold,
-            )
-        )
-        return valid
-
-    def _filtered_reference_probabilities(self, kmer_table, valid_kmers, modality):
-        """Return binomial backgrounds conditioned on retained index postings."""
-        hog_counts = filtered_hog_kmer_counts(
-            kmer_table["idx"], kmer_table["buff"], valid_kmers, self.hog_tab.size
-        )
-        total = int(hog_counts.sum())
-        if total == 0:
-            raise RuntimeError(
-                "{} information filter retained no indexed postings".format(modality)
-            )
-
-        fam_counts = np.bincount(
-            self.hog_tab["FamOff"],
-            weights=hog_counts,
-            minlength=self.fam_tab.size,
-        )
-        hog_cum_counts = hog_counts.copy()
-        for entry in self.fam_tab:
-            start = entry["LevelOff"]
-            stop = start + entry["LevelNum"] + 2
-            cumulate_counts_1fam(
-                hog_cum_counts,
-                self.level_arr[start:stop],
-                self.hog_tab["ParentOff"],
-            )
-        return fam_counts / total, hog_cum_counts / total
-
-    @cached_property
-    def filtered_reference_probabilities(self):
-        if not self.kmer_filter_active:
-            return self.ref_fam_prob, self.ref_hog_prob
-        return self._filtered_reference_probabilities(
-            self.kmer_table, self.valid_kmers, "sequence"
-        )
-
-    @cached_property
     def ss_kmer_table(self):
         z = self.ki.ss_kmer_table
         return {k: z[k][:] for k in z}
-
-    @property
-    def kmer_filter_active(self):
-        return self.kmer_percentage < 100.0
-
-    @cached_property
-    def ss_bbinom_matches_filter(self):
-        """Whether imported 3Di beta-binomial coefficients match this filter."""
-        if not self.has_structure or self.ss_ref_fam_bbinom_valid.size == 0:
-            return True
-        attrs = self.db.db.root.Index._v_attrs
-        fitted_percentage = float(
-            getattr(attrs, "ss_bbinom_kmer_percentage", 100.0)
-        )
-        matches = np.isclose(fitted_percentage, self.kmer_percentage)
-        if not matches:
-            LOG.warning(
-                "3Di beta-binomial coefficients were fitted with kmer_percentage={} "
-                "but search uses {}; falling back to the filtered binomial model. "
-                "Run compute-bbinom --modality ss --kmer_percentage {} and re-import "
-                "the coefficients to use beta-binomial scoring.".format(
-                    fitted_percentage,
-                    self.kmer_percentage,
-                    self.kmer_percentage,
-                )
-            )
-        return matches
-
-    @cached_property
-    def ss_valid_kmers(self):
-        """Structural k-mers retained by the PMI/IDF information filter."""
-        table_idx = self.ss_kmer_table["idx"]
-        if not self.kmer_filter_active:
-            return np.ones(table_idx.size - 1, dtype=np.bool_)
-
-        valid, n_present, n_retained, max_df = select_kmers_by_pmi(
-            table_idx, self.fam_tab.size, self.kmer_percentage
-        )
-        threshold = np.log2(self.fam_tab.size / max_df)
-        LOG.info(
-            "3Di information filter: retained {} of {} indexed k-mers "
-            "({:.2f}%; df <= {}; PMI >= {:.3f} bits)".format(
-                n_retained,
-                n_present,
-                100.0 * n_retained / n_present if n_present else 0.0,
-                max_df,
-                threshold,
-            )
-        )
-        return valid
-
-    @cached_property
-    def ss_filtered_reference_probabilities(self):
-        """Binomial backgrounds conditioned on the retained 3Di k-mers."""
-        if not self.kmer_filter_active:
-            return self.ss_ref_fam_prob, self.ss_ref_hog_prob
-        return self._filtered_reference_probabilities(
-            self.ss_kmer_table, self.ss_valid_kmers, "3Di"
-        )
 
     @lazy_property
     def ss_ref_fam_prob(self):
@@ -1487,98 +1343,40 @@ class MergeSearch(object):
             self.hog_tab,
             self.level_arr,
             top_n_fams=top_n_fams,
-            ref_fam_prob=(
-                self.filtered_reference_probabilities[0]
-                if self.kmer_filter_active else self.ref_fam_prob
-            ),
-            ref_hog_prob=(
-                self.filtered_reference_probabilities[1]
-                if self.kmer_filter_active else self.ref_hog_prob
-            ),
-            # Existing sequence beta-binomial coefficients were fitted without
-            # this filter.  A filtered sequence search therefore uses the
-            # recalibrated binomial model until a matching fit is implemented.
-            ref_fam_bbinom_q_coef=(
-                self.ref_fam_bbinom_q_coef
-                if not self.kmer_filter_active else self._empty_f64_2d
-            ),
-            ref_fam_bbinom_kappa_coef=(
-                self.ref_fam_bbinom_kappa_coef
-                if not self.kmer_filter_active else self._empty_f64_2d
-            ),
-            ref_fam_bbinom_center=(
-                self.ref_fam_bbinom_center
-                if not self.kmer_filter_active else self._empty_f64
-            ),
-            ref_fam_bbinom_scale=(
-                self.ref_fam_bbinom_scale
-                if not self.kmer_filter_active else self._empty_f64
-            ),
-            ref_fam_bbinom_valid=(
-                self.ref_fam_bbinom_valid
-                if not self.kmer_filter_active else self._empty_bool
-            ),
-            ref_fam_bbinom_n_min=(
-                self.ref_fam_bbinom_n_min
-                if not self.kmer_filter_active else self._empty_u32
-            ),
-            ref_fam_bbinom_n_max=(
-                self.ref_fam_bbinom_n_max
-                if not self.kmer_filter_active else self._empty_u32
-            ),
-            valid_kmers=(self.valid_kmers if self.kmer_filter_active else self._empty_bool),
+            ref_fam_prob=self.ref_fam_prob,
+            ref_hog_prob=self.ref_hog_prob,
+            ref_fam_bbinom_q_coef=self.ref_fam_bbinom_q_coef,
+            ref_fam_bbinom_kappa_coef=self.ref_fam_bbinom_kappa_coef,
+            ref_fam_bbinom_center=self.ref_fam_bbinom_center,
+            ref_fam_bbinom_scale=self.ref_fam_bbinom_scale,
+            ref_fam_bbinom_valid=self.ref_fam_bbinom_valid,
+            ref_fam_bbinom_n_min=self.ref_fam_bbinom_n_min,
+            ref_fam_bbinom_n_max=self.ref_fam_bbinom_n_max,
+            kmer_filter_max_df=np.int64(self.ki.kmer_max_df),
             ss_ref_fam_prob=self.ss_ref_fam_prob if use_structure else self._empty_f64,
             ss_ref_hog_prob=self.ss_ref_hog_prob if use_structure else self._empty_f64,
             ss_ref_fam_bbinom_q_coef=(
-                self.ss_ref_fam_bbinom_q_coef
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_f64_2d
+                self.ss_ref_fam_bbinom_q_coef if use_structure else self._empty_f64_2d
             ),
             ss_ref_fam_bbinom_kappa_coef=(
-                self.ss_ref_fam_bbinom_kappa_coef
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_f64_2d
+                self.ss_ref_fam_bbinom_kappa_coef if use_structure else self._empty_f64_2d
             ),
             ss_ref_fam_bbinom_center=(
-                self.ss_ref_fam_bbinom_center
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_f64
+                self.ss_ref_fam_bbinom_center if use_structure else self._empty_f64
             ),
             ss_ref_fam_bbinom_scale=(
-                self.ss_ref_fam_bbinom_scale
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_f64
+                self.ss_ref_fam_bbinom_scale if use_structure else self._empty_f64
             ),
             ss_ref_fam_bbinom_valid=(
-                self.ss_ref_fam_bbinom_valid
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_bool
+                self.ss_ref_fam_bbinom_valid if use_structure else self._empty_bool
             ),
             ss_ref_fam_bbinom_n_min=(
-                self.ss_ref_fam_bbinom_n_min
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_u32
+                self.ss_ref_fam_bbinom_n_min if use_structure else self._empty_u32
             ),
             ss_ref_fam_bbinom_n_max=(
-                self.ss_ref_fam_bbinom_n_max
-                if use_structure and self.ss_bbinom_matches_filter
-                else self._empty_u32
+                self.ss_ref_fam_bbinom_n_max if use_structure else self._empty_u32
             ),
-            ss_valid_kmers=(
-                self.ss_valid_kmers
-                if use_structure and self.kmer_filter_active
-                else self._empty_bool
-            ),
-            ss_filtered_ref_fam_prob=(
-                self.ss_filtered_reference_probabilities[0]
-                if use_structure and self.kmer_filter_active
-                else (self.ss_ref_fam_prob if use_structure else self._empty_f64)
-            ),
-            ss_filtered_ref_hog_prob=(
-                self.ss_filtered_reference_probabilities[1]
-                if use_structure and self.kmer_filter_active
-                else (self.ss_ref_hog_prob if use_structure else self._empty_f64)
-            ),
+            ss_kmer_filter_max_df=np.int64(self.ki.ss_kmer_max_df),
             alpha=alpha,
             sst=sst,
             family_only=family_only,
@@ -1845,7 +1643,7 @@ class MergeSearch(object):
                 ref_fam_bbinom_valid,
                 ref_fam_bbinom_n_min,
                 ref_fam_bbinom_n_max,
-                valid_kmers,
+                kmer_filter_max_df,
                 ss_ref_fam_prob,
                 ss_ref_hog_prob,
                 ss_ref_fam_bbinom_q_coef,
@@ -1855,9 +1653,7 @@ class MergeSearch(object):
                 ss_ref_fam_bbinom_valid,
                 ss_ref_fam_bbinom_n_min,
                 ss_ref_fam_bbinom_n_max,
-                ss_valid_kmers,
-                ss_filtered_ref_fam_prob,
-                ss_filtered_ref_hog_prob,
+                ss_kmer_filter_max_df,
                 alpha,
                 sst,
                 family_only,
@@ -1936,7 +1732,7 @@ class MergeSearch(object):
                         num_hit_fams,
                         num_hit_hogs,
                         0,  # never cap the sequence (protein) k-mer search
-                        valid_kmers,
+                        kmer_filter_max_df,
                     )
 
                 if has_structure_index and not only_sequence and not placed:
@@ -1957,8 +1753,8 @@ class MergeSearch(object):
                         hog_tab,
                         level_arr,
                         top_n_fams,
-                        ss_filtered_ref_fam_prob,
-                        ss_filtered_ref_hog_prob,
+                        ss_ref_fam_prob,
+                        ss_ref_hog_prob,
                         ss_ref_fam_bbinom_q_coef,
                         ss_ref_fam_bbinom_kappa_coef,
                         ss_ref_fam_bbinom_center,
@@ -1979,7 +1775,7 @@ class MergeSearch(object):
                         num_hit_fams,
                         num_hit_hogs,
                         ss_kmer_df_cap,
-                        ss_valid_kmers,
+                        ss_kmer_filter_max_df,
                     )
 
         # import psutil

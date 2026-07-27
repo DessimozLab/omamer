@@ -38,7 +38,7 @@ compression = Compression.NONE
 
 def mkdb_oma(args):
     from .database import DatabaseFromOMABrowser, DatabaseFromOrthoXML
-    from .index import Index
+    from .index import Index, validate_kmer_percentage
 
     from ete3 import Tree
     import os
@@ -46,6 +46,9 @@ def mkdb_oma(args):
     _ensure_db_build_dependencies_available()
 
     assert args.k < 8, "Max k-mer size is 7."
+    args.kmer_percentage = validate_kmer_percentage(
+        getattr(args, "kmer_percentage", 100.0)
+    )
     LOG.info("Create database from OMA build")
     LOG.info("arguments for build:")
     for (k, v) in vars(args).items():
@@ -134,7 +137,11 @@ def mkdb_oma(args):
 
     LOG.info("Building index")
     db.ki = Index(
-        db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa
+        db,
+        k=args.k,
+        reduced_alphabet=args.reduced_alphabet,
+        hidden_taxa=hidden_taxa,
+        kmer_percentage=args.kmer_percentage,
     )
     db.ki.sp_filter
     db.ki.build_kmer_table(seq_buff, ss_buff)
@@ -185,13 +192,10 @@ def search(args):
 
     # reload
     db = Database(args.db)
+    _check_db_kmer_percentage(db, getattr(args, "kmer_percentage", None))
 
     # setup search
-    ms = MergeSearch(
-        ki=db.ki,
-        include_extant_genes=args.include_extant_genes,
-        kmer_percentage=args.kmer_percentage,
-    )
+    ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
 
     # only print header for file output
     print_header = args.out.name != sys.stdout.name
@@ -372,10 +376,6 @@ def _ensure_data_loaded(ms, load_structure=True):
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
-    if ms.kmer_filter_active:
-        _load("valid_kmers", "sequence k-mer information filter")
-        _load("filtered_reference_probabilities", "filtered sequence probability estimates")
-
     # Databases pre All.Jul2024 didn't have any structure
     # We keep it backward compatible to make it possible to load
     # older databases.
@@ -385,9 +385,6 @@ def _ensure_data_loaded(ms, load_structure=True):
         _load("ss_kmer_table", "structural k-mer index")
         _load("ss_ref_fam_prob", "structural family probability estimates")
         _load("ss_ref_hog_prob", "structural sub-family probability estimates")
-        if ms.kmer_filter_active:
-            _load("ss_valid_kmers", "3Di k-mer information filter")
-            _load("ss_filtered_reference_probabilities", "filtered 3Di probability estimates")
 
     process = psutil.Process()
     LOG.info(f"Memory after loading DB: "
@@ -458,6 +455,7 @@ def compute_bbinom(args):
     from .database import Database
 
     with Database(args.db, mode="r") as db:
+        _check_db_kmer_percentage(db, getattr(args, "kmer_percentage", None))
         compute_bbinom_coefficients(
             db,
             sequence_paths=args.sequences,
@@ -475,7 +473,23 @@ def compute_bbinom(args):
             workers=args.fit_workers,
             n_summary_path=args.n_summary_out,
             modality=args.modality,
-            kmer_percentage=args.kmer_percentage,
+        )
+
+
+def _check_db_kmer_percentage(db, requested_percentage):
+    """Ensure a compatibility assertion matches the build-time DB setting."""
+    if requested_percentage is None:
+        return
+    from .index import validate_kmer_percentage
+
+    requested_percentage = validate_kmer_percentage(requested_percentage)
+    if not np.isclose(requested_percentage, db.ki.kmer_percentage):
+        raise ValueError(
+            "Requested kmer_percentage={} does not match the database's "
+            "build-time kmer_percentage={}".format(
+                requested_percentage,
+                db.ki.kmer_percentage,
+            )
         )
 
 

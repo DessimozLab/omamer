@@ -3,22 +3,24 @@ import numba
 import pytest
 import tables
 from scipy.stats import betabinom
-from omamer.alphabets import Alphabet
+from omamer.alphabets import Alphabet, get_transform
 from omamer.bbinom_coefficients import import_bbinom_coefficients
 from omamer.bbinom_fit import (
+    _unique_valid_codes,
     choose_sequence_n_values,
     count_selected_family_hits,
     fit_family_bbinom_from_hist,
 )
 from omamer.database import DatabaseFromOMABrowser
+from omamer.index import (
+    filtered_hog_kmer_counts,
+    select_kmer_max_df,
+    validate_kmer_percentage,
+)
 from omamer.stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
 from omamer.compression import ctz, naive_ctz, popcount, select1_in_word
 from omamer.compression import to_elias_fano, from_elias_fano
-from omamer.merge_search import (
-    family_result_sort,
-    filtered_hog_kmer_counts,
-    select_kmers_by_pmi,
-)
+from omamer.merge_search import family_result_sort, search_seq_kmers
 
 
 def popcount_naive(x):
@@ -49,19 +51,83 @@ def test_pmi_kmer_filter_prefers_family_specific_kmers_and_keeps_ties():
     # code 3 is absent.  At 50%, both df=1 codes are retained, while absent
     # codes remain valid because they do not add posting-list work.
     table_idx = np.asarray([0, 1, 3, 6, 6, 7], dtype=np.uint32)
-    valid, n_present, n_retained, max_df = select_kmers_by_pmi(
+    n_present, n_retained, max_df = select_kmer_max_df(
         table_idx, 6, 50.0
     )
     assert (n_present, n_retained, max_df) == (4, 2, 1)
-    np.testing.assert_array_equal(valid, [True, False, False, True, True])
 
     # This also verifies that conditional background construction counts only
     # retained postings, not an entry for every possible k-mer code.
     table_buff = np.asarray([0, 1, 2, 0, 1, 2, 2], dtype=np.uint32)
     np.testing.assert_array_equal(
-        filtered_hog_kmer_counts(table_idx, table_buff, valid, 3),
+        filtered_hog_kmer_counts(table_idx, table_buff, max_df, 3),
         [1, 0, 1],
     )
+
+
+@pytest.mark.parametrize("value", [0, -1, 100.1])
+def test_kmer_percentage_rejects_out_of_range_values(value):
+    with pytest.raises(ValueError, match="kmer_percentage"):
+        validate_kmer_percentage(value)
+
+
+def test_search_uses_build_time_document_frequency_cutoff():
+    table_idx = np.asarray([0, 1, 3, 3, 4], dtype=np.uint32)
+    table_buff = np.asarray([0, 1, 2, 2], dtype=np.uint32)
+    hog_tab = np.asarray([(0,), (1,), (1,)], dtype=[("FamOff", np.uint32)])
+
+    hog_counts = np.zeros(3, dtype=np.uint16)
+    fam_counts = np.zeros(2, dtype=np.uint16)
+    fam_lowloc = np.full(2, -1, dtype=np.int32)
+    fam_highloc = np.full(2, -1, dtype=np.int32)
+    hit_fams = np.zeros(2, dtype=np.int32)
+    hit_hogs = np.zeros(3, dtype=np.int32)
+
+    n_fams, n_hogs, n_skipped = search_seq_kmers(
+        np.asarray([0, 1, 2, 3], dtype=np.uint32),
+        np.asarray([0, 1, 2, 3], dtype=np.uint32),
+        hog_tab,
+        np.uint32(4),
+        table_idx,
+        table_buff,
+        hog_counts,
+        fam_counts,
+        fam_lowloc,
+        fam_highloc,
+        hit_fams,
+        0,
+        hit_hogs,
+        0,
+        0,
+        1,
+    )
+
+    # Code 1 has df=2 and is filtered. The absent code 2 remains a trial but
+    # has no postings, matching the beta-binomial fitting convention.
+    assert (n_fams, n_hogs, n_skipped) == (2, 2, 1)
+    np.testing.assert_array_equal(hog_counts, [1, 0, 1])
+    np.testing.assert_array_equal(fam_counts, [1, 1])
+
+
+def test_bbinom_fitting_uses_build_time_document_frequency_cutoff():
+    alphabet = Alphabet(n=21)
+    dfs = np.zeros(21, dtype=np.uint32)
+    # A, N and R have encoded values 0, 11 and 14. R is filtered at df=2.
+    dfs[[0, 11, 14]] = [1, 1, 2]
+    table_idx = np.zeros(22, dtype=np.uint32)
+    table_idx[1:] = np.cumsum(dfs)
+
+    codes = _unique_valid_codes(
+        "ARN",
+        1,
+        get_transform(1, alphabet.DIGITS_AA),
+        alphabet.DIGITS_AA_LOOKUP,
+        21,
+        table_idx,
+        1,
+    )
+    np.testing.assert_array_equal(codes, [0, 11])
+
 
 @numba.njit
 def select1_in_word_naive(word, rank):
@@ -294,12 +360,19 @@ def test_import_bbinom_coefficients_writes_modality_arrays(tmp_path):
             return self.db.root.Family
 
     with tables.open_file(db_path, "a") as h5:
+        h5.root.Index._f_setattr("kmer_percentage", 80.0)
+        with pytest.raises(ValueError, match="database was built"):
+            import_bbinom_coefficients(FakeDB(h5), coeff_path)
+        assert "/Index/FamilyBBinomValid" not in h5
+
+        h5.root.Index._f_setattr("kmer_percentage", 100.0)
         written = import_bbinom_coefficients(FakeDB(h5), coeff_path)
         assert written == {"seq": 1, "ss": 1}
         assert h5.root.Index._v_attrs["bbinom_model"] == "length_aware_beta_binomial"
         # Old coefficient TSVs omit the column and are explicitly marked as
         # compatible with the unfiltered structural search.
         assert h5.root.Index._v_attrs["ss_bbinom_kmer_percentage"] == 100.0
+        assert h5.root.Index._v_attrs["seq_bbinom_kmer_percentage"] == 100.0
         np.testing.assert_array_equal(h5.root.Index.FamilyBBinomValid[:], [False, True, False])
         np.testing.assert_array_equal(h5.root.Index.SSFamilyBBinomValid[:], [False, False, True])
         np.testing.assert_allclose(h5.root.Index.FamilyBBinomQCoef[1], [0.1, 0.2, 0.3])

@@ -811,6 +811,7 @@ class Database(object):
 
         meta["k-mer length"] = self.ki.k
         meta["alphabet size"] = self.ki.alphabet.n
+        meta["k-mer percentage"] = self.ki.kmer_percentage
         meta["nr species"] = len(self.species_table)
 
         sp_filter = np.asarray(self.ki.sp_filter, dtype=bool)

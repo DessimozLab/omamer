@@ -149,6 +149,15 @@ def main():
     )
     mkdb_parser.add_argument("--k", default=6, help="k-mer length", type=int)
     mkdb_parser.add_argument(
+        "--kmer_percentage",
+        default=100.0,
+        type=float,
+        help="Retain the most informative percentage of indexed sequence and 3Di "
+             "k-mer types, ranked by pointwise mutual information / inverse family "
+             "document frequency. The setting is stored in the database and forced "
+             "at search time; 100 disables filtering.",
+    )
+    mkdb_parser.add_argument(
         "--oma_path",
         help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk). [BROWSERBUILD]",
     )
@@ -233,12 +242,11 @@ def main():
     )
     search_parser.add_argument(
         "--kmer_percentage",
-        default=100.0,
+        default=None,
         type=float,
-        help="For sequence and 3Di searches, retain the most informative percentage "
-             "of indexed k-mer types, ranked by pointwise mutual information / inverse "
-             "family document frequency. 100 (default) disables this filter; values must "
-             "be in (0, 100].",
+        help="Optional compatibility check for the database's build-time k-mer "
+             "percentage. Search always uses the value stored in the database "
+             "and rejects a different value.",
     )
     search_parser.add_argument(
         "-fo",
@@ -361,10 +369,10 @@ def main():
     )
     compute_bbinom_parser.add_argument(
         "--kmer_percentage",
-        default=100.0,
+        default=None,
         type=float,
-        help="For --modality ss, fit against the same PMI-filtered 3Di k-mers "
-             "used by search. Must match the search value; 100 disables filtering.",
+        help="Optional compatibility check for the database's build-time k-mer "
+             "percentage. Fitting always uses the stored value.",
     )
     compute_bbinom_parser.add_argument(
         "-o",

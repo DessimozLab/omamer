@@ -32,6 +32,64 @@ from .hierarchy import get_lca_off, get_leaves
 from .typing import OMAmerDBLike
 
 
+def validate_kmer_percentage(value):
+    """Validate and normalise the percentage of indexed k-mers to retain."""
+    percentage = float(value)
+    if not 0.0 < percentage <= 100.0:
+        raise ValueError("kmer_percentage must be in (0, 100]")
+    return percentage
+
+
+@numba.njit(cache=True)
+def select_kmer_max_df(table_idx, n_families, kmer_percentage):
+    """Return the document-frequency cutoff for a PMI-ranked k-mer filter.
+
+    A posting list contains one LCA HOG per family, so its length is the
+    k-mer's family document frequency (df). Under a uniform family prior, an
+    observed k-mer carries ``log2(n_families / df)`` bits about its family.
+    The score is monotonic in df, and retaining every tie at the cutoff makes
+    a single maximum df sufficient to reproduce the selection later.
+    """
+    df_hist = np.zeros(n_families + 1, dtype=np.uint64)
+    n_present = 0
+    for kmer in range(table_idx.size - 1):
+        df = table_idx[kmer + 1] - table_idx[kmer]
+        if df > 0:
+            df_hist[df] += 1
+            n_present += 1
+
+    n_keep = int(np.ceil(n_present * kmer_percentage / 100.0))
+    if n_keep < 1:
+        n_keep = 1
+
+    cumulative = 0
+    max_df = 0
+    for df in range(1, n_families + 1):
+        cumulative += df_hist[df]
+        if cumulative >= n_keep:
+            max_df = df
+            break
+
+    n_retained = 0
+    for df in range(1, max_df + 1):
+        n_retained += df_hist[df]
+
+    return n_present, n_retained, max_df
+
+
+@numba.njit(cache=True, nogil=True)
+def filtered_hog_kmer_counts(table_idx, table_buff, max_df, n_hogs):
+    """Count index postings retained by a document-frequency cutoff."""
+    hog_counts = np.zeros(n_hogs, dtype=np.uint64)
+    for kmer in range(table_idx.size - 1):
+        lo = table_idx[kmer]
+        hi = table_idx[kmer + 1]
+        if max_df == 0 or hi - lo <= max_df:
+            for pos in range(lo, hi):
+                hog_counts[table_buff[pos]] += 1
+    return hog_counts
+
+
 ## functions to cumulate HOG k-mer counts
 @numba.njit
 def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
@@ -57,19 +115,50 @@ def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
 
 
 class Index(object):
-    def __init__(self, db: OMAmerDBLike, k=6, reduced_alphabet=False, hidden_taxa=()):
+    def __init__(
+        self,
+        db: OMAmerDBLike,
+        k=6,
+        reduced_alphabet=False,
+        hidden_taxa=(),
+        kmer_percentage=100.0,
+    ):
         # load database object
         self.db = db
 
         # load k, alphabet size and hidden taxa
         if "/Index" in self.db.db:
-            self.k = self.db.db.root.Index._v_attrs["k"]
-            alphabet_n = self.db.db.root.Index._v_attrs["alphabet_n"]
-            self.hidden_taxa = self.db.db.root.Index._v_attrs["hidden_taxa"]
+            attrs = self.db.db.root.Index._v_attrs
+            self.k = attrs["k"]
+            alphabet_n = attrs["alphabet_n"]
+            self.hidden_taxa = attrs["hidden_taxa"]
+            # Databases created before build-time filtering are unfiltered.
+            self.kmer_percentage = validate_kmer_percentage(
+                getattr(attrs, "kmer_percentage", 100.0)
+            )
+            self.kmer_max_df = int(getattr(attrs, "kmer_max_df", 0))
+            self.ss_kmer_max_df = int(getattr(attrs, "ss_kmer_max_df", 0))
+            if self.kmer_percentage < 100.0 and self.kmer_max_df <= 0:
+                raise ValueError(
+                    "Database records a filtered kmer_percentage but has no "
+                    "sequence k-mer document-frequency cutoff"
+                )
+            if (
+                self.kmer_percentage < 100.0
+                and "/Index/SSTableIndex" in self.db.db
+                and self.ss_kmer_max_df <= 0
+            ):
+                raise ValueError(
+                    "Database records a filtered kmer_percentage but has no "
+                    "3Di k-mer document-frequency cutoff"
+                )
         else:
             self.k = k
             alphabet_n = 21 if not reduced_alphabet else 13
             self.hidden_taxa = hidden_taxa
+            self.kmer_percentage = validate_kmer_percentage(kmer_percentage)
+            self.kmer_max_df = 0
+            self.ss_kmer_max_df = 0
 
         self.alphabet = Alphabet(n=alphabet_n)
 
@@ -284,19 +373,18 @@ class Index(object):
             table_idx[kk:] = ii_table_buff
             return ii_table_buff
 
-        def estimate_family_prob(tab, idx, h2f):
+        def estimate_family_prob(hog_counts, h2f):
             @numba.njit
-            def count_family_occurrence(tab, idx, h2f):
-                c = np.zeros(h2f.max() + 1, dtype=np.uint32)
-                for i in range(len(idx) - 1):
-                    hogs = tab[idx[i] : idx[i + 1]]
-                    c[h2f[hogs]] += idx[i + 1] - idx[i]
+            def count_family_occurrence(hog_counts, h2f):
+                c = np.zeros(h2f.max() + 1, dtype=np.uint64)
+                for hog in range(hog_counts.size):
+                    c[h2f[hog]] += hog_counts[hog]
                 return c
 
-            fam_occ = count_family_occurrence(tab, idx, h2f)
-            return fam_occ / idx[-1]
+            fam_occ = count_family_occurrence(hog_counts, h2f)
+            return fam_occ / hog_counts.sum()
 
-        def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
+        def estimate_hog_prob(hog_counts, fam_tab, level_arr, hog2parent):
             @numba.njit(parallel=True, nogil=True)
             def cumulate_counts_nfams(
                 hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent
@@ -319,7 +407,44 @@ class Index(object):
                 hog2parent,
             )
 
-            return hog_occ / idx[-1]
+            return hog_occ / hog_counts.sum()
+
+        def apply_information_filter(table_idx, table_buff, hog_counts, modality):
+            if self.kmer_percentage == 100.0:
+                return hog_counts, 0
+
+            n_present, n_retained, max_df = select_kmer_max_df(
+                table_idx,
+                len(self.db.family_table),
+                self.kmer_percentage,
+            )
+            if n_retained == 0:
+                raise RuntimeError(
+                    "{} k-mer information filter retained no indexed k-mers".format(
+                        modality
+                    )
+                )
+            threshold = np.log2(len(self.db.family_table) / max_df)
+            LOG.info(
+                "{} information filter: retained {} of {} indexed k-mers "
+                "({:.2f}%; df <= {}; PMI >= {:.3f} bits)".format(
+                    modality,
+                    n_retained,
+                    n_present,
+                    100.0 * n_retained / n_present,
+                    max_df,
+                    threshold,
+                )
+            )
+            return (
+                filtered_hog_kmer_counts(
+                    table_idx,
+                    table_buff,
+                    max_df,
+                    len(self.db.hog_table),
+                ),
+                max_df,
+            )
 
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db.protein_table)
@@ -371,12 +496,17 @@ class Index(object):
 
         # remove extra space
         table_buff = table_buff[:ii_table_buff]
+        hog_kmer_counts, self.kmer_max_df = apply_information_filter(
+            table_idx, table_buff, hog_kmer_counts, "Sequence"
+        )
 
         LOG.debug(" - write k-mer table")
         idx = self.db.db.create_group("/", "Index", "hog indexes")
         idx._f_setattr("k", self.k)
         idx._f_setattr("alphabet_n", self.alphabet.n)
         idx._f_setattr("hidden_taxa", self.hidden_taxa)
+        idx._f_setattr("kmer_percentage", self.kmer_percentage)
+        idx._f_setattr("kmer_max_df", self.kmer_max_df)
         self.db.db.create_carray(
             idx, "TableIndex", obj=table_idx, filters=self.db.compression_filters
         )
@@ -385,13 +515,12 @@ class Index(object):
         )
 
         # compute the family / hog probability estimates, assuming binomial distns
-        fam_prob = estimate_family_prob(table_buff, table_idx, h2f)
+        fam_prob = estimate_family_prob(hog_kmer_counts, h2f)
         self.db.db.create_carray(
             idx, "FamilyProbability", obj=fam_prob, filters=self.db.compression_filters
         )
 
         hog_prob = estimate_hog_prob(
-            table_idx,
             hog_kmer_counts,
             self.db.family_table,
             self.db.level_offset_carray,
@@ -445,6 +574,10 @@ class Index(object):
             )
 
             ss_table_buff = ss_table_buff[:ss_ii_table_buff]
+            ss_hog_kmer_counts, self.ss_kmer_max_df = apply_information_filter(
+                ss_table_idx, ss_table_buff, ss_hog_kmer_counts, "3Di"
+            )
+            idx._f_setattr("ss_kmer_max_df", self.ss_kmer_max_df)
 
             LOG.debug(" - write structure k-mer table")
             self.db.db.create_carray(
@@ -454,13 +587,12 @@ class Index(object):
                 idx, "SSTableBuffer", obj=ss_table_buff, filters=self.db.compression_filters
             )
 
-            fam_ss_prob = estimate_family_prob(ss_table_buff, ss_table_idx, h2f)
+            fam_ss_prob = estimate_family_prob(ss_hog_kmer_counts, h2f)
             self.db.db.create_carray(
                 idx, "SSFamilyProbability", obj=fam_ss_prob, filters=self.db.compression_filters
             )
 
             hog_ss_prob = estimate_hog_prob(
-                ss_table_idx,
                 ss_hog_kmer_counts,
                 self.db.family_table,
                 self.db.level_offset_carray,

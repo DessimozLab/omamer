@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 
 from ._utils import LOG, is_progress_disabled
 from .alphabets import get_transform
-from .merge_search import parse_seq, select_kmers_by_pmi
+from .merge_search import parse_seq
 from .sequence_reader import SequenceReader
 
 
@@ -62,6 +62,15 @@ def _modality_family_probability(db, modality):
     return db._db_Index_FamilyProbability[:]
 
 
+def _modality_kmer_max_df(db, modality):
+    """Return the build-time information-filter cutoff for a modality."""
+    if modality == "ss":
+        return int(db.ki.ss_kmer_max_df)
+    if modality == "seq":
+        return int(db.ki.kmer_max_df)
+    raise ValueError("modality must be 'seq' or 'ss', got {!r}".format(modality))
+
+
 def _iter_sequences(paths, k, chunksize, sanitiser):
     record_i = 0
     for path in paths:
@@ -71,29 +80,57 @@ def _iter_sequences(paths, k, chunksize, sanitiser):
                 record_i += 1
 
 
-def _unique_valid_codes(seq, k, trans, digits_lookup, x_flag, valid_kmers=None):
+def _unique_valid_codes(
+    seq,
+    k,
+    trans,
+    digits_lookup,
+    x_flag,
+    table_idx=None,
+    kmer_filter_max_df=0,
+):
     n_kmers = len(seq) - (k - 1)
     if n_kmers <= 0:
         return np.empty(0, dtype=np.uint32)
     seq_arr = np.frombuffer(seq.encode("ascii"), dtype=np.uint8)
     codes, _, _ = parse_seq(seq_arr, digits_lookup, n_kmers, k, trans, x_flag)
     codes = codes[codes != x_flag]
-    if valid_kmers is not None:
-        codes = codes[valid_kmers[codes]]
+    if kmer_filter_max_df > 0:
+        dfs = table_idx[codes + 1] - table_idx[codes]
+        codes = codes[dfs <= kmer_filter_max_df]
     return codes
 
 
-def scan_sequence_unique_counts(paths, k, alphabet, table_index_size, chunksize, valid_kmers=None):
+def scan_sequence_unique_counts(
+    paths,
+    k,
+    alphabet,
+    table_idx,
+    chunksize,
+    kmer_filter_max_df=0,
+):
     trans = get_transform(k, alphabet.DIGITS_AA)
     digits_lookup = alphabet.DIGITS_AA_LOOKUP
-    x_flag = table_index_size - 1
+    x_flag = table_idx.size - 1
     counts = []
     for _, _, seq in tqdm(
         _iter_sequences(paths, k, chunksize, alphabet.sanitise_seq),
         desc="scan exact unique-kmer counts",
         disable=is_progress_disabled(),
     ):
-        counts.append(int(_unique_valid_codes(seq, k, trans, digits_lookup, x_flag, valid_kmers).size))
+        counts.append(
+            int(
+                _unique_valid_codes(
+                    seq,
+                    k,
+                    trans,
+                    digits_lookup,
+                    x_flag,
+                    table_idx,
+                    kmer_filter_max_df,
+                ).size
+            )
+        )
     return np.asarray(counts, dtype=np.uint32)
 
 
@@ -210,7 +247,8 @@ def collect_family_hit_histograms(
     db,
     chunksize=10000,
     modality="seq",
-    valid_kmers=None,
+    kmer_filter_max_df=0,
+    table_idx=None,
 ):
     selected_lookup = {int(idx): int(n) for n, indices in sampled_by_n.items() for idx in indices}
     selected_indices = set(selected_lookup)
@@ -223,7 +261,8 @@ def collect_family_hit_histograms(
     trans = get_transform(k, alphabet.DIGITS_AA)
     digits_lookup = alphabet.DIGITS_AA_LOOKUP
     table_index_node, table_buffer_node = _modality_index_arrays(db, modality)
-    table_idx = table_index_node[:]
+    if table_idx is None:
+        table_idx = table_index_node[:]
     table_buff = table_buffer_node[:]
     x_flag = table_idx.size - 1
     hog_to_family = db.hog_table.col("FamOff")
@@ -241,7 +280,15 @@ def collect_family_hit_histograms(
         if record_i not in selected_indices:
             continue
         n = selected_lookup[record_i]
-        codes = _unique_valid_codes(seq, k, trans, digits_lookup, x_flag, valid_kmers)
+        codes = _unique_valid_codes(
+            seq,
+            k,
+            trans,
+            digits_lookup,
+            x_flag,
+            table_idx,
+            kmer_filter_max_df,
+        )
         if int(codes.size) != n or n not in selected_n:
             continue
         n_query_counts[n] += 1
@@ -444,7 +491,6 @@ def compute_bbinom_coefficients(
     workers=1,
     n_summary_path=None,
     modality="seq",
-    kmer_percentage=100.0,
 ):
     if not sequence_paths:
         raise ValueError("At least one sequence FASTA path is required")
@@ -452,10 +498,6 @@ def compute_bbinom_coefficients(
         raise ValueError("modality must be 'seq' or 'ss', got {!r}".format(modality))
     if modality == "ss" and not db.has_structure():
         raise ValueError("Database has no structure index; cannot fit ss coefficients")
-    if not 0.0 < float(kmer_percentage) <= 100.0:
-        raise ValueError("kmer_percentage must be in (0, 100]")
-    if modality == "seq" and float(kmer_percentage) != 100.0:
-        raise ValueError("kmer_percentage filtering is only supported for modality='ss'")
     if db.ki.alphabet.n != 21:
         LOG.warning("Computing coefficients with alphabet size {}".format(db.ki.alphabet.n))
     LOG.info("Fitting beta-binomial coefficients for modality '{}'".format(modality))
@@ -473,23 +515,23 @@ def compute_bbinom_coefficients(
     LOG.info("Selected {} families for beta-binomial fitting".format(families.size))
 
     index_node, _ = _modality_index_arrays(db, modality)
-    valid_kmers = None
-    if modality == "ss" and float(kmer_percentage) < 100.0:
-        valid_kmers, n_present, n_retained, max_df = select_kmers_by_pmi(
-            index_node[:], db.family_table.nrows, float(kmer_percentage)
-        )
+    table_idx = index_node[:]
+    kmer_filter_max_df = _modality_kmer_max_df(db, modality)
+    kmer_percentage = db.ki.kmer_percentage
+    if kmer_filter_max_df > 0:
         LOG.info(
-            "Fitting with {} of {} 3Di k-mers retained (df <= {})".format(
-                n_retained, n_present, max_df
+            "Fitting {} coefficients with the database k-mer filter "
+            "(percentage={}; df <= {})".format(
+                modality, kmer_percentage, kmer_filter_max_df
             )
         )
     n_unique = scan_sequence_unique_counts(
         sequence_paths,
         db.ki.k,
         db.ki.alphabet,
-        index_node.shape[0],
+        table_idx,
         chunksize,
-        valid_kmers,
+        kmer_filter_max_df,
     )
     summary, selected_n = choose_sequence_n_values(
         n_unique,
@@ -516,7 +558,8 @@ def compute_bbinom_coefficients(
         db,
         chunksize=chunksize,
         modality=modality,
-        valid_kmers=valid_kmers,
+        kmer_filter_max_df=kmer_filter_max_df,
+        table_idx=table_idx,
     )
     LOG.info("Collected {} nonzero family/N/X histogram bins".format(len(hist)))
 

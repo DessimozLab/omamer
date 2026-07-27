@@ -112,15 +112,16 @@ def _write_modality_coefficients(db, index_group, modality, rows):
     return int(valid.sum())
 
 
-def _coefficient_kmer_percentage(rows, modality):
-    """Return the common 3Di filter setting recorded by fitted coefficients."""
-    if modality != "ss" or "kmer_percentage" not in rows.columns:
+def _coefficient_kmer_percentage(rows):
+    """Return the common build-time k-mer filter recorded by coefficients."""
+    if "kmer_percentage" not in rows.columns:
         # Coefficients written before the information filter were unfiltered.
         return 100.0
     percentages = rows["kmer_percentage"].dropna().astype(float).unique()
     if len(percentages) != 1 or not 0.0 < percentages[0] <= 100.0:
         raise ValueError(
-            "All ss coefficient rows must have one kmer_percentage in (0, 100]"
+            "All coefficient rows for a modality must have one "
+            "kmer_percentage in (0, 100]"
         )
     return float(percentages[0])
 
@@ -131,13 +132,31 @@ def import_bbinom_coefficients(db, coefficient_path):
 
     df = read_bbinom_coefficients(coefficient_path)
     index_group = db.db.root.Index
-    written = {}
-    for modality, rows in df.groupby("modality", sort=True):
-        written[modality] = _write_modality_coefficients(db, index_group, modality, rows)
-        if modality == "ss":
-            index_group._f_setattr(
-                "ss_bbinom_kmer_percentage", _coefficient_kmer_percentage(rows, modality)
+    db_percentage = float(
+        getattr(index_group._v_attrs, "kmer_percentage", 100.0)
+    )
+
+    grouped = list(df.groupby("modality", sort=True))
+    percentages = {
+        modality: _coefficient_kmer_percentage(rows)
+        for modality, rows in grouped
+    }
+    for modality, percentage in percentages.items():
+        if not np.isclose(percentage, db_percentage):
+            raise ValueError(
+                "{} beta-binomial coefficients use kmer_percentage={}, "
+                "but the database was built with kmer_percentage={}".format(
+                    modality, percentage, db_percentage
+                )
             )
+
+    written = {}
+    for modality, rows in grouped:
+        written[modality] = _write_modality_coefficients(db, index_group, modality, rows)
+        index_group._f_setattr(
+            "{}_bbinom_kmer_percentage".format(modality),
+            percentages[modality],
+        )
 
     index_group._f_setattr("bbinom_model", "length_aware_beta_binomial")
     index_group._f_setattr("bbinom_q_degree", 2)

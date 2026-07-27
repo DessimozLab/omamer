@@ -30,15 +30,21 @@ Assign proteins to families and subfamilies in a pre-existing database.
 
 ### Filtering promiscuous k-mers
 
-`--kmer_percentage P` retains the most family-specific `P` percent of indexed
-sequence or 3Di k-mer types (`100`, the default, keeps historical unfiltered
-behaviour). A retained hit has
+`omamer mkdb --kmer_percentage P` retains the most family-specific `P` percent
+of indexed sequence and 3Di k-mer types (`100`, the default, keeps historical
+unfiltered behaviour). A retained hit has
 `log2(number_of_families / family_document_frequency)` bits under a uniform
 family prior, so the filter removes broad posting lists; this is especially
-useful for 3Di. Ties at the cut-off are retained. For beta-binomial structural
-search, fit and import coefficients with the same value, e.g.
-`compute-bbinom --modality ss --kmer_percentage 80`; otherwise OMAmer uses the
-recalibrated binomial background.
+useful for 3Di. Ties at the cut-off are retained.
+
+The percentage and the sequence/3Di document-frequency cut-offs are stored in
+the database. Search applies them automatically, including removing filtered
+query k-mers from the effective query length. `compute-bbinom` also uses the
+database setting automatically, and `import-bbinom` rejects coefficients fitted
+with a different percentage. A filtered search therefore requires a database
+built with the desired filter rather than a search-time override. The search
+and fitting commands still accept `--kmer_percentage` as an optional
+compatibility assertion, but reject it when it differs from the database.
 
 ## Usage
 Required arguments: ``--db``, ``--query``

@@ -2,10 +2,17 @@ import numpy as np
 import numba
 import pytest
 import tables
+from types import SimpleNamespace
 from scipy.stats import betabinom
+from scipy.optimize import check_grad
 from omamer.alphabets import Alphabet, get_transform
-from omamer.bbinom_coefficients import import_bbinom_coefficients
+from omamer.bbinom_coefficients import (
+    bbinom_coefficient_valid_mask,
+    import_bbinom_coefficients,
+)
 from omamer.bbinom_fit import (
+    DenseFamilyHitHistogram,
+    _bbinom_objective_and_gradient,
     _unique_valid_codes,
     choose_sequence_n_values,
     count_selected_family_hits,
@@ -20,7 +27,11 @@ from omamer.index import (
 from omamer.stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
 from omamer.compression import ctz, naive_ctz, popcount, select1_in_word
 from omamer.compression import to_elias_fano, from_elias_fano
-from omamer.merge_search import family_result_sort, search_seq_kmers
+from omamer.merge_search import (
+    family_log_correction,
+    family_result_sort,
+    search_seq_kmers,
+)
 
 
 def popcount_naive(x):
@@ -332,11 +343,14 @@ def test_import_bbinom_coefficients_writes_modality_arrays(tmp_path):
                 "kappa_coef_1",
                 "n_train_min",
                 "n_train_max",
+                "fit_valid",
+                "optimizer_success",
             ]
         )
         + "\n"
-        + "1\tseq\t4.0\t1.5\t0.1\t0.2\t0.3\t2.0\t0.4\t52\t277\n"
-        + "2\tss\t4.1\t1.6\t0.5\t0.6\t0.7\t3.0\t0.8\t52\t277\n"
+        + "1\tseq\t4.0\t1.5\t0.1\t0.2\t0.3\t2.0\t0.4\t52\t277\ttrue\ttrue\n"
+        + "2\tss\t4.1\t1.6\t0.5\t0.6\t0.7\t3.0\t0.8\t52\t277\ttrue\ttrue\n"
+        + "0\tss\t4.1\t1.6\t50.0\t0.6\t0.7\t3.0\t0.8\t52\t277\tfalse\ttrue\n"
     )
 
     family_descr = {"ID": tables.UInt32Col()}
@@ -373,6 +387,9 @@ def test_import_bbinom_coefficients_writes_modality_arrays(tmp_path):
         # compatible with the unfiltered structural search.
         assert h5.root.Index._v_attrs["ss_bbinom_kmer_percentage"] == 100.0
         assert h5.root.Index._v_attrs["seq_bbinom_kmer_percentage"] == 100.0
+        assert h5.root.Index._v_attrs["ss_bbinom_valid_count"] == 1
+        assert h5.root.Index._v_attrs["ss_bbinom_invalid_count"] == 1
+        assert h5.root.Index._v_attrs["ss_bbinom_validity_policy_version"] == 1
         np.testing.assert_array_equal(h5.root.Index.FamilyBBinomValid[:], [False, True, False])
         np.testing.assert_array_equal(h5.root.Index.SSFamilyBBinomValid[:], [False, False, True])
         np.testing.assert_allclose(h5.root.Index.FamilyBBinomQCoef[1], [0.1, 0.2, 0.3])
@@ -433,6 +450,132 @@ def test_fit_family_bbinom_from_hist_returns_importable_row():
     assert row["kappa_degree"] == 1
     for key in ["q_coef_0", "q_coef_1", "q_coef_2", "kappa_coef_0", "kappa_coef_1"]:
         assert np.isfinite(row[key])
+    assert "fit_valid" in row
+
+
+def test_failed_bbinom_optimizer_row_is_not_valid(monkeypatch):
+    def failed_minimize(objective, theta0, method, bounds, jac):
+        return SimpleNamespace(
+            success=False,
+            x=np.full_like(theta0, 3.0),
+            fun=123.0,
+            message="iteration limit",
+            status=1,
+            nit=5,
+            nfev=10,
+        )
+
+    monkeypatch.setattr("omamer.bbinom_fit.minimize", failed_minimize)
+    row = fit_family_bbinom_from_hist(
+        7,
+        [(20, 1, 10), (40, 2, 10)],
+        {20: 80, 40: 80},
+    )
+
+    assert row["optimizer_success"] is False
+    assert row["fit_valid"] is False
+    assert "optimizer_failed" in row["fit_invalid_reason"].split(";")
+    # Failed fits retain a diagnostic row, but use the explicit initial
+    # coefficients rather than the optimizer's untrusted iterate.
+    np.testing.assert_allclose(row["q_coef_1"], 0.0)
+    np.testing.assert_allclose(row["kappa_coef_0"], np.log(1000.0))
+
+
+def test_bbinom_valid_mask_rejects_rails_and_legacy_failed_initial_fit():
+    valid = np.ones(3, dtype=bool)
+    q_coef = np.asarray(
+        [
+            [0.1, 0.2, 0.3],
+            [50.0, 0.2, 0.3],
+            [-2.0, 0.0, 0.0],
+        ]
+    )
+    kappa_coef = np.asarray(
+        [
+            [2.0, 0.4],
+            [2.0, 0.4],
+            [np.log(1000.0), 0.0],
+        ]
+    )
+    center = np.ones(3)
+    scale = np.ones(3)
+
+    np.testing.assert_array_equal(
+        bbinom_coefficient_valid_mask(
+            valid,
+            q_coef,
+            kappa_coef,
+            center,
+            scale,
+            reject_initial_fallback=True,
+        ),
+        [True, False, False],
+    )
+
+
+def test_dense_family_histogram_reconstructs_nonzero_records():
+    # N=2 occupies columns 0..2 and N=4 occupies columns 3..7.
+    data = np.zeros((2, 8), dtype=np.uint16)
+    data[0, 1] = 3
+    data[0, 2] = 2
+    data[0, 3 + 2] = 5
+    data[1, 3 + 4] = 7
+    hist = DenseFamilyHitHistogram(
+        data,
+        n_values=np.asarray([2, 4]),
+        offsets=np.asarray([0, 3, 8]),
+    )
+
+    assert hist.records(0) == [(2, 1, 3), (2, 2, 2), (4, 2, 5)]
+    assert hist.records(1) == [(4, 4, 7)]
+
+
+def test_family_log_correction_policy():
+    assert family_log_correction("bonferroni", 100) == pytest.approx(
+        np.log(100)
+    )
+    assert family_log_correction("none", 100) == 0.0
+    with pytest.raises(ValueError, match="family_correction"):
+        family_log_correction("unknown", 100)
+
+
+def test_bbinom_exact_gradient_matches_finite_difference():
+    ns = np.asarray([20.0, 20.0, 40.0, 40.0, 80.0, 80.0])
+    xs = np.asarray([0.0, 2.0, 1.0, 7.0, 5.0, 15.0])
+    weights = np.asarray([50.0, 10.0, 45.0, 15.0, 40.0, 20.0])
+    center = np.log(40.0)
+    scale = 0.8
+    xq = np.column_stack(
+        [
+            np.ones(ns.size),
+            (np.log(ns) - center) / scale,
+            ((np.log(ns) - center) / scale) ** 2,
+        ]
+    )
+    xk = xq[:, :2]
+    theta = np.asarray([-2.0, 0.2, -0.1, np.log(20.0), 0.1])
+
+    def objective(value):
+        return _bbinom_objective_and_gradient(
+            value,
+            xq,
+            xk,
+            ns,
+            xs,
+            weights,
+        )[0]
+
+    def gradient(value):
+        return _bbinom_objective_and_gradient(
+            value,
+            xq,
+            xk,
+            ns,
+            xs,
+            weights,
+        )[1]
+
+    assert check_grad(objective, gradient, theta) < 1e-3
 
 
 def test_fit_family_bbinom_from_hist_respects_modality():

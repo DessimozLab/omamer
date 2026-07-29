@@ -4,6 +4,8 @@ Fit length-aware beta-binomial family coefficients from sequence FASTA records.
 from __future__ import annotations
 
 import math
+import os
+from array import array
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 
@@ -11,13 +13,17 @@ import numba
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.special import expit, gammaln
+from scipy.special import digamma, expit, gammaln
 from tqdm.auto import tqdm
 
 from ._utils import LOG, is_progress_disabled
 from .alphabets import get_transform
 from .merge_search import parse_seq
 from .sequence_reader import SequenceReader
+
+
+BBINOM_COEFFICIENT_BOUND = 50.0
+BBINOM_COEFFICIENT_BOUND_TOLERANCE = 1e-3
 
 
 @numba.njit(nogil=True)
@@ -112,7 +118,7 @@ def scan_sequence_unique_counts(
     trans = get_transform(k, alphabet.DIGITS_AA)
     digits_lookup = alphabet.DIGITS_AA_LOOKUP
     x_flag = table_idx.size - 1
-    counts = []
+    counts = array("I")
     for _, _, seq in tqdm(
         _iter_sequences(paths, k, chunksize, alphabet.sanitise_seq),
         desc="scan exact unique-kmer counts",
@@ -131,7 +137,7 @@ def scan_sequence_unique_counts(
                 ).size
             )
         )
-    return np.asarray(counts, dtype=np.uint32)
+    return np.frombuffer(counts, dtype=np.uint32).copy()
 
 
 def parse_n_values(value):
@@ -198,6 +204,32 @@ def sample_record_indices_by_n(n_unique, selected_n, max_records_per_n, seed):
             sampled[int(n)] = candidates.astype(np.int64, copy=False)
         else:
             sampled[int(n)] = np.sort(rng.choice(candidates, size=take, replace=False))
+    return sampled
+
+
+def load_sampled_sequences(paths, sampled_by_n, k, chunksize, sanitiser):
+    """Load only sampled records so family batches do not rescan the FASTA."""
+    selected_lookup = {
+        int(record_i): int(n)
+        for n, indices in sampled_by_n.items()
+        for record_i in indices
+    }
+    sampled = []
+    for record_i, _, seq in tqdm(
+        _iter_sequences(paths, k, chunksize, sanitiser),
+        desc="load sampled sequences",
+        disable=is_progress_disabled(),
+    ):
+        n = selected_lookup.get(record_i)
+        if n is not None:
+            sampled.append((n, seq))
+    if len(sampled) != len(selected_lookup):
+        raise RuntimeError(
+            "Loaded {} of {} sampled FASTA records".format(
+                len(sampled),
+                len(selected_lookup),
+            )
+        )
     return sampled
 
 
@@ -310,6 +342,170 @@ def collect_family_hit_histograms(
     return hist, dict(n_query_counts)
 
 
+@numba.njit(nogil=True)
+def update_dense_family_histogram(
+    counts,
+    touched,
+    n_touched,
+    n_offset,
+    histogram,
+):
+    """Record one query's nonzero family counts and reset scratch counts."""
+    for j in range(n_touched):
+        rank = touched[j]
+        x = counts[rank]
+        histogram[rank, n_offset + x] += 1
+        counts[rank] = 0
+
+
+class DenseFamilyHitHistogram:
+    """Compact per-family histograms with ragged X ranges flattened by N."""
+
+    def __init__(self, data, n_values, offsets):
+        self.data = data
+        self.n_values = np.asarray(n_values, dtype=np.uint32)
+        self.offsets = np.asarray(offsets, dtype=np.int64)
+
+    @property
+    def n_families(self):
+        return self.data.shape[0]
+
+    def records(self, rank):
+        records = []
+        row = self.data[int(rank)]
+        for n_i, n in enumerate(self.n_values):
+            start = int(self.offsets[n_i])
+            values = row[start + 1 : start + int(n) + 1]
+            for x_i in np.flatnonzero(values):
+                records.append(
+                    (
+                        int(n),
+                        int(x_i) + 1,
+                        int(values[x_i]),
+                    )
+                )
+        return records
+
+
+def collect_dense_family_hit_histograms(
+    sampled_sequences,
+    selected_families,
+    db,
+    modality="seq",
+    kmer_filter_max_df=0,
+    table_idx=None,
+    sampled_family_offsets=None,
+):
+    """Collect bounded-memory histograms without Python objects per bin.
+
+    When ``sampled_family_offsets`` is supplied, it must contain one database
+    family offset per sampled sequence (or -1 when unknown). The returned
+    ``own_family_hits`` array records the hit count for that family before the
+    scratch counts are reset. This permits an audit, or a subsequent fit, to
+    remove positive-family queries from the null distribution without treating
+    them as zero-hit observations.
+    """
+    n_query_counts = Counter(int(n) for n, _ in sampled_sequences)
+    if sampled_family_offsets is not None:
+        sampled_family_offsets = np.asarray(
+            sampled_family_offsets,
+            dtype=np.int64,
+        )
+        if sampled_family_offsets.shape != (len(sampled_sequences),):
+            raise ValueError(
+                "sampled_family_offsets must have one value per sampled "
+                "sequence"
+            )
+        own_family_hits = np.zeros(
+            len(sampled_sequences),
+            dtype=np.uint32,
+        )
+    else:
+        own_family_hits = None
+    n_values = np.asarray(sorted(n_query_counts), dtype=np.uint32)
+    offsets = np.zeros(n_values.size + 1, dtype=np.int64)
+    offsets[1:] = np.cumsum(n_values.astype(np.int64) + 1)
+    offset_lookup = np.full(int(n_values.max()) + 1, -1, dtype=np.int64)
+    offset_lookup[n_values] = offsets[:-1]
+    max_queries_per_n = max(n_query_counts.values())
+    hist_dtype = np.uint16 if max_queries_per_n <= np.iinfo(np.uint16).max else np.uint32
+    histogram = np.zeros(
+        (selected_families.size, int(offsets[-1])),
+        dtype=hist_dtype,
+    )
+
+    k = db.ki.k
+    alphabet = db.ki.alphabet
+    trans = get_transform(k, alphabet.DIGITS_AA)
+    digits_lookup = alphabet.DIGITS_AA_LOOKUP
+    table_index_node, table_buffer_node = _modality_index_arrays(db, modality)
+    if table_idx is None:
+        table_idx = table_index_node[:]
+    table_buff = table_buffer_node[:]
+    x_flag = table_idx.size - 1
+    hog_to_family = db.hog_table.col("FamOff")
+
+    target_rank = np.full(db.family_table.nrows, -1, dtype=np.int32)
+    target_rank[selected_families] = np.arange(
+        selected_families.size,
+        dtype=np.int32,
+    )
+    counts = np.zeros(selected_families.size, dtype=np.uint32)
+    touched = np.empty(selected_families.size, dtype=np.int32)
+
+    for sample_i, (n, seq) in enumerate(tqdm(
+        sampled_sequences,
+        desc="count family hits",
+        disable=is_progress_disabled(),
+    )):
+        codes = _unique_valid_codes(
+            seq,
+            k,
+            trans,
+            digits_lookup,
+            x_flag,
+            table_idx,
+            kmer_filter_max_df,
+        )
+        if int(codes.size) != int(n):
+            raise RuntimeError(
+                "Sampled FASTA record changed from N={} to N={}".format(
+                    n,
+                    codes.size,
+                )
+            )
+        n_touched = count_selected_family_hits(
+            codes,
+            table_idx,
+            table_buff,
+            hog_to_family,
+            target_rank,
+            counts,
+            touched,
+        )
+        if own_family_hits is not None:
+            own_family = sampled_family_offsets[sample_i]
+            if 0 <= own_family < target_rank.size:
+                own_rank = target_rank[own_family]
+                if own_rank >= 0:
+                    own_family_hits[sample_i] = counts[own_rank]
+        update_dense_family_histogram(
+            counts,
+            touched,
+            n_touched,
+            offset_lookup[int(n)],
+            histogram,
+        )
+
+    result = (
+        DenseFamilyHitHistogram(histogram, n_values, offsets),
+        dict(n_query_counts),
+    )
+    if own_family_hits is not None:
+        return result + (own_family_hits,)
+    return result
+
+
 def _weighted_center_scale(ns, weights):
     log_n = np.log(ns.astype(float))
     total = float(weights.sum())
@@ -340,13 +536,80 @@ def _betabinom_logpmf(x, n, alpha, beta):
     )
 
 
+def _bbinom_objective_and_gradient(
+    theta,
+    xq,
+    xk,
+    ns,
+    xs,
+    weights,
+):
+    """Weighted negative log-likelihood and exact coefficient gradient."""
+    q_size = xq.shape[1]
+    q_coef = theta[:q_size]
+    kappa_coef = theta[q_size:]
+
+    q_raw = expit(xq @ q_coef)
+    q = np.clip(q_raw, 1e-8, 1 - 1e-8)
+    log_kappa_raw = xk @ kappa_coef
+    log_kappa = np.clip(
+        log_kappa_raw,
+        math.log(1e-4),
+        math.log(1e8),
+    )
+    kappa = np.exp(log_kappa)
+    alpha = q * kappa
+    beta = (1.0 - q) * kappa
+    logpmf = _betabinom_logpmf(xs, ns, alpha, beta)
+    if not np.all(np.isfinite(logpmf)):
+        return float("inf"), np.zeros_like(theta)
+
+    dlog_dalpha = (
+        digamma(xs + alpha)
+        - digamma(ns + alpha + beta)
+        + digamma(alpha + beta)
+        - digamma(alpha)
+    )
+    dlog_dbeta = (
+        digamma(ns - xs + beta)
+        - digamma(ns + alpha + beta)
+        + digamma(alpha + beta)
+        - digamma(beta)
+    )
+    q_derivative = q * (1.0 - q)
+    q_derivative[
+        (q_raw <= 1e-8) | (q_raw >= 1.0 - 1e-8)
+    ] = 0.0
+    log_kappa_derivative = np.ones_like(log_kappa)
+    log_kappa_derivative[
+        (log_kappa_raw <= math.log(1e-4))
+        | (log_kappa_raw >= math.log(1e8))
+    ] = 0.0
+
+    dlog_dq_linear = (
+        (dlog_dalpha - dlog_dbeta)
+        * kappa
+        * q_derivative
+    )
+    dlog_dlog_kappa = (
+        dlog_dalpha * q + dlog_dbeta * (1.0 - q)
+    ) * kappa * log_kappa_derivative
+    gradient = -np.concatenate(
+        [
+            xq.T @ (weights * dlog_dq_linear),
+            xk.T @ (weights * dlog_dlog_kappa),
+        ]
+    )
+    return -float(np.sum(weights * logpmf)), gradient
+
+
 def fit_family_bbinom_from_hist(
     family_offset,
     records,
     n_query_counts,
     q_degree=2,
     kappa_degree=1,
-    min_nonzero_queries=1,
+    min_nonzero_queries=20,
     modality="seq",
     kmer_percentage=100.0,
 ):
@@ -384,31 +647,61 @@ def fit_family_bbinom_from_hist(
     kappa_init[0] = math.log(1000.0)
     theta0 = np.concatenate([q_init, kappa_init])
 
-    def unpack(theta):
-        q_coef = theta[: int(q_degree) + 1]
-        kappa_coef = theta[int(q_degree) + 1 :]
-        q = np.clip(expit(xq @ q_coef), 1e-8, 1 - 1e-8)
-        log_kappa = np.clip(xk @ kappa_coef, math.log(1e-4), math.log(1e8))
-        kappa = np.exp(log_kappa)
-        return q, kappa
-
     def objective(theta):
-        q, kappa = unpack(theta)
-        alpha = q * kappa
-        beta = (1.0 - q) * kappa
-        logpmf = _betabinom_logpmf(xs, ns, alpha, beta)
-        if not np.all(np.isfinite(logpmf)):
-            return float("inf")
-        return -float(np.sum(weights * logpmf))
+        return _bbinom_objective_and_gradient(
+            theta,
+            xq,
+            xk,
+            ns,
+            xs,
+            weights,
+        )[0]
+
+    def gradient(theta):
+        return _bbinom_objective_and_gradient(
+            theta,
+            xq,
+            xk,
+            ns,
+            xs,
+            weights,
+        )[1]
 
     result = minimize(
         objective,
         theta0,
+        jac=gradient,
         method="L-BFGS-B",
-        bounds=[(-50.0, 50.0)] * theta0.size,
+        bounds=[(-BBINOM_COEFFICIENT_BOUND, BBINOM_COEFFICIENT_BOUND)]
+        * theta0.size,
     )
-    theta = result.x if result.success else theta0
+    optimizer_success = bool(result.success)
+    theta = np.asarray(
+        result.x if optimizer_success else theta0,
+        dtype=np.float64,
+    )
+    invalid_reasons = []
+    if not optimizer_success:
+        invalid_reasons.append("optimizer_failed")
+    if not np.all(np.isfinite(theta)) or not np.isfinite(result.fun):
+        invalid_reasons.append("nonfinite_fit")
+    if np.any(
+        np.abs(theta)
+        >= BBINOM_COEFFICIENT_BOUND - BBINOM_COEFFICIENT_BOUND_TOLERANCE
+    ):
+        invalid_reasons.append("coefficient_at_bound")
     loglik = -objective(theta)
+    binomial_logpmf = (
+        gammaln(ns + 1)
+        - gammaln(xs + 1)
+        - gammaln(ns - xs + 1)
+        + xs * math.log(overall_q)
+        + (ns - xs) * math.log1p(-overall_q)
+    )
+    binomial_loglik = float(np.sum(weights * binomial_logpmf))
+    if loglik + 1e-5 < binomial_loglik:
+        invalid_reasons.append("worse_than_binomial")
+    fit_valid = not invalid_reasons
     q_coef = theta[: int(q_degree) + 1]
     kappa_coef = theta[int(q_degree) + 1 :]
 
@@ -425,10 +718,18 @@ def fit_family_bbinom_from_hist(
         "n_train_max": int(max(n_query_counts)),
         "queries": int(sum(n_query_counts.values())),
         "nonzero_queries": nonzero_queries,
+        "overall_hit_probability": overall_q,
         "loglik": float(loglik),
+        "binomial_mle_loglik": binomial_loglik,
+        "bbinom_loglik_gain": float(loglik - binomial_loglik),
         "aic": float(2 * theta.size - 2 * loglik),
-        "optimizer_success": bool(result.success),
+        "optimizer_success": optimizer_success,
         "optimizer_message": str(result.message),
+        "optimizer_status": int(getattr(result, "status", -1)),
+        "optimizer_nit": int(getattr(result, "nit", -1)),
+        "optimizer_nfev": int(getattr(result, "nfev", -1)),
+        "fit_valid": fit_valid,
+        "fit_invalid_reason": ";".join(invalid_reasons),
     }
     row.update({f"q_coef_{i}": float(v) for i, v in enumerate(q_coef)})
     row.update({f"kappa_coef_{i}": float(v) for i, v in enumerate(kappa_coef)})
@@ -439,35 +740,64 @@ def _fit_family_worker(args):
     return fit_family_bbinom_from_hist(*args)
 
 
-def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_degree=1, min_nonzero_queries=1, workers=1, modality="seq", kmer_percentage=100.0):
-    by_rank = defaultdict(list)
-    for (rank, n, x), count in hist.items():
-        by_rank[int(rank)].append((int(n), int(x), int(count)))
+def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_degree=1, min_nonzero_queries=20, workers=1, modality="seq", kmer_percentage=100.0):
+    if isinstance(hist, DenseFamilyHitHistogram):
+        ranks = range(hist.n_families)
 
-    tasks = [
-        (
-            int(selected_families[rank]),
-            records,
-            dict(n_query_counts),
-            int(q_degree),
-            int(kappa_degree),
-            int(min_nonzero_queries),
-            modality,
-            float(kmer_percentage),
-        )
-        for rank, records in sorted(by_rank.items())
-    ]
+        def make_task(rank):
+            return (
+                int(selected_families[rank]),
+                hist.records(rank),
+                dict(n_query_counts),
+                int(q_degree),
+                int(kappa_degree),
+                int(min_nonzero_queries),
+                modality,
+                float(kmer_percentage),
+            )
+    else:
+        by_rank = defaultdict(list)
+        for (rank, n, x), count in hist.items():
+            by_rank[int(rank)].append((int(n), int(x), int(count)))
+        ranks = sorted(by_rank)
+
+        def make_task(rank):
+            return (
+                int(selected_families[rank]),
+                by_rank[rank],
+                dict(n_query_counts),
+                int(q_degree),
+                int(kappa_degree),
+                int(min_nonzero_queries),
+                modality,
+                float(kmer_percentage),
+            )
 
     rows = []
-    if int(workers) > 1 and len(tasks) > 1:
+    if int(workers) > 1 and len(ranks) > 1:
         with ProcessPoolExecutor(max_workers=int(workers)) as pool:
-            iterator = pool.map(_fit_family_worker, tasks, chunksize=16)
-            for row in tqdm(iterator, total=len(tasks), desc="fit beta-binomial families", disable=is_progress_disabled()):
-                if row is not None:
-                    rows.append(row)
+            progress = tqdm(
+                total=len(ranks),
+                desc="fit beta-binomial families",
+                disable=is_progress_disabled(),
+            )
+            # Keep only a small number of variable-sized histogram records in
+            # the multiprocessing queue at once.
+            ranks = list(ranks)
+            for start in range(0, len(ranks), 32):
+                tasks = [make_task(rank) for rank in ranks[start : start + 32]]
+                for row in pool.map(_fit_family_worker, tasks, chunksize=1):
+                    if row is not None:
+                        rows.append(row)
+                    progress.update(1)
+            progress.close()
     else:
-        for task in tqdm(tasks, desc="fit beta-binomial families", disable=is_progress_disabled()):
-            row = _fit_family_worker(task)
+        for rank in tqdm(
+            ranks,
+            desc="fit beta-binomial families",
+            disable=is_progress_disabled(),
+        ):
+            row = _fit_family_worker(make_task(rank))
             if row is not None:
                 rows.append(row)
 
@@ -487,10 +817,12 @@ def compute_bbinom_coefficients(
     max_records_per_n=500,
     chunksize=10000,
     seed=42,
-    min_nonzero_queries=1,
+    min_nonzero_queries=20,
     workers=1,
     n_summary_path=None,
     modality="seq",
+    max_histogram_gb=3.0,
+    n_counts_cache=None,
 ):
     if not sequence_paths:
         raise ValueError("At least one sequence FASTA path is required")
@@ -525,14 +857,38 @@ def compute_bbinom_coefficients(
                 modality, kmer_percentage, kmer_filter_max_df
             )
         )
-    n_unique = scan_sequence_unique_counts(
-        sequence_paths,
-        db.ki.k,
-        db.ki.alphabet,
-        table_idx,
-        chunksize,
-        kmer_filter_max_df,
-    )
+    if n_counts_cache and os.path.exists(n_counts_cache):
+        n_unique = np.load(n_counts_cache, mmap_mode="r")
+        if n_unique.ndim != 1 or not np.issubdtype(
+            n_unique.dtype,
+            np.integer,
+        ):
+            raise ValueError(
+                "n_counts_cache must contain a one-dimensional integer array"
+            )
+        LOG.info(
+            "Loaded {} exact-N values from {}".format(
+                n_unique.size,
+                n_counts_cache,
+            )
+        )
+    else:
+        n_unique = scan_sequence_unique_counts(
+            sequence_paths,
+            db.ki.k,
+            db.ki.alphabet,
+            table_idx,
+            chunksize,
+            kmer_filter_max_df,
+        )
+        if n_counts_cache:
+            np.save(n_counts_cache, n_unique)
+            LOG.info(
+                "Cached {} exact-N values in {}".format(
+                    n_unique.size,
+                    n_counts_cache,
+                )
+            )
     summary, selected_n = choose_sequence_n_values(
         n_unique,
         min_records_per_n=min_records_per_n,
@@ -550,30 +906,105 @@ def compute_bbinom_coefficients(
         seed=seed,
     )
     LOG.info("Sampled {} sequence records for fitting".format(sum(len(v) for v in sampled_by_n.values())))
-
-    hist, n_query_counts = collect_family_hit_histograms(
+    sampled_sequences = load_sampled_sequences(
         sequence_paths,
         sampled_by_n,
-        families,
-        db,
-        chunksize=chunksize,
-        modality=modality,
-        kmer_filter_max_df=kmer_filter_max_df,
-        table_idx=table_idx,
+        db.ki.k,
+        chunksize,
+        db.ki.alphabet.sanitise_seq,
     )
-    LOG.info("Collected {} nonzero family/N/X histogram bins".format(len(hist)))
 
-    rows = fit_bbinom_rows(
-        hist,
-        n_query_counts,
-        families,
-        q_degree=2,
-        kappa_degree=1,
-        min_nonzero_queries=min_nonzero_queries,
-        workers=workers,
-        modality=modality,
-        kmer_percentage=kmer_percentage,
+    selected_n = np.asarray(sorted(sampled_by_n), dtype=np.int64)
+    max_queries_per_n = max(len(indices) for indices in sampled_by_n.values())
+    itemsize = 2 if max_queries_per_n <= np.iinfo(np.uint16).max else 4
+    bytes_per_family = int(np.sum(selected_n + 1)) * itemsize
+    if float(max_histogram_gb) > 0:
+        max_batch_families = max(
+            1,
+            int(float(max_histogram_gb) * (1024**3) // bytes_per_family),
+        )
+    else:
+        max_batch_families = families.size
+    max_batch_families = min(max_batch_families, families.size)
+    n_family_batches = int(
+        math.ceil(families.size / max_batch_families)
+    )
+    LOG.info(
+        "Using {} family histogram batch(es), up to {} families and {:.2f} GiB each".format(
+            n_family_batches,
+            max_batch_families,
+            max_batch_families * bytes_per_family / (1024**3),
+        )
+    )
+
+    fitted_batches = []
+    for batch_i, start in enumerate(
+        range(0, families.size, max_batch_families),
+        start=1,
+    ):
+        family_batch = families[start : start + max_batch_families]
+        LOG.info(
+            "Collecting family histogram batch {}/{} ({} families)".format(
+                batch_i,
+                n_family_batches,
+                family_batch.size,
+            )
+        )
+        hist, n_query_counts = collect_dense_family_hit_histograms(
+            sampled_sequences,
+            family_batch,
+            db,
+            modality=modality,
+            kmer_filter_max_df=kmer_filter_max_df,
+            table_idx=table_idx,
+        )
+        batch_rows = fit_bbinom_rows(
+            hist,
+            n_query_counts,
+            family_batch,
+            q_degree=2,
+            kappa_degree=1,
+            min_nonzero_queries=min_nonzero_queries,
+            workers=workers,
+            modality=modality,
+            kmer_percentage=kmer_percentage,
+        )
+        batch_output_path = "{}.batch-{:04d}-of-{:04d}.tsv".format(
+            output_path,
+            batch_i,
+            n_family_batches,
+        )
+        batch_rows.to_csv(
+            batch_output_path,
+            sep="\t",
+            index=False,
+        )
+        LOG.info(
+            "Checkpointed {} fitted rows to {}".format(
+                len(batch_rows),
+                batch_output_path,
+            )
+        )
+        fitted_batches.append(batch_rows)
+        del hist
+
+    rows = (
+        pd.concat(fitted_batches, ignore_index=True)
+        if fitted_batches
+        else pd.DataFrame()
     )
     rows.to_csv(output_path, sep="\t", index=False)
-    LOG.info("Wrote {} coefficient rows to {}".format(len(rows), output_path))
+    valid_count = (
+        int(rows["fit_valid"].sum())
+        if "fit_valid" in rows
+        else len(rows)
+    )
+    LOG.info(
+        "Wrote {} coefficient rows ({} valid, {} invalid) to {}".format(
+            len(rows),
+            valid_count,
+            len(rows) - valid_count,
+            output_path,
+        )
+    )
     return rows

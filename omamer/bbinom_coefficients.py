@@ -7,6 +7,12 @@ import numpy as np
 import pandas as pd
 
 
+BBINOM_COEFFICIENT_BOUND = 50.0
+BBINOM_COEFFICIENT_BOUND_TOLERANCE = 1e-3
+BBINOM_VALIDITY_POLICY_VERSION = 1
+_THETA0_LOG_KAPPA = np.log(1000.0)
+
+
 BBINOM_NODE_NAMES = {
     "seq": {
         "q_coef": "FamilyBBinomQCoef",
@@ -39,6 +45,108 @@ REQUIRED_COLUMNS = {
     "kappa_coef_0",
     "kappa_coef_1",
 }
+
+
+def _parse_bool(value, default=True):
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return default
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no", ""}:
+        return False
+    raise ValueError("Cannot interpret boolean value {!r}".format(value))
+
+
+def bbinom_coefficient_valid_mask(
+    valid,
+    q_coef,
+    kappa_coef,
+    n_center,
+    n_scale,
+    *,
+    reject_initial_fallback=False,
+):
+    """Apply numerical and legacy-fit quality checks to a validity mask."""
+    valid = np.asarray(valid, dtype=bool).copy()
+    q_coef = np.asarray(q_coef, dtype=np.float64)
+    kappa_coef = np.asarray(kappa_coef, dtype=np.float64)
+    n_center = np.asarray(n_center, dtype=np.float64)
+    n_scale = np.asarray(n_scale, dtype=np.float64)
+
+    finite = (
+        np.all(np.isfinite(q_coef), axis=1)
+        & np.all(np.isfinite(kappa_coef), axis=1)
+        & np.isfinite(n_center)
+        & np.isfinite(n_scale)
+        & (n_scale > 0.0)
+    )
+    at_bound = (
+        np.any(
+            np.abs(q_coef)
+            >= BBINOM_COEFFICIENT_BOUND - BBINOM_COEFFICIENT_BOUND_TOLERANCE,
+            axis=1,
+        )
+        | np.any(
+            np.abs(kappa_coef)
+            >= BBINOM_COEFFICIENT_BOUND - BBINOM_COEFFICIENT_BOUND_TOLERANCE,
+            axis=1,
+        )
+    )
+    valid &= finite & ~at_bound
+
+    if reject_initial_fallback:
+        initial_fallback = (
+            np.isclose(q_coef[:, 1], 0.0, rtol=0.0, atol=1e-12)
+            & np.isclose(q_coef[:, 2], 0.0, rtol=0.0, atol=1e-12)
+            & np.isclose(
+                kappa_coef[:, 0],
+                _THETA0_LOG_KAPPA,
+                rtol=0.0,
+                atol=1e-12,
+            )
+            & np.isclose(kappa_coef[:, 1], 0.0, rtol=0.0, atol=1e-12)
+        )
+        valid &= ~initial_fallback
+
+    return valid
+
+
+def _coefficient_row_is_valid(row):
+    explicit_valid = _parse_bool(
+        getattr(row, "fit_valid", None),
+        default=True,
+    )
+    optimizer_success = _parse_bool(
+        getattr(row, "optimizer_success", None),
+        default=True,
+    )
+    coefficients = np.asarray(
+        [
+            row.q_coef_0,
+            row.q_coef_1,
+            row.q_coef_2,
+            row.kappa_coef_0,
+            row.kappa_coef_1,
+        ],
+        dtype=np.float64,
+    )
+    return bool(
+        explicit_valid
+        and optimizer_success
+        and np.all(np.isfinite(coefficients))
+        and np.isfinite(row.log_n_center)
+        and np.isfinite(row.log_n_scale)
+        and float(row.log_n_scale) > 0.0
+        and np.all(
+            np.abs(coefficients)
+            < BBINOM_COEFFICIENT_BOUND - BBINOM_COEFFICIENT_BOUND_TOLERANCE
+        )
+    )
 
 
 def read_bbinom_coefficients(path):
@@ -80,6 +188,7 @@ def _write_modality_coefficients(db, index_group, modality, rows):
     n_min = np.zeros(n_families, dtype=np.uint32)
     n_max = np.zeros(n_families, dtype=np.uint32)
 
+    rejected = 0
     for row in rows.itertuples(index=False):
         family = int(row.family_offset)
         if family < 0 or family >= n_families:
@@ -92,7 +201,9 @@ def _write_modality_coefficients(db, index_group, modality, rows):
         kappa_coef[family, :] = [float(row.kappa_coef_0), float(row.kappa_coef_1)]
         center[family] = float(row.log_n_center)
         scale[family] = log_n_scale
-        valid[family] = True
+        row_valid = _coefficient_row_is_valid(row)
+        valid[family] = row_valid
+        rejected += int(not row_valid)
         if hasattr(row, "n_train_min") and not pd.isna(row.n_train_min):
             n_min[family] = int(row.n_train_min)
         if hasattr(row, "n_train_max") and not pd.isna(row.n_train_max):
@@ -109,7 +220,7 @@ def _write_modality_coefficients(db, index_group, modality, rows):
     h5.create_carray(index_group, names["n_min"], obj=n_min, filters=filters)
     h5.create_carray(index_group, names["n_max"], obj=n_max, filters=filters)
 
-    return int(valid.sum())
+    return int(valid.sum()), rejected
 
 
 def _coefficient_kmer_percentage(rows):
@@ -152,10 +263,28 @@ def import_bbinom_coefficients(db, coefficient_path):
 
     written = {}
     for modality, rows in grouped:
-        written[modality] = _write_modality_coefficients(db, index_group, modality, rows)
+        valid_count, invalid_count = _write_modality_coefficients(
+            db,
+            index_group,
+            modality,
+            rows,
+        )
+        written[modality] = valid_count
         index_group._f_setattr(
             "{}_bbinom_kmer_percentage".format(modality),
             percentages[modality],
+        )
+        index_group._f_setattr(
+            "{}_bbinom_validity_policy_version".format(modality),
+            BBINOM_VALIDITY_POLICY_VERSION,
+        )
+        index_group._f_setattr(
+            "{}_bbinom_valid_count".format(modality),
+            valid_count,
+        )
+        index_group._f_setattr(
+            "{}_bbinom_invalid_count".format(modality),
+            invalid_count,
         )
 
     index_group._f_setattr("bbinom_model", "length_aware_beta_binomial")

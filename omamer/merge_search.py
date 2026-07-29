@@ -40,6 +40,11 @@ from omamer.stat_models import (
 
 from ._utils import LOG
 from .alphabets import get_transform
+from .bbinom_coefficients import (
+    BBINOM_VALIDITY_POLICY_VERSION,
+    bbinom_coefficient_valid_mask,
+)
+from .index import cumulate_counts_1fam
 from .sequence_buffer import SequenceBuffer
 from .hierarchy import (
     get_root_leaf_offsets,
@@ -51,6 +56,19 @@ from .hierarchy import (
 
 # maximum neglogp to set
 MAX_LOGP = 20000.0
+
+
+def family_log_correction(policy, n_families):
+    if policy == "bonferroni":
+        return math.log(int(n_families))
+    if policy == "none":
+        return 0.0
+    raise ValueError(
+        "family_correction must be 'bonferroni' or 'none', got {!r}".format(
+            policy
+        )
+    )
+
 
 QUERY_FAMILY_RESULT_DTYPE = np.dtype(
     [
@@ -784,6 +802,7 @@ def place_sequence(
         fam_bbinom_n_max,
         decision_source,
         alpha,
+        family_log_correction,
         sst,
         family_only,
         hit_fams,
@@ -907,7 +926,7 @@ def place_sequence(
     k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
     alpha_neglog = -np.log(alpha)
-    correction_factor = np.log(len(ref_fam_prob))
+    correction_factor = family_log_correction
     p = ref_fam_prob[qres["id"]]
     keep = np.full(len(qres), True)
     for i in range(len(qres)):
@@ -1201,7 +1220,30 @@ class MergeSearch(object):
     @lazy_property
     def ref_fam_bbinom_valid(self):
         if "/Index/FamilyBBinomValid" in self.db.db:
-            return self.db._db_Index_FamilyBBinomValid[:]
+            stored = self.db._db_Index_FamilyBBinomValid[:]
+            attrs = self.db.db.root.Index._v_attrs
+            policy_version = getattr(
+                attrs,
+                "seq_bbinom_validity_policy_version",
+                0,
+            )
+            valid = bbinom_coefficient_valid_mask(
+                stored,
+                self.ref_fam_bbinom_q_coef,
+                self.ref_fam_bbinom_kappa_coef,
+                self.ref_fam_bbinom_center,
+                self.ref_fam_bbinom_scale,
+                reject_initial_fallback=(
+                    policy_version < BBINOM_VALIDITY_POLICY_VERSION
+                ),
+            )
+            rejected = int(np.count_nonzero(stored) - np.count_nonzero(valid))
+            if rejected:
+                LOG.warning(
+                    "Disabled %d invalid legacy sequence beta-binomial fits",
+                    rejected,
+                )
+            return valid
         return np.empty(0, dtype=np.bool_)
 
     @lazy_property
@@ -1243,7 +1285,30 @@ class MergeSearch(object):
     @lazy_property
     def ss_ref_fam_bbinom_valid(self):
         if "/Index/SSFamilyBBinomValid" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomValid[:]
+            stored = self.db._db_Index_SSFamilyBBinomValid[:]
+            attrs = self.db.db.root.Index._v_attrs
+            policy_version = getattr(
+                attrs,
+                "ss_bbinom_validity_policy_version",
+                0,
+            )
+            valid = bbinom_coefficient_valid_mask(
+                stored,
+                self.ss_ref_fam_bbinom_q_coef,
+                self.ss_ref_fam_bbinom_kappa_coef,
+                self.ss_ref_fam_bbinom_center,
+                self.ss_ref_fam_bbinom_scale,
+                reject_initial_fallback=(
+                    policy_version < BBINOM_VALIDITY_POLICY_VERSION
+                ),
+            )
+            rejected = int(np.count_nonzero(stored) - np.count_nonzero(valid))
+            if rejected:
+                LOG.warning(
+                    "Disabled %d invalid legacy structure beta-binomial fits",
+                    rejected,
+                )
+            return valid
         return np.empty(0, dtype=np.bool_)
 
     @lazy_property
@@ -1282,6 +1347,7 @@ class MergeSearch(object):
         ids,
         top_n_fams=1,
         alpha=1e-6,
+        family_correction="bonferroni",
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
@@ -1292,6 +1358,10 @@ class MergeSearch(object):
 
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
         use_structure = self.has_structure and len(struct_seqs) > 0
+        log_correction = family_log_correction(
+            family_correction,
+            self.fam_tab.size,
+        )
 
         data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
 
@@ -1378,6 +1448,7 @@ class MergeSearch(object):
             ),
             ss_kmer_filter_max_df=np.int64(self.ki.ss_kmer_max_df),
             alpha=alpha,
+            family_log_correction=log_correction,
             sst=sst,
             family_only=family_only,
             ss_kmer_df_cap=np.int64(ss_kmer_df_cap),
@@ -1655,6 +1726,7 @@ class MergeSearch(object):
                 ss_ref_fam_bbinom_n_max,
                 ss_kmer_filter_max_df,
                 alpha,
+                family_log_correction,
                 sst,
                 family_only,
                 ss_kmer_df_cap,
@@ -1721,6 +1793,7 @@ class MergeSearch(object):
                         ref_fam_bbinom_n_max,
                         1,
                         alpha,
+                        family_log_correction,
                         sst,
                         family_only,
                         hit_fams,
@@ -1764,6 +1837,7 @@ class MergeSearch(object):
                         ss_ref_fam_bbinom_n_max,
                         2,
                         alpha,
+                        family_log_correction,
                         sst,
                         family_only,
                         hit_fams,

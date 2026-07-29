@@ -233,6 +233,14 @@ def main():
         help="Significance threshold used when filtering families.",
     )
     search_parser.add_argument(
+        "--family_correction",
+        choices=("bonferroni", "none"),
+        default="bonferroni",
+        help="Multiple-testing correction applied to family p-values. "
+        "'bonferroni' preserves the historical correction over all indexed "
+        "families; 'none' filters raw family p-values.",
+    )
+    search_parser.add_argument(
         "--df_cap",
         default=0,
         type=int,
@@ -420,13 +428,23 @@ def main():
     )
     compute_bbinom_parser.add_argument(
         "--min_nonzero_queries",
-        default=1,
+        default=20,
         type=int,
-        help="Minimum number of sampled queries with nonzero hits required to fit a family.",
+        help=(
+            "Minimum number of sampled queries with nonzero hits required "
+            "to fit a family (default: 20)."
+        ),
     )
     compute_bbinom_parser.add_argument(
         "--n_summary_out",
         help="Optional TSV path to write exact-N availability and selection summary.",
+    )
+    compute_bbinom_parser.add_argument(
+        "--n_counts_cache",
+        help=(
+            "Optional .npy cache for per-record exact unique-kmer counts. "
+            "An existing cache skips the full counting scan."
+        ),
     )
     compute_bbinom_parser.add_argument(
         "-c",
@@ -446,6 +464,16 @@ def main():
         default=1,
         type=int,
         help="Number of worker processes for per-family scipy fits.",
+    )
+    compute_bbinom_parser.add_argument(
+        "--max_histogram_gb",
+        default=3.0,
+        type=float,
+        help=(
+            "Maximum RAM used by one dense family-hit histogram batch. "
+            "Families are split into multiple batches when necessary; "
+            "use 0 for one unbounded batch."
+        ),
     )
     compute_bbinom_parser.add_argument(
         "--log_level",

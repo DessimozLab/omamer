@@ -287,6 +287,7 @@ def search(args):
                 ids=ids_q,
                 top_n_fams=args.top_n_fams,
                 alpha=args.family_alpha,
+                family_correction=args.family_correction,
                 sst=args.threshold,
                 family_only=args.family_only,
                 ref_taxon_off=ref_taxoff,
@@ -473,6 +474,8 @@ def compute_bbinom(args):
             workers=args.fit_workers,
             n_summary_path=args.n_summary_out,
             modality=args.modality,
+            max_histogram_gb=args.max_histogram_gb,
+            n_counts_cache=args.n_counts_cache,
         )
 
 

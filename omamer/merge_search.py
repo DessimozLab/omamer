@@ -21,11 +21,10 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-import sys
 import math
+from collections import namedtuple
 
-from numba.tests.support import captured_stdout
-from numba.typed import List, Dict
+from numba.typed import List
 from property_manager import lazy_property, cached_property
 from time import time
 import numba
@@ -56,6 +55,149 @@ from .hierarchy import (
 
 # maximum neglogp to set
 MAX_LOGP = 20000.0
+
+SEARCH_SEQUENCE = 1
+SEARCH_STRUCTURE = 2
+SEARCH_SEQUENCE_THEN_STRUCTURE = 3
+
+FAMILY_MODEL_BINOMIAL = 1
+FAMILY_MODEL_BETA_BINOMIAL = 2
+
+SequenceBatch = namedtuple("SequenceBatch", ("buffer", "offsets"))
+BetaBinomialModel = namedtuple(
+    "BetaBinomialModel",
+    (
+        "kind",
+        "q_coef",
+        "kappa_coef",
+        "center",
+        "scale",
+        "valid",
+        "n_min",
+        "n_max",
+    ),
+)
+SearchIndex = namedtuple(
+    "SearchIndex",
+    (
+        "table_idx",
+        "table_buff",
+        "family_probability",
+        "hog_probability",
+        "decision_source",
+        "kmer_df_cap",
+        "kmer_filter_max_df",
+        "family_model_kind",
+        "q_coef",
+        "kappa_coef",
+        "center",
+        "scale",
+        "valid",
+        "n_min",
+        "n_max",
+    ),
+)
+RuntimeSearchIndex = namedtuple(
+    "RuntimeSearchIndex",
+    (
+        "table_idx",
+        "table_buff",
+        "family_probability",
+        "hog_probability",
+        "family_model",
+        "decision_source",
+        "kmer_df_cap",
+        "kmer_filter_max_df",
+    ),
+)
+SearchDatabase = namedtuple(
+    "SearchDatabase",
+    ("trans", "k", "digits_lookup", "families", "hogs", "levels"),
+)
+SearchConfig = namedtuple(
+    "SearchConfig",
+    (
+        "mode",
+        "top_n_families",
+        "family_alpha",
+        "family_log_correction",
+        "subfamily_score_threshold",
+        "family_only",
+        "num_threads",
+    ),
+)
+
+# Namedtuple for thread-local arrays used in search.
+# Every thread has these arrays allocated for their
+# search needs beforehand. This is to avoid allocating
+# O(|num_fams|) per-thread everytime search is called.
+SearchScratch = namedtuple(
+    "SearchScratch",
+    (
+        "hit_families",
+        "hit_hogs",
+        "hog_counts",
+        "family_counts",
+        "family_low_location",
+        "family_high_location",
+        "num_hit_families",
+        "num_hit_hogs",
+    ),
+)
+
+def resolve_search_mode(mode, has_sequence, has_structure):
+    if mode in (None, "auto"):
+        if has_sequence and has_structure:
+            return SEARCH_SEQUENCE_THEN_STRUCTURE
+        if has_sequence:
+            return SEARCH_SEQUENCE
+        if has_structure:
+            return SEARCH_STRUCTURE
+        raise ValueError("Search requires sequence or structure queries")
+
+    modes = {
+        "seq": (SEARCH_SEQUENCE, has_sequence),
+        "ss": (SEARCH_STRUCTURE, has_structure),
+        "sqs": (
+            SEARCH_SEQUENCE_THEN_STRUCTURE,
+            has_sequence and has_structure,
+        ),
+    }
+    try:
+        selected, available = modes[mode]
+    except KeyError:
+        raise ValueError(
+            "search_mode must be 'auto', 'seq', 'ss', or 'sqs'"
+        ) from None
+    if not available:
+        raise ValueError(
+            "search_mode={!r} requires matching query data and index".format(
+                mode
+            )
+        )
+    return selected
+
+
+def resolve_family_model(model, has_coefficients):
+    if model == "auto":
+        return (
+            FAMILY_MODEL_BETA_BINOMIAL
+            if has_coefficients
+            else FAMILY_MODEL_BINOMIAL
+        )
+    if model == "binomial":
+        return FAMILY_MODEL_BINOMIAL
+    if model in ("bbinom", "beta-binomial"):
+        if not has_coefficients:
+            raise ValueError(
+                "family_model={!r} requires beta-binomial coefficients".format(
+                    model
+                )
+            )
+        return FAMILY_MODEL_BETA_BINOMIAL
+    raise ValueError(
+        "family_model must be 'auto', 'binomial', or 'bbinom'"
+    )
 
 
 def family_log_correction(policy, n_families):
@@ -116,15 +258,16 @@ def binom_neglogccdf(x, n, p):
 
 
 @numba.njit(nogil=True)
-def has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
+def has_family_bbinom(family_id, model):
     return (
-        valid.size > family_id
-        and q_coef.shape[0] > family_id
-        and kappa_coef.shape[0] > family_id
-        and center.size > family_id
-        and scale.size > family_id
-        and valid[family_id]
-        and scale[family_id] > 0.0
+        model.kind == FAMILY_MODEL_BETA_BINOMIAL
+        and model.valid.size > family_id
+        and model.q_coef.shape[0] > family_id
+        and model.kappa_coef.shape[0] > family_id
+        and model.center.size > family_id
+        and model.scale.size > family_id
+        and model.valid[family_id]
+        and model.scale[family_id] > 0.0
     )
 
 
@@ -146,49 +289,49 @@ def bbinom_eval_n(family_id, n, n_min, n_max):
 
 
 @numba.njit(nogil=True)
-def family_expected_count(family_id, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid, n_min, n_max):
-    if has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
-        n_eval = bbinom_eval_n(family_id, n, n_min, n_max)
+def family_expected_count(family_id, n, family_probability, model):
+    if has_family_bbinom(family_id, model):
+        n_eval = bbinom_eval_n(family_id, n, model.n_min, model.n_max)
         _, _, q = beta_binomial_params_for_n(
             n_eval,
-            q_coef[family_id],
-            kappa_coef[family_id],
-            center[family_id],
-            scale[family_id],
+            model.q_coef[family_id],
+            model.kappa_coef[family_id],
+            model.center[family_id],
+            model.scale[family_id],
         )
         return q * n
-    return ref_fam_prob[family_id] * n
+    return family_probability[family_id] * n
 
 
 @numba.njit(nogil=True)
-def family_bbinom_neglogpmf(family_id, x, n, q_coef, kappa_coef, center, scale, valid, n_min, n_max):
+def family_bbinom_neglogpmf(family_id, x, n, model):
     """
     Single-term (-log P(X = x)) for a Beta-Binomial family.
     """
-    n_eval = bbinom_eval_n(family_id, n, n_min, n_max)
+    n_eval = bbinom_eval_n(family_id, n, model.n_min, model.n_max)
     alpha, beta, _ = beta_binomial_params_for_n(
         n_eval,
-        q_coef[family_id],
-        kappa_coef[family_id],
-        center[family_id],
-        scale[family_id],
+        model.q_coef[family_id],
+        model.kappa_coef[family_id],
+        model.center[family_id],
+        model.scale[family_id],
     )
     return -beta_binomial_logpmf(float(x), float(n), alpha, beta)
 
 
 @numba.njit(nogil=True)
-def family_neglogccdf(family_id, x, n, ref_fam_prob, q_coef, kappa_coef, center, scale, valid, n_min, n_max):
-    if has_family_bbinom(family_id, q_coef, kappa_coef, center, scale, valid):
-        n_eval = bbinom_eval_n(family_id, n, n_min, n_max)
+def family_neglogccdf(family_id, x, n, family_probability, model):
+    if has_family_bbinom(family_id, model):
+        n_eval = bbinom_eval_n(family_id, n, model.n_min, model.n_max)
         alpha, beta, _ = beta_binomial_params_for_n(
             n_eval,
-            q_coef[family_id],
-            kappa_coef[family_id],
-            center[family_id],
-            scale[family_id],
+            model.q_coef[family_id],
+            model.kappa_coef[family_id],
+            model.center[family_id],
+            model.scale[family_id],
         )
         return beta_binomial_neglogccdf(x, n, alpha, beta)
-    return binom_neglogccdf(x, n, ref_fam_prob[family_id])
+    return binom_neglogccdf(x, n, family_probability[family_id])
 
 
 # ----
@@ -487,95 +630,6 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 
 @numba.njit
-def search_seq_kmers_ef(r1, p1, hog_tab, x_flag, table_idx, table_buff, raw_flags,
-                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
-                     hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
-    """
-    Perform the kmer search using the index.
-    """
-    # Reinitialize counters modified by the previous call
-    for i in range(num_hit_fams):
-        family = hit_fams[i]
-        fam_counts[family] = 0
-        fam_lowloc[family] = -1
-        fam_highloc[family] = -1
-
-    for i in range(num_hit_hogs):
-        hog = hit_hogs[i]
-        hog_counts[hog] = 0
-
-    num_hit_fams = 0
-    num_hit_hogs = 0
-
-    select_time = 0
-    bits_time = 0
-
-    start_kmer = 0
-    max_elements = 8192
-    batch_hogs = np.empty(max_elements, dtype=np.uint32)
-
-    sizes = np.empty(len(r1), dtype=np.uint32)
-
-    while start_kmer < len(r1):
-        end_kmer, stime, btime = batch_decode(r1, table_idx, table_buff,
-                                       raw_flags, start_kmer, x_flag, batch_hogs, sizes,
-                                       max_elements=max_elements)
-
-        if end_kmer == start_kmer:
-            max_elements *= 2
-            batch_hogs = np.empty(max_elements, dtype=np.uint32)
-
-        select_time += stime
-        bits_time += btime
-
-        start = 0
-        for i in range(start_kmer, end_kmer):
-            kmer = r1[i]
-            loc = p1[i]
-
-            # to ignore k-mers with X
-            if kmer == x_flag:
-                continue
-
-            # get mapping to HOGs
-            end = start + sizes[i]
-            hogs = batch_hogs[start: end]
-            start = end
-
-            fams = hog_tab["FamOff"][hogs]
-
-            for hog in hogs:
-                if not hog_counts[hog]:
-                    hit_hogs[num_hit_hogs] = hog
-                    num_hit_hogs += 1
-
-                hog_counts[hog] += 1
-
-            for fam_off in fams:
-                if not fam_counts[fam_off]:
-                    hit_fams[num_hit_fams] = fam_off
-                    num_hit_fams += 1
-
-                fam_counts[fam_off] += 1
-
-                # initiate first location
-                if fam_lowloc[fam_off] == -1:
-                    fam_lowloc[fam_off] = loc
-                    fam_highloc[fam_off] = loc
-
-                # update either lower or higher boundary
-                elif loc < fam_lowloc[fam_off]:
-                    fam_lowloc[fam_off] = loc
-                elif loc > fam_highloc[fam_off]:
-                    fam_highloc[fam_off] = loc
-
-        #print(end_kmer, " / ", len(r1))
-        start_kmer = end_kmer
-
-    return num_hit_fams, num_hit_hogs, select_time, bits_time
-
-
-@numba.njit
 def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
                      thread_hog_counts, thread_fam_counts,
                      thread_fam_lowloc, thread_fam_highloc,
@@ -778,44 +832,33 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
 
 @numba.njit
 def place_sequence(
-        family_results,
-        subfam_results,
-        sequence,
-        sequence_id,
-        trans,
-        table_idx,
-        table_buff,
-        k,
-        DIGITS_AA_LOOKUP,
-        fam_tab,
-        hog_tab,
-        level_arr,
-        top_n_fams,
-        ref_fam_prob,
-        ref_hog_prob,
-        fam_bbinom_q_coef,
-        fam_bbinom_kappa_coef,
-        fam_bbinom_center,
-        fam_bbinom_scale,
-        fam_bbinom_valid,
-        fam_bbinom_n_min,
-        fam_bbinom_n_max,
-        decision_source,
-        alpha,
-        family_log_correction,
-        sst,
-        family_only,
-        hit_fams,
-        hit_hogs,
-        hog_counts,
-        fam_counts,
-        fam_lowloc,
-        fam_highloc,
-        num_hit_fams,
-        num_hit_hogs,
-        kmer_df_cap,
-        kmer_filter_max_df,
+    family_results,
+    subfam_results,
+    sequence,
+    sequence_id,
+    database,
+    index,
+    config,
+    scratch,
 ) -> bool:
+    trans = database.trans
+    k = database.k
+    digits_lookup = database.digits_lookup
+    fam_tab = database.families
+    hog_tab = database.hogs
+    level_arr = database.levels
+
+    table_idx = index.table_idx
+    table_buff = index.table_buff
+    ref_fam_prob = index.family_probability
+    ref_hog_prob = index.hog_probability
+    family_model = index.family_model
+
+    top_n_fams = config.top_n_families
+    alpha = config.family_alpha
+    correction_factor = config.family_log_correction
+    sst = config.subfamily_score_threshold
+    family_only = config.family_only
 
     query_len = sequence.shape[0]
     n_kmers = query_len - (k - 1)
@@ -826,7 +869,7 @@ def place_sequence(
         return False
 
     # get sequence k-mers
-    (r1, p1, _) = parse_seq(sequence, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
+    (r1, p1, _) = parse_seq(sequence, digits_lookup, n_kmers, k, trans, x_flag)
 
     # Skip if only one k-mer with X
     if len(r1) > 1:
@@ -835,14 +878,15 @@ def place_sequence(
         return False
 
     # Get thread-local data structures for search
-    thread_hit_fams = hit_fams[numba.get_thread_id()]
-    thread_hit_hogs = hit_hogs[numba.get_thread_id()]
-    thread_hog_counts = hog_counts[numba.get_thread_id()]
-    thread_fam_counts = fam_counts[numba.get_thread_id()]
-    thread_fam_lowloc = fam_lowloc[numba.get_thread_id()]
-    thread_fam_highloc = fam_highloc[numba.get_thread_id()]
-    thread_num_hit_fams = num_hit_fams[numba.get_thread_id()]
-    thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
+    thread_id = numba.get_thread_id()
+    thread_hit_fams = scratch.hit_families[thread_id]
+    thread_hit_hogs = scratch.hit_hogs[thread_id]
+    thread_hog_counts = scratch.hog_counts[thread_id]
+    thread_fam_counts = scratch.family_counts[thread_id]
+    thread_fam_lowloc = scratch.family_low_location[thread_id]
+    thread_fam_highloc = scratch.family_high_location[thread_id]
+    thread_num_hit_fams = scratch.num_hit_families[thread_id]
+    thread_num_hit_hogs = scratch.num_hit_hogs[thread_id]
 
     thread_num_hit_fams, thread_num_hit_hogs, n_skipped = search_seq_kmers(
         r1,
@@ -859,12 +903,12 @@ def place_sequence(
         thread_num_hit_fams,
         thread_hit_hogs,
         thread_num_hit_hogs,
-        kmer_df_cap,
-        kmer_filter_max_df,
+        index.kmer_df_cap,
+        index.kmer_filter_max_df,
     )
 
-    num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
-    num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
+    scratch.num_hit_families[thread_id] = thread_num_hit_fams
+    scratch.num_hit_hogs[thread_id] = thread_num_hit_hogs
 
     # Identify families of interest
     idx = thread_hit_fams[:thread_num_hit_fams]
@@ -881,7 +925,7 @@ def place_sequence(
     # k-mers dropped by either the document-frequency cap or the information
     # filter (n_skipped is 0 when neither filter is enabled).
     n = len(r1) - n_skipped
-    if fam_bbinom_valid.size == 0:
+    if family_model.kind == FAMILY_MODEL_BINOMIAL:
         # For the binomial model, expected k-mer count is simply p_fam * n
         expected_count = ref_fam_prob[qres["id"]] * n
     else:
@@ -893,13 +937,7 @@ def place_sequence(
                 family_id,
                 n,
                 ref_fam_prob,
-                fam_bbinom_q_coef,
-                fam_bbinom_kappa_coef,
-                fam_bbinom_center,
-                fam_bbinom_scale,
-                fam_bbinom_valid,
-                fam_bbinom_n_min,
-                fam_bbinom_n_max,
+                family_model,
             )
     qres = qres[qres["count"] >= expected_count]
 
@@ -926,19 +964,11 @@ def place_sequence(
     k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
     alpha_neglog = -np.log(alpha)
-    correction_factor = family_log_correction
     p = ref_fam_prob[qres["id"]]
     keep = np.full(len(qres), True)
     for i in range(len(qres)):
         family_id = qres["id"][i]
-        if has_family_bbinom(
-            family_id,
-            fam_bbinom_q_coef,
-            fam_bbinom_kappa_coef,
-            fam_bbinom_center,
-            fam_bbinom_scale,
-            fam_bbinom_valid,
-        ):
+        if has_family_bbinom(family_id, family_model):
             # If Beta-Binomial is used, use the 1-pmf-value filter:
             #       P(X >= k) >= P(X = k)
             # The exact p-value (step 3) keeps a family only when
@@ -955,13 +985,7 @@ def place_sequence(
                 family_id,
                 qres["count"][i],
                 n,
-                fam_bbinom_q_coef,
-                fam_bbinom_kappa_coef,
-                fam_bbinom_center,
-                fam_bbinom_scale,
-                fam_bbinom_valid,
-                fam_bbinom_n_min,
-                fam_bbinom_n_max,
+                family_model,
             )
             keep[i] = (neglogpmf_ub - correction_factor) >= alpha_neglog
         else:
@@ -987,13 +1011,7 @@ def place_sequence(
             qres["count"][i],
             n,
             ref_fam_prob,
-            fam_bbinom_q_coef,
-            fam_bbinom_kappa_coef,
-            fam_bbinom_center,
-            fam_bbinom_scale,
-            fam_bbinom_valid,
-            fam_bbinom_n_min,
-            fam_bbinom_n_max,
+            family_model,
         )
         qres["pvalue"][i] = min(
             float(MAX_LOGP),
@@ -1013,7 +1031,7 @@ def place_sequence(
         return False
 
     # 4. Compute normalized count
-    if fam_bbinom_valid.size == 0:
+    if family_model.kind == FAMILY_MODEL_BINOMIAL:
         expected_count = ref_fam_prob[qres["id"]] * n
     else:
         expected_count = np.empty(len(qres), dtype=np.float64)
@@ -1023,13 +1041,7 @@ def place_sequence(
                 family_id,
                 n,
                 ref_fam_prob,
-                fam_bbinom_q_coef,
-                fam_bbinom_kappa_coef,
-                fam_bbinom_center,
-                fam_bbinom_scale,
-                fam_bbinom_valid,
-                fam_bbinom_n_min,
-                fam_bbinom_n_max,
+                family_model,
             )
     qres["normcount"][:] = (qres["count"] - expected_count) / (
            n - expected_count
@@ -1045,7 +1057,9 @@ def place_sequence(
     family_results["count"][sequence_id, :top_n_fams] = qres["count"][:top_n_fams]
     family_results["normcount"][sequence_id, :top_n_fams] = qres["normcount"][:top_n_fams]
     family_results["overlap"][sequence_id, :top_n_fams] = qres["overlap"][:top_n_fams]
-    family_results["decision_source"][sequence_id, :top_n_fams] = decision_source
+    family_results["decision_source"][
+        sequence_id, :top_n_fams
+    ] = index.decision_source
 
     # 5. Place within families
     for i in range(min(len(qres), top_n_fams)):
@@ -1094,6 +1108,75 @@ def place_sequence(
 
     return True
 
+
+@numba.njit(inline="always")
+def dispatch_sequence(
+    family_results,
+    subfam_results,
+    sequence,
+    sequence_id,
+    database,
+    index,
+    config,
+    scratch,
+):
+    family_model = BetaBinomialModel(
+        index.family_model_kind,
+        index.q_coef,
+        index.kappa_coef,
+        index.center,
+        index.scale,
+        index.valid,
+        index.n_min,
+        index.n_max,
+    )
+    runtime_index = RuntimeSearchIndex(
+        index.table_idx,
+        index.table_buff,
+        index.family_probability,
+        index.hog_probability,
+        family_model,
+        index.decision_source,
+        index.kmer_df_cap,
+        index.kmer_filter_max_df,
+    )
+    runtime_database = SearchDatabase(
+        database.trans,
+        database.k,
+        database.digits_lookup,
+        database.families,
+        database.hogs,
+        database.levels,
+    )
+    runtime_config = SearchConfig(
+        config.mode,
+        config.top_n_families,
+        config.family_alpha,
+        config.family_log_correction,
+        config.subfamily_score_threshold,
+        config.family_only,
+        config.num_threads,
+    )
+    runtime_scratch = SearchScratch(
+        scratch.hit_families,
+        scratch.hit_hogs,
+        scratch.hog_counts,
+        scratch.family_counts,
+        scratch.family_low_location,
+        scratch.family_high_location,
+        scratch.num_hit_families,
+        scratch.num_hit_hogs,
+    )
+    return place_sequence(
+        family_results,
+        subfam_results,
+        sequence,
+        sequence_id,
+        runtime_database,
+        runtime_index,
+        runtime_config,
+        runtime_scratch,
+    )
 
 
 class MergeSearch(object):
@@ -1339,6 +1422,72 @@ class MergeSearch(object):
     def _empty_bool(self):
         return np.empty(0, dtype=np.bool_)
 
+    def _family_model(self, modality, policy):
+        if policy == "binomial":
+            return BetaBinomialModel(
+                FAMILY_MODEL_BINOMIAL,
+                self._empty_f64_2d,
+                self._empty_f64_2d,
+                self._empty_f64,
+                self._empty_f64,
+                self._empty_bool,
+                self._empty_u32,
+                self._empty_u32,
+            )
+
+        if modality == "seq":
+            model = BetaBinomialModel(
+                FAMILY_MODEL_BETA_BINOMIAL,
+                self.ref_fam_bbinom_q_coef,
+                self.ref_fam_bbinom_kappa_coef,
+                self.ref_fam_bbinom_center,
+                self.ref_fam_bbinom_scale,
+                self.ref_fam_bbinom_valid,
+                self.ref_fam_bbinom_n_min,
+                self.ref_fam_bbinom_n_max,
+            )
+        else:
+            model = BetaBinomialModel(
+                FAMILY_MODEL_BETA_BINOMIAL,
+                self.ss_ref_fam_bbinom_q_coef,
+                self.ss_ref_fam_bbinom_kappa_coef,
+                self.ss_ref_fam_bbinom_center,
+                self.ss_ref_fam_bbinom_scale,
+                self.ss_ref_fam_bbinom_valid,
+                self.ss_ref_fam_bbinom_n_min,
+                self.ss_ref_fam_bbinom_n_max,
+            )
+
+        kind = resolve_family_model(
+            policy,
+            model.valid.size > 0 and np.any(model.valid),
+        )
+        return model._replace(kind=kind)
+
+    def _search_index(self, modality, family_model, kmer_df_cap=0):
+        if modality == "seq":
+            model = self._family_model("seq", family_model)
+            return SearchIndex(
+                self.kmer_table["idx"],
+                self.kmer_table["buff"],
+                self.ref_fam_prob,
+                self.ref_hog_prob,
+                SEARCH_SEQUENCE,
+                np.int64(kmer_df_cap),
+                np.int64(self.ki.kmer_max_df),
+                *model,
+            )
+        model = self._family_model("ss", family_model)
+        return SearchIndex(
+            self.ss_kmer_table["idx"],
+            self.ss_kmer_table["buff"],
+            self.ss_ref_fam_prob,
+            self.ss_ref_hog_prob,
+            SEARCH_STRUCTURE,
+            np.int64(kmer_df_cap),
+            np.int64(self.ki.ss_kmer_max_df),
+            *model,
+        )
 
     def merge_search(
         self,
@@ -1352,15 +1501,43 @@ class MergeSearch(object):
         family_only=False,
         ref_taxon_off=None,
         ss_kmer_df_cap=0,
+        search_mode="auto",
+        family_model="auto",
     ):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
-
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
-        use_structure = self.has_structure and len(struct_seqs) > 0
-        log_correction = family_log_correction(
-            family_correction,
-            self.fam_tab.size,
+
+
+        has_sequence = len(seqs) > 0
+        has_structure = self.has_structure and len(struct_seqs) > 0
+        mode = resolve_search_mode(search_mode, has_sequence, has_structure)
+
+
+        database = SearchDatabase(self.trans, self.ki.k, self.ki.alphabet.DIGITS_AA_LOOKUP, self.fam_tab,
+                                  self.hog_tab, self.level_arr)
+
+        # prepare namedtuple Indexes for seq/ss
+        sequence_index = (self._search_index("seq", family_model)
+                          if mode != SEARCH_STRUCTURE
+                          else None)
+        structure_index = (self._search_index("ss", family_model, kmer_df_cap=ss_kmer_df_cap,)
+                           if mode != SEARCH_SEQUENCE
+                           else None)
+
+        if sequence_index is None:
+            sequence_index = structure_index
+        if structure_index is None:
+            structure_index = sequence_index
+
+        config = SearchConfig(
+            mode,
+            top_n_fams,
+            alpha,
+            family_log_correction(family_correction, self.fam_tab.size,),
+            sst,
+            family_only,
+            numba.get_num_threads(),
         )
 
         data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
@@ -1372,14 +1549,11 @@ class MergeSearch(object):
                 [
                     ("id", np.uint32),
                     ("pvalue", np.float64),
-                    ("ss_pvalue", np.float64),
                     ("count", np.uint32),
-                    ("ss_count", np.uint32),
                     ("score", np.uint32),
-                    ("ss_score", np.uint32),
                     ("normcount", np.float64),
                     ("overlap", np.float64),
-                    ("decision_source", np.uint8),
+                    ("modality", np.uint8),
                 ]
             ),
         )
@@ -1390,70 +1564,10 @@ class MergeSearch(object):
             ),
         )
 
-        #np.savetxt("table_idx.txt", self.kmer_table["idx"], fmt="%d")
-        #np.savetxt("ss_table_idx.txt", self.ss_kmer_table["idx"], fmt="%d")
-
-        # perform the search. arguments are given like this as we are using numba.
-        self._lookup(
-            family_results,
-            subfam_results,
-            sbuff.buff,
-            sbuff.idx,
-            ssbuff.buff,
-            ssbuff.idx,
-            self.trans,
-            self.kmer_table["idx"],
-            self.kmer_table["buff"],
-            self.kmer_table["raw_flags"],
-            self.ss_kmer_table["idx"] if use_structure else self._empty_u32,
-            self.ss_kmer_table["buff"] if use_structure else self._empty_u32,
-            self.ki.k,
-            self.ki.alphabet.DIGITS_AA_LOOKUP,
-            self.fam_tab,
-            self.hog_tab,
-            self.level_arr,
-            top_n_fams=top_n_fams,
-            ref_fam_prob=self.ref_fam_prob,
-            ref_hog_prob=self.ref_hog_prob,
-            ref_fam_bbinom_q_coef=self.ref_fam_bbinom_q_coef,
-            ref_fam_bbinom_kappa_coef=self.ref_fam_bbinom_kappa_coef,
-            ref_fam_bbinom_center=self.ref_fam_bbinom_center,
-            ref_fam_bbinom_scale=self.ref_fam_bbinom_scale,
-            ref_fam_bbinom_valid=self.ref_fam_bbinom_valid,
-            ref_fam_bbinom_n_min=self.ref_fam_bbinom_n_min,
-            ref_fam_bbinom_n_max=self.ref_fam_bbinom_n_max,
-            kmer_filter_max_df=np.int64(self.ki.kmer_max_df),
-            ss_ref_fam_prob=self.ss_ref_fam_prob if use_structure else self._empty_f64,
-            ss_ref_hog_prob=self.ss_ref_hog_prob if use_structure else self._empty_f64,
-            ss_ref_fam_bbinom_q_coef=(
-                self.ss_ref_fam_bbinom_q_coef if use_structure else self._empty_f64_2d
-            ),
-            ss_ref_fam_bbinom_kappa_coef=(
-                self.ss_ref_fam_bbinom_kappa_coef if use_structure else self._empty_f64_2d
-            ),
-            ss_ref_fam_bbinom_center=(
-                self.ss_ref_fam_bbinom_center if use_structure else self._empty_f64
-            ),
-            ss_ref_fam_bbinom_scale=(
-                self.ss_ref_fam_bbinom_scale if use_structure else self._empty_f64
-            ),
-            ss_ref_fam_bbinom_valid=(
-                self.ss_ref_fam_bbinom_valid if use_structure else self._empty_bool
-            ),
-            ss_ref_fam_bbinom_n_min=(
-                self.ss_ref_fam_bbinom_n_min if use_structure else self._empty_u32
-            ),
-            ss_ref_fam_bbinom_n_max=(
-                self.ss_ref_fam_bbinom_n_max if use_structure else self._empty_u32
-            ),
-            ss_kmer_filter_max_df=np.int64(self.ki.ss_kmer_max_df),
-            alpha=alpha,
-            family_log_correction=log_correction,
-            sst=sst,
-            family_only=family_only,
-            ss_kmer_df_cap=np.int64(ss_kmer_df_cap),
-            num_threads=numba.get_num_threads(),
-        )
+        self._lookup(family_results, subfam_results,
+                     SequenceBatch(sbuff.buff, sbuff.idx),
+                     SequenceBatch(ssbuff.buff, ssbuff.idx),
+                     database, sequence_index, structure_index, config)
 
         t1 = time()
         td = max((t1 - t0), 1e-3)
@@ -1611,11 +1725,11 @@ class MergeSearch(object):
         subfamily_medianseqlen[unplaced] = pd.NA
         subfamily_medianseqlen[placed_rows] = self.hog_tab["MedianSeqLen"][placed_hogs]
 
-        decision_raw = family_results["decision_source"][qseq_off, rank_off]
-        decision_source = np.empty(nrows, dtype=object)
-        decision_source[:] = pd.NA
-        decision_source[decision_raw == 1] = "seq"
-        decision_source[decision_raw == 2] = "ss"
+        decision_raw = family_results["modality"][qseq_off, rank_off]
+        modality = np.empty(nrows, dtype=object)
+        modality[:] = pd.NA
+        modality[decision_raw == 1] = "seq"
+        modality[decision_raw == 2] = "ss"
 
         data = {
             "qseqid": qseqid,
@@ -1626,13 +1740,7 @@ class MergeSearch(object):
             "family_normcount": float_with_na(
                 family_results["normcount"][qseq_off, rank_off]
             ),
-            "decision_source": decision_source,
-            "ss_count": float_with_na(
-                family_results["ss_count"][qseq_off, rank_off].astype(np.float64)
-            ),
-            "ss_family_p": float_with_na(
-                family_results["ss_pvalue"][qseq_off, rank_off]
-            ),
+            "modality": modality,
             "subfamily_score": float_with_na(
                 subfam_results["score"][qseq_off, rank_off]
             ),
@@ -1687,174 +1795,66 @@ class MergeSearch(object):
     @lazy_property
     def _lookup(self):
         def func(
-                family_results,
-                subfam_results,
-                seqs,
-                seqs_idx,
-                ss_seqs,
-                ss_seqs_idx,
-                trans,
-                table_idx,
-                table_buff,
-                raw_flags,
-                ss_table_idx,
-                ss_table_buff,
-                k,
-                DIGITS_AA_LOOKUP,
-                fam_tab,
-                hog_tab,
-                level_arr,
-                top_n_fams,
-                ref_fam_prob,
-                ref_hog_prob,
-                ref_fam_bbinom_q_coef,
-                ref_fam_bbinom_kappa_coef,
-                ref_fam_bbinom_center,
-                ref_fam_bbinom_scale,
-                ref_fam_bbinom_valid,
-                ref_fam_bbinom_n_min,
-                ref_fam_bbinom_n_max,
-                kmer_filter_max_df,
-                ss_ref_fam_prob,
-                ss_ref_hog_prob,
-                ss_ref_fam_bbinom_q_coef,
-                ss_ref_fam_bbinom_kappa_coef,
-                ss_ref_fam_bbinom_center,
-                ss_ref_fam_bbinom_scale,
-                ss_ref_fam_bbinom_valid,
-                ss_ref_fam_bbinom_n_min,
-                ss_ref_fam_bbinom_n_max,
-                ss_kmer_filter_max_df,
-                alpha,
-                family_log_correction,
-                sst,
-                family_only,
-                ss_kmer_df_cap,
-                num_threads,
+            family_results,
+            subfam_results,
+            sequences,
+            structures,
+            database,
+            sequence_index,
+            structure_index,
+            config,
         ):
-            has_structure_index = (
-                (ss_table_idx.size > 0)
-                and (ss_table_buff.size > 0)
-                and (ss_ref_fam_prob.size > 0)
-                and (ss_ref_hog_prob.size > 0)
+            scratch = SearchScratch(
+                np.zeros((config.num_threads, database.families.size), dtype=np.int32,),
+                np.zeros((config.num_threads, database.hogs.size), dtype=np.int32,),
+                np.zeros((config.num_threads, database.hogs.size), dtype=np.uint16,),
+                np.zeros((config.num_threads, database.families.size), dtype=np.uint16,),
+                np.full((config.num_threads, database.families.size), -1, dtype=np.int32,),
+                np.full((config.num_threads, database.families.size), -1, dtype=np.int32,),
+                np.zeros(config.num_threads, dtype=np.uint32),
+                np.zeros(config.num_threads, dtype=np.uint32),
             )
 
-            only_structure = (len(seqs) == 0) and (len(ss_seqs) > 0) and has_structure_index
-            only_sequence = (len(seqs) > 0) and ((len(ss_seqs) == 0) or not has_structure_index)
-
-            # Arrays for thread-local data. We allocate them
-            # in advance to avoid doing so for every query.
-            # num_threads is passed in (computed by the caller with
-            # numba.get_num_threads()) rather than called here: that threading-
-            # layer intrinsic embeds a runtime function pointer, which numba
-            # counts as a "dynamic global" and would make this kernel
-            # non-cacheable, forcing a full recompile on every process start.
-            hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
-            fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
-            fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
-            hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
-            num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
-            num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
-
-            # choose what prange will iterate over, sequence or
-            # structure records. By default, it's sequence if present
-            n_iter = len(ss_seqs_idx) - 1 if only_structure else len(seqs_idx) - 1
+            n_iter = (
+                structures.offsets.size - 1
+                if config.mode == SEARCH_STRUCTURE
+                else sequences.offsets.size - 1
+            )
 
             for sequence_id in numba.prange(n_iter):
                 placed = False
-                if not only_structure:
-                    # extract the sequence from the sequence buffer
-                    sequence = seqs[seqs_idx[sequence_id]: np.int64(seqs_idx[sequence_id + 1] - 1)]
-
-                    placed = place_sequence(
+                if config.mode != SEARCH_STRUCTURE:
+                    sequence = sequences.buffer[
+                        sequences.offsets[sequence_id] : np.int64(
+                            sequences.offsets[sequence_id + 1] - 1
+                        )
+                    ]
+                    placed = dispatch_sequence(
                         family_results,
                         subfam_results,
                         sequence,
                         sequence_id,
-                        trans,
-                        table_idx,
-                        table_buff,
-                        k,
-                        DIGITS_AA_LOOKUP,
-                        fam_tab,
-                        hog_tab,
-                        level_arr,
-                        top_n_fams,
-                        ref_fam_prob,
-                        ref_hog_prob,
-                        ref_fam_bbinom_q_coef,
-                        ref_fam_bbinom_kappa_coef,
-                        ref_fam_bbinom_center,
-                        ref_fam_bbinom_scale,
-                        ref_fam_bbinom_valid,
-                        ref_fam_bbinom_n_min,
-                        ref_fam_bbinom_n_max,
-                        1,
-                        alpha,
-                        family_log_correction,
-                        sst,
-                        family_only,
-                        hit_fams,
-                        hit_hogs,
-                        hog_counts,
-                        fam_counts,
-                        fam_lowloc,
-                        fam_highloc,
-                        num_hit_fams,
-                        num_hit_hogs,
-                        0,  # never cap the sequence (protein) k-mer search
-                        kmer_filter_max_df,
+                        database,
+                        sequence_index,
+                        config,
+                        scratch,
                     )
 
-                if has_structure_index and not only_sequence and not placed:
-                    structure = ss_seqs[
-                        ss_seqs_idx[sequence_id] : np.int64(ss_seqs_idx[sequence_id + 1] - 1)
+                if config.mode != SEARCH_SEQUENCE and not placed:
+                    structure = structures.buffer[
+                        structures.offsets[sequence_id] : np.int64(
+                            structures.offsets[sequence_id + 1] - 1
+                        )
                     ]
-                    place_sequence(
+                    dispatch_sequence(
                         family_results,
                         subfam_results,
                         structure,
                         sequence_id,
-                        trans,
-                        ss_table_idx,
-                        ss_table_buff,
-                        k,
-                        DIGITS_AA_LOOKUP,
-                        fam_tab,
-                        hog_tab,
-                        level_arr,
-                        top_n_fams,
-                        ss_ref_fam_prob,
-                        ss_ref_hog_prob,
-                        ss_ref_fam_bbinom_q_coef,
-                        ss_ref_fam_bbinom_kappa_coef,
-                        ss_ref_fam_bbinom_center,
-                        ss_ref_fam_bbinom_scale,
-                        ss_ref_fam_bbinom_valid,
-                        ss_ref_fam_bbinom_n_min,
-                        ss_ref_fam_bbinom_n_max,
-                        2,
-                        alpha,
-                        family_log_correction,
-                        sst,
-                        family_only,
-                        hit_fams,
-                        hit_hogs,
-                        hog_counts,
-                        fam_counts,
-                        fam_lowloc,
-                        fam_highloc,
-                        num_hit_fams,
-                        num_hit_hogs,
-                        ss_kmer_df_cap,
-                        ss_kmer_filter_max_df,
+                        database,
+                        structure_index,
+                        config,
+                        scratch,
                     )
 
-        # import psutil
-        # process = psutil.Process()
-        # print(f"Memory: {process.memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
-
-        #return func
         return numba.jit(func, parallel=True, nopython=True, nogil=True, cache=True)

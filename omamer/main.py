@@ -219,6 +219,18 @@ def main():
         help="Path to FASTA formatted 3di sequences",
         type=str,
     )
+    search_parser.add_argument(
+        "--search_mode",
+        choices=("auto", "seq", "ss", "sqs"),
+        default="auto",
+        help="Query strategy: sequence, structure, or sequence with structure fallback.",
+    )
+    search_parser.add_argument(
+        "--family_model",
+        choices=("auto", "binomial", "bbinom"),
+        default="auto",
+        help="Family significance model. Auto uses stored beta-binomial coefficients when available.",
+    )
 
     search_parser.add_argument(
         "--threshold",

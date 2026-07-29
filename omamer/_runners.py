@@ -213,7 +213,13 @@ def search(args):
     else:
         ref_taxoff = None
 
-    _ensure_data_loaded(ms, load_structure=bool(args.structure))
+    _ensure_data_loaded(
+        ms,
+        load_structure=(
+            bool(args.structure)
+            and getattr(args, "search_mode", "auto") != "seq"
+        ),
+    )
 
     search_times = []
 
@@ -292,6 +298,8 @@ def search(args):
                 family_only=args.family_only,
                 ref_taxon_off=ref_taxoff,
                 ss_kmer_df_cap=args.df_cap,
+                search_mode=getattr(args, "search_mode", "auto"),
+                family_model=getattr(args, "family_model", "auto"),
             )
             t_search1 = time()
 

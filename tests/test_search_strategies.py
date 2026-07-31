@@ -1,3 +1,5 @@
+from itertools import combinations
+
 import numba
 import numpy as np
 import pytest
@@ -7,20 +9,43 @@ from omamer.merge_search import (
     SEARCH_SEQUENCE,
     SEARCH_SEQUENCE_THEN_STRUCTURE,
     SEARCH_STRUCTURE,
+    KmerIndex,
+    LookupConfig,
     MergeSearch,
-    SearchConfig,
+    PlacementConfig,
     SearchDatabase,
+    SearchScratch,
     SequenceBatch,
-    dispatch_sequence,
-    make_search_index,
+    make_kmer_index,
     place_sequence,
     resolve_search_mode,
 )
 from omamer.stat_models import (
     FamilyModel,
+    FamilyModelParameters,
+    FamilyScoringParameters,
+    HogModelParameters,
     get_family_model,
     make_family_model,
 )
+
+
+def test_search_carriers_have_disjoint_fields():
+    carriers = (
+        SequenceBatch,
+        KmerIndex,
+        SearchDatabase,
+        LookupConfig,
+        PlacementConfig,
+        SearchScratch,
+        FamilyModelParameters,
+        FamilyScoringParameters,
+        HogModelParameters,
+    )
+
+    for left, right in combinations(carriers, 2):
+        overlap = set(left._fields) & set(right._fields)
+        assert not overlap, (left.__name__, right.__name__, overlap)
 
 
 @pytest.mark.parametrize(
@@ -93,14 +118,11 @@ def test_lookup_compiles_and_dispatches_search_strategies():
     family_probability = np.array([1e-6])
     model = make_family_model("binomial", family_probability)
     n_codes = alphabet.n**k
-    full_index = make_search_index(
+    full_index = make_kmer_index(
         np.arange(n_codes + 1, dtype=np.uint32),
         np.zeros(n_codes, dtype=np.uint32),
-        np.array([1e-6]),
         SEARCH_SEQUENCE,
         0,
-        0,
-        model,
     )
     empty_index = full_index._replace(
         table_idx=np.zeros(n_codes + 1, dtype=np.uint32),
@@ -133,6 +155,9 @@ def test_lookup_compiles_and_dispatches_search_strategies():
     structure_index = full_index._replace(
         modality=SEARCH_STRUCTURE
     )
+    hog_model = HogModelParameters(np.array([1e-6]))
+    placement = PlacementConfig(1, 0.1, True)
+    family_scoring = FamilyScoringParameters(0.0, 0.0)
     kernel = object.__new__(MergeSearch)._lookup
 
     strategies = (
@@ -154,15 +179,7 @@ def test_lookup_compiles_and_dispatches_search_strategies():
             (1, 1),
             dtype=subfamily_result_dtype,
         )
-        config = SearchConfig(
-            mode,
-            1,
-            0.0,
-            0.0,
-            0.1,
-            True,
-            numba.get_num_threads(),
-        )
+        lookup_config = LookupConfig(mode, numba.get_num_threads())
         kernel(
             family_results,
             subfamily_results,
@@ -170,8 +187,14 @@ def test_lookup_compiles_and_dispatches_search_strategies():
             batch,
             database,
             sequence_index,
+            model,
+            hog_model,
             ss_index,
-            config,
+            model,
+            hog_model,
+            lookup_config,
+            placement,
+            family_scoring,
         )
         assert family_results["id"][0, 0] == 1
         assert (
@@ -181,5 +204,4 @@ def test_lookup_compiles_and_dispatches_search_strategies():
 
     assert kernel.nopython_signatures
     assert kernel.targetoptions["nogil"]
-    assert dispatch_sequence.targetoptions["nogil"]
     assert place_sequence.targetoptions["nogil"]

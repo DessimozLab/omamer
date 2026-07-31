@@ -36,7 +36,12 @@ from omamer.stat_models import (
 )
 from omamer.compression import ctz, naive_ctz, popcount, select1_in_word
 from omamer.compression import to_elias_fano, from_elias_fano
-from omamer.merge_search import search_seq_kmers
+from omamer.merge_search import (
+    SEARCH_SEQUENCE,
+    SearchScratch,
+    make_kmer_index,
+    search_seq_kmers,
+)
 
 
 def popcount_naive(x):
@@ -99,24 +104,33 @@ def test_search_uses_build_time_document_frequency_cutoff():
     hit_fams = np.zeros(2, dtype=np.int32)
     hit_hogs = np.zeros(3, dtype=np.int32)
 
-    n_fams, n_hogs, n_skipped = search_seq_kmers(
+    index = make_kmer_index(
+        table_idx,
+        table_buff,
+        SEARCH_SEQUENCE,
+        1,
+    )
+    scratch = SearchScratch(
+        hit_fams[np.newaxis, :],
+        hit_hogs[np.newaxis, :],
+        hog_counts[np.newaxis, :],
+        fam_counts[np.newaxis, :],
+        fam_lowloc[np.newaxis, :],
+        fam_highloc[np.newaxis, :],
+        np.zeros(1, dtype=np.uint32),
+        np.zeros(1, dtype=np.uint32),
+    )
+    n_skipped = search_seq_kmers(
         np.asarray([0, 1, 2, 3], dtype=np.uint32),
         np.asarray([0, 1, 2, 3], dtype=np.uint32),
         hog_tab,
         np.uint32(4),
-        table_idx,
-        table_buff,
-        hog_counts,
-        fam_counts,
-        fam_lowloc,
-        fam_highloc,
-        hit_fams,
+        index,
+        scratch,
         0,
-        hit_hogs,
-        0,
-        0,
-        1,
     )
+    n_fams = scratch.num_hit_families[0]
+    n_hogs = scratch.num_hit_hogs[0]
 
     # Code 1 has df=2 and is filtered. The absent code 2 remains a trial but
     # has no postings, matching the beta-binomial fitting convention.

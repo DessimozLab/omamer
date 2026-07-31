@@ -47,11 +47,11 @@ from .hierarchy import (
 from .index import cumulate_counts_1fam
 from .sequence_buffer import SequenceBuffer
 from .stat_models import (
+    FamilyScoringParameters,
+    HogModelParameters,
     family_log_correction,
     filter_family_candidates,
     make_family_model,
-    make_runtime_family_model,
-    make_runtime_family_scoring,
     score_family_candidates,
 )
 
@@ -77,107 +77,53 @@ def select_from_batch(batch: SequenceBatch, seq_id: int):
     ]
 
 
-# The parallel-kernel boundary must remain flat for Numba's gufunc lowering.
-# ``dispatch_sequence`` reconstructs the nested runtime model inside prange.
-SearchIndex = namedtuple(
-    "SearchIndex",
+# Modality-specific k-mer data. Statistical models are separate arguments at
+# the parallel-kernel boundary, keeping ownership non-overlapping without
+# nesting array-bearing namedtuples (which Numba's gufunc lowering rejects).
+KmerIndex = namedtuple(
+    "KmerIndex",
     (
         "table_idx",
         "table_buff",
-        "family_probability",
-        "hog_probability",
         "modality",
-        "kmer_df_cap",
         "kmer_filter_max_df",
-        "family_model_kind",
-        "q_coef",
-        "kappa_coef",
-        "center",
-        "scale",
-        "valid",
-        "n_min",
-        "n_max",
     ),
 )
 
 
-def make_search_index(
+def make_kmer_index(
     table_idx,
     table_buff,
-    hog_probability,
     modality,
-    kmer_df_cap,
     kmer_filter_max_df,
-    family_model,
 ):
-    return SearchIndex(
+    return KmerIndex(
         table_idx,
         table_buff,
-        family_model.probability,
-        hog_probability,
         modality,
-        np.int64(kmer_df_cap),
         np.int64(kmer_filter_max_df),
-        family_model.kind,
-        family_model.q_coef,
-        family_model.kappa_coef,
-        family_model.center,
-        family_model.scale,
-        family_model.valid,
-        family_model.n_min,
-        family_model.n_max,
     )
 
-
-RuntimeSearchIndex = namedtuple(
-    "RuntimeSearchIndex",
-    (
-        "table_idx",
-        "table_buff",
-        "hog_probability",
-        "family_model",
-        "modality",
-        "kmer_df_cap",
-        "kmer_filter_max_df",
-    ),
-)
-
-@numba.njit(nogil=True, inline="always")
-def make_runtime_search_index(index, family_model):
-    return RuntimeSearchIndex(
-        index.table_idx,
-        index.table_buff,
-        index.hog_probability,
-        family_model,
-        index.modality,
-        index.kmer_df_cap,
-        index.kmer_filter_max_df,
-    )
 
 SearchDatabase = namedtuple(
     "SearchDatabase",
     ("trans", "k", "digits_lookup", "families", "hogs", "levels"),
 )
 
-SearchConfig = namedtuple(
-    "SearchConfig",
+
+LookupConfig = namedtuple(
+    "LookupConfig",
     (
         "mode",
-        "top_n_families",
-        "family_neglog_alpha",
-        "family_log_correction",
-        "subfamily_score_threshold",
-        "family_only",
         "num_threads",
     ),
 )
 
-RuntimeSearchConfig = namedtuple(
-    "RuntimeSearchConfig",
+
+PlacementConfig = namedtuple(
+    "PlacementConfig",
     (
-        "mode",
         "top_n_families",
-        "family_scoring",
         "subfamily_score_threshold",
         "family_only",
     ),
@@ -201,6 +147,7 @@ SearchScratch = namedtuple(
     ),
 )
 ################################################################################
+
 
 def resolve_search_mode(mode, has_sequence, has_structure):
     if mode in (None, "auto"):
@@ -359,15 +306,23 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 
 @numba.njit(nogil=True)
-def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
-                     thread_hog_counts, thread_fam_counts,
-                     thread_fam_lowloc, thread_fam_highloc,
-                     thread_hit_fams, thread_num_hit_fams,
-                     thread_hit_hogs, thread_num_hit_hogs,
-                     kmer_df_cap, kmer_filter_max_df):
+def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
     """
     Perform the kmer search, using the index.
     """
+    table_idx = index.table_idx
+    table_buff = index.table_buff
+    kmer_filter_max_df = index.kmer_filter_max_df
+
+    thread_hog_counts = scratch.hog_counts[thread_id]
+    thread_fam_counts = scratch.family_counts[thread_id]
+    thread_fam_lowloc = scratch.family_low_location[thread_id]
+    thread_fam_highloc = scratch.family_high_location[thread_id]
+    thread_hit_fams = scratch.hit_families[thread_id]
+    thread_hit_hogs = scratch.hit_hogs[thread_id]
+    thread_num_hit_fams = scratch.num_hit_families[thread_id]
+    thread_num_hit_hogs = scratch.num_hit_hogs[thread_id]
+
     # Reinitialize counters modified by the previous call
     for i in range(thread_num_hit_fams):
         family = thread_hit_fams[i]
@@ -408,14 +363,6 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
             n_skipped += 1
             continue
 
-        # skip promiscuous "stop-k-mers" when a document-frequency cap is set.
-        # These are also removed from the effective query length (n_skipped),
-        # so the count/length ratios stay calibrated.
-        # If cap = 0, skip this step.
-        if 0 < kmer_df_cap < df:
-            n_skipped += 1
-            continue
-
         # Single fused pass over the k-mer's HOGs. Each HOG maps to exactly one
         # family, so we update the HOG and family counters together
         for j in range(lo, hi):
@@ -444,8 +391,9 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, table_idx, table_buff,
             elif loc > thread_fam_highloc[fam_off]:
                 thread_fam_highloc[fam_off] = loc
 
-    return thread_num_hit_fams, thread_num_hit_hogs, n_skipped
-
+    scratch.num_hit_families[thread_id] = thread_num_hit_fams
+    scratch.num_hit_hogs[thread_id] = thread_num_hit_hogs
+    return n_skipped
 
 
 ## generic score functions
@@ -580,7 +528,10 @@ def place_sequence(
     sequence_id,
     database,
     index,
-    config,
+    family_model,
+    hog_model,
+    placement,
+    family_scoring,
     scratch,
 ) -> bool:
     trans = database.trans
@@ -591,14 +542,9 @@ def place_sequence(
     level_arr = database.levels
 
     table_idx = index.table_idx
-    table_buff = index.table_buff
-    ref_hog_prob = index.hog_probability
-    family_model = index.family_model
-    family_scoring = config.family_scoring
-
-    top_n_fams = config.top_n_families
-    sst = config.subfamily_score_threshold
-    family_only = config.family_only
+    top_n_fams = placement.top_n_families
+    sst = placement.subfamily_score_threshold
+    family_only = placement.family_only
 
     query_len = sequence.shape[0]
     n_kmers = query_len - (k - 1)
@@ -617,38 +563,24 @@ def place_sequence(
     elif r1[0] == x_flag:
         return False
 
-    # Get thread-local data structures for search
     thread_id = numba.get_thread_id()
+    n_skipped = search_seq_kmers(
+        r1,
+        p1,
+        hog_tab,
+        x_flag,
+        index,
+        scratch,
+        thread_id,
+    )
+
+    # Only unpack the thread-local views needed after k-mer counting.
     thread_hit_fams = scratch.hit_families[thread_id]
-    thread_hit_hogs = scratch.hit_hogs[thread_id]
     thread_hog_counts = scratch.hog_counts[thread_id]
     thread_fam_counts = scratch.family_counts[thread_id]
     thread_fam_lowloc = scratch.family_low_location[thread_id]
     thread_fam_highloc = scratch.family_high_location[thread_id]
     thread_num_hit_fams = scratch.num_hit_families[thread_id]
-    thread_num_hit_hogs = scratch.num_hit_hogs[thread_id]
-
-    thread_num_hit_fams, thread_num_hit_hogs, n_skipped = search_seq_kmers(
-        r1,
-        p1,
-        hog_tab,
-        x_flag,
-        table_idx,
-        table_buff,
-        thread_hog_counts,
-        thread_fam_counts,
-        thread_fam_lowloc,
-        thread_fam_highloc,
-        thread_hit_fams,
-        thread_num_hit_fams,
-        thread_hit_hogs,
-        thread_num_hit_hogs,
-        index.kmer_df_cap,
-        index.kmer_filter_max_df,
-    )
-
-    scratch.num_hit_families[thread_id] = thread_num_hit_fams
-    scratch.num_hit_hogs[thread_id] = thread_num_hit_hogs
 
     # Identify families of interest
     idx = thread_hit_fams[:thread_num_hit_fams]
@@ -657,8 +589,7 @@ def place_sequence(
     qres["count"][:] = thread_fam_counts[idx]
 
     # Effective query length: unique k-mers actually searched, i.e. excluding
-    # k-mers dropped by either the document-frequency cap or the information
-    # filter (n_skipped is 0 when neither filter is enabled).
+    # k-mers dropped by the build-time information filter.
     n = len(r1) - n_skipped
 
     # cheap filter: is # of k-mers at the expected number?
@@ -720,7 +651,7 @@ def place_sequence(
             fam_level_offsets,
             fam_hog2parent,
             thread_hog_counts[hog_s:hog_e],
-            ref_hog_prob[hog_s:hog_e],
+            hog_model.hog_probability[hog_s:hog_e],
         )
 
         # place on path
@@ -740,52 +671,6 @@ def place_sequence(
         subfam_results["count"][sequence_id, i] = c[int(choice)] if choice_score != 0.0 else 0
 
     return True
-
-
-@numba.njit(nogil=True, inline="always")
-def dispatch_sequence(
-    family_results,
-    subfam_results,
-    sequence,
-    sequence_id,
-    database,
-    index,
-    config,
-    scratch,
-):
-    family_model = make_runtime_family_model(
-        index.family_model_kind,
-        index.family_probability,
-        index.q_coef,
-        index.kappa_coef,
-        index.center,
-        index.scale,
-        index.valid,
-        index.n_min,
-        index.n_max,
-    )
-    runtime_index = make_runtime_search_index(index, family_model)
-    family_scoring = make_runtime_family_scoring(
-        config.family_neglog_alpha,
-        config.family_log_correction,
-    )
-    runtime_config = RuntimeSearchConfig(
-        config.mode,
-        config.top_n_families,
-        family_scoring,
-        config.subfamily_score_threshold,
-        config.family_only,
-    )
-    return place_sequence(
-        family_results,
-        subfam_results,
-        sequence,
-        sequence_id,
-        database,
-        runtime_index,
-        runtime_config,
-        scratch,
-    )
 
 
 class MergeSearch(object):
@@ -1015,7 +900,12 @@ class MergeSearch(object):
             return self.db._db_Index_SSFamilyBBinomNTrainMax[:]
         return np.empty(0, dtype=np.uint32)
 
-    def _family_model(self, modality, policy, probability):
+    def _family_model(self, modality, policy):
+        probability = (
+            self.ref_fam_prob
+            if modality == "seq"
+            else self.ss_ref_fam_prob
+        )
         if policy == "binomial":
             return make_family_model(policy, probability)
 
@@ -1043,27 +933,30 @@ class MergeSearch(object):
             self.ss_ref_fam_bbinom_n_max,
         )
 
-    def _search_index(self, modality, family_model, kmer_df_cap=0):
+    def _search_components(self, modality, family_model_policy):
+        """Build disjoint k-mer, family-model, and HOG-model carriers."""
         if modality == "seq":
-            model = self._family_model("seq", family_model, self.ref_fam_prob)
-            return make_search_index(
-                self.kmer_table["idx"],
-                self.kmer_table["buff"],
-                self.ref_hog_prob,
-                SEARCH_SEQUENCE,
-                kmer_df_cap,
-                self.ki.kmer_max_df,
+            model = self._family_model("seq", family_model_policy)
+            return (
+                make_kmer_index(
+                    self.kmer_table["idx"],
+                    self.kmer_table["buff"],
+                    SEARCH_SEQUENCE,
+                    self.ki.kmer_max_df,
+                ),
                 model,
+                HogModelParameters(self.ref_hog_prob),
             )
-        model = self._family_model("ss", family_model, self.ss_ref_fam_prob)
-        return make_search_index(
-            self.ss_kmer_table["idx"],
-            self.ss_kmer_table["buff"],
-            self.ss_ref_hog_prob,
-            SEARCH_STRUCTURE,
-            kmer_df_cap,
-            self.ki.ss_kmer_max_df,
+        model = self._family_model("ss", family_model_policy)
+        return (
+            make_kmer_index(
+                self.ss_kmer_table["idx"],
+                self.ss_kmer_table["buff"],
+                SEARCH_STRUCTURE,
+                self.ki.ss_kmer_max_df,
+            ),
             model,
+            HogModelParameters(self.ss_ref_hog_prob),
         )
 
     def merge_search(
@@ -1077,7 +970,6 @@ class MergeSearch(object):
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
-        ss_kmer_df_cap=0,
         search_mode="auto",
         family_model="auto",
     ):
@@ -1099,38 +991,41 @@ class MergeSearch(object):
             self.level_arr,
         )
 
-        # prepare namedtuple Indexes for seq/ss
-        sequence_index = (
-            self._search_index("seq", family_model)
+        sequence_components = (
+            self._search_components("seq", family_model)
             if mode != SEARCH_STRUCTURE
             else None
         )
-        structure_index = (
-            self._search_index(
-                "ss",
-                family_model,
-                kmer_df_cap=ss_kmer_df_cap,
-            )
+        structure_components = (
+            self._search_components("ss", family_model)
             if mode != SEARCH_SEQUENCE
             else None
         )
 
-        if sequence_index is None:
-            sequence_index = structure_index
-        if structure_index is None:
-            structure_index = sequence_index
+        if sequence_components is None:
+            sequence_components = structure_components
+        if structure_components is None:
+            structure_components = sequence_components
+
+        sequence_index, sequence_family_model, sequence_hog_model = (
+            sequence_components
+        )
+        structure_index, structure_family_model, structure_hog_model = (
+            structure_components
+        )
 
         if not 0.0 < alpha <= 1.0:
             raise ValueError("alpha must be in the interval (0, 1]")
 
-        config = SearchConfig(
-            mode,
+        lookup_config = LookupConfig(mode, numba.get_num_threads())
+        placement = PlacementConfig(
             top_n_fams,
-            -math.log(alpha),
-            family_log_correction(family_correction, self.fam_tab.size),
             sst,
             family_only,
-            numba.get_num_threads(),
+        )
+        family_scoring = FamilyScoringParameters(
+            -math.log(alpha),
+            family_log_correction(family_correction, self.fam_tab.size),
         )
 
         data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
@@ -1157,10 +1052,22 @@ class MergeSearch(object):
             ),
         )
 
-        self._lookup(family_results, subfam_results,
-                     SequenceBatch(sbuff.buff, sbuff.idx),
-                     SequenceBatch(ssbuff.buff, ssbuff.idx),
-                     database, sequence_index, structure_index, config)
+        self._lookup(
+            family_results,
+            subfam_results,
+            SequenceBatch(sbuff.buff, sbuff.idx),
+            SequenceBatch(ssbuff.buff, ssbuff.idx),
+            database,
+            sequence_index,
+            sequence_family_model,
+            sequence_hog_model,
+            structure_index,
+            structure_family_model,
+            structure_hog_model,
+            lookup_config,
+            placement,
+            family_scoring,
+        )
 
         t1 = time()
         td = max((t1 - t0), 1e-3)
@@ -1392,24 +1299,50 @@ class MergeSearch(object):
             structures,
             database,
             sequence_index,
+            sequence_family_model,
+            sequence_hog_model,
             structure_index,
-            config,
+            structure_family_model,
+            structure_hog_model,
+            lookup_config,
+            placement,
+            family_scoring,
         ):
             # allocate a collection of thread-local data structures
             scratch = SearchScratch(
-                np.zeros((config.num_threads, database.families.size), dtype=np.int32,),
-                np.zeros((config.num_threads, database.hogs.size), dtype=np.int32,),
-                np.zeros((config.num_threads, database.hogs.size), dtype=np.uint16,),
-                np.zeros((config.num_threads, database.families.size), dtype=np.uint16,),
-                np.full((config.num_threads, database.families.size), -1, dtype=np.int32,),
-                np.full((config.num_threads, database.families.size), -1, dtype=np.int32,),
-                np.zeros(config.num_threads, dtype=np.uint32),
-                np.zeros(config.num_threads, dtype=np.uint32),
+                np.zeros(
+                    (lookup_config.num_threads, database.families.size),
+                    dtype=np.int32,
+                ),
+                np.zeros(
+                    (lookup_config.num_threads, database.hogs.size),
+                    dtype=np.int32,
+                ),
+                np.zeros(
+                    (lookup_config.num_threads, database.hogs.size),
+                    dtype=np.uint16,
+                ),
+                np.zeros(
+                    (lookup_config.num_threads, database.families.size),
+                    dtype=np.uint16,
+                ),
+                np.full(
+                    (lookup_config.num_threads, database.families.size),
+                    -1,
+                    dtype=np.int32,
+                ),
+                np.full(
+                    (lookup_config.num_threads, database.families.size),
+                    -1,
+                    dtype=np.int32,
+                ),
+                np.zeros(lookup_config.num_threads, dtype=np.uint32),
+                np.zeros(lookup_config.num_threads, dtype=np.uint32),
             )
 
             n_iter = (
                 structures.offsets.size - 1
-                if config.mode == SEARCH_STRUCTURE
+                if lookup_config.mode == SEARCH_STRUCTURE
                 else sequences.offsets.size - 1
             )
 
@@ -1417,20 +1350,38 @@ class MergeSearch(object):
                 placed = False
 
                 # search sequence
-                if config.mode != SEARCH_STRUCTURE:
+                if lookup_config.mode != SEARCH_STRUCTURE:
                     sequence = select_from_batch(sequences, sequence_id)
-                    placed = dispatch_sequence(family_results, subfam_results,
-                                               sequence, sequence_id,
-                                               database, sequence_index,
-                                               config, scratch)
+                    placed = place_sequence(
+                        family_results,
+                        subfam_results,
+                        sequence,
+                        sequence_id,
+                        database,
+                        sequence_index,
+                        sequence_family_model,
+                        sequence_hog_model,
+                        placement,
+                        family_scoring,
+                        scratch,
+                    )
 
                 # if failed and we have structure, search structure
-                if config.mode != SEARCH_SEQUENCE and not placed:
+                if lookup_config.mode != SEARCH_SEQUENCE and not placed:
                     structure = select_from_batch(structures, sequence_id)
-                    dispatch_sequence(family_results, subfam_results,
-                                      structure, sequence_id,
-                                      database, structure_index,
-                                      config, scratch)
+                    place_sequence(
+                        family_results,
+                        subfam_results,
+                        structure,
+                        sequence_id,
+                        database,
+                        structure_index,
+                        structure_family_model,
+                        structure_hog_model,
+                        placement,
+                        family_scoring,
+                        scratch,
+                    )
 
         return numba.jit(func, parallel=True, nopython=True, nogil=True, cache=True)
         #return func

@@ -36,11 +36,13 @@ class FamilyModel(IntEnum):
     BETA_BINOMIAL = 1
 
 
+# These immutable carriers are built once at the Python/Numba boundary and
+# passed unchanged to the compiled functions that consume them.
 FamilyModelParameters = namedtuple(
     "FamilyModelParameters",
     (
         "kind",
-        "probability",
+        "family_probability",
         "q_coef",
         "kappa_coef",
         "center",
@@ -54,6 +56,11 @@ FamilyModelParameters = namedtuple(
 FamilyScoringParameters = namedtuple(
     "FamilyScoringParameters",
     ("neglog_alpha", "log_correction"),
+)
+
+HogModelParameters = namedtuple(
+    "HogModelParameters",
+    ("hog_probability",),
 )
 
 _EMPTY_F64 = np.empty(0, dtype=np.float64)
@@ -132,36 +139,6 @@ def make_family_model(
         n_min,
         n_max,
     )
-
-
-@numba.njit(nogil=True, inline="always")
-def make_runtime_family_model(
-    kind,
-    probability,
-    q_coef,
-    kappa_coef,
-    center,
-    scale,
-    valid,
-    n_min,
-    n_max,
-):
-    return FamilyModelParameters(
-        kind,
-        probability,
-        q_coef,
-        kappa_coef,
-        center,
-        scale,
-        valid,
-        n_min,
-        n_max,
-    )
-
-
-@numba.njit(nogil=True, inline="always")
-def make_runtime_family_scoring(neglog_alpha, log_correction):
-    return FamilyScoringParameters(neglog_alpha, log_correction)
 
 
 @numba.njit(nogil=True)
@@ -262,7 +239,7 @@ def family_bbinom_neglogpmf(family_id, x, n, model):
 def family_expected_count(family_id, n, model):
     if has_family_bbinom(family_id, model):
         return bbinom_expected_count(family_id, n, model)
-    return model.probability[family_id] * n
+    return model.family_probability[family_id] * n
 
 
 @numba.njit(nogil=True)
@@ -277,13 +254,13 @@ def family_neglogccdf(family_id, x, n, model):
             model.scale[family_id],
         )
         return beta_binomial_neglogccdf(x, n, alpha, beta)
-    return binom_neglogccdf(x, n, model.probability[family_id])
+    return binom_neglogccdf(x, n, model.family_probability[family_id])
 
 
 @numba.njit(nogil=True)
 def compute_expected_counts(qres, n, model):
     if model.kind == FamilyModel.BINOMIAL:
-        expected_count = model.probability[qres["id"]] * n
+        expected_count = model.family_probability[qres["id"]] * n
     else:
         expected_count = np.empty(len(qres), dtype=np.float64)
         for i in range(len(qres)):
@@ -307,7 +284,7 @@ def _filter_by_significance_bound(qres, n, model, scoring):
     Filters families by probabilistic bounds on p-value of
     the observed number of matches.
     """
-    probability = model.probability[qres["id"]]
+    probability = model.family_probability[qres["id"]]
     # Compute the empirical proportion of observed k-mers.
     # We clip it for the edge cases k = n, k = 0.
     epsilon = 1e-10

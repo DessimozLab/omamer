@@ -297,7 +297,6 @@ def search(args):
                 sst=args.threshold,
                 family_only=args.family_only,
                 ref_taxon_off=ref_taxoff,
-                ss_kmer_df_cap=args.df_cap,
                 search_mode=getattr(args, "search_mode", "auto"),
                 family_model=getattr(args, "family_model", "auto"),
             )

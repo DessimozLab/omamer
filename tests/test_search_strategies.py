@@ -4,19 +4,22 @@ import pytest
 
 from omamer.alphabets import Alphabet, get_transform
 from omamer.merge_search import (
-    BetaBinomialModel,
-    FAMILY_MODEL_BETA_BINOMIAL,
-    FAMILY_MODEL_BINOMIAL,
-    MergeSearch,
     SEARCH_SEQUENCE,
     SEARCH_SEQUENCE_THEN_STRUCTURE,
     SEARCH_STRUCTURE,
+    MergeSearch,
     SearchConfig,
     SearchDatabase,
-    SearchIndex,
     SequenceBatch,
-    resolve_family_model,
+    dispatch_sequence,
+    make_search_index,
+    place_sequence,
     resolve_search_mode,
+)
+from omamer.stat_models import (
+    FamilyModel,
+    get_family_model,
+    make_family_model,
 )
 
 
@@ -50,19 +53,19 @@ def test_resolve_search_mode_rejects_unavailable_input():
 
 def test_resolve_family_model():
     assert (
-        resolve_family_model("auto", False)
-        == FAMILY_MODEL_BINOMIAL
+        get_family_model("auto", False)
+        == FamilyModel.BINOMIAL
     )
     assert (
-        resolve_family_model("auto", True)
-        == FAMILY_MODEL_BETA_BINOMIAL
+        get_family_model("auto", True)
+        == FamilyModel.BETA_BINOMIAL
     )
     assert (
-        resolve_family_model("binomial", True)
-        == FAMILY_MODEL_BINOMIAL
+        get_family_model("binomial", True)
+        == FamilyModel.BINOMIAL
     )
     with pytest.raises(ValueError, match="requires beta-binomial"):
-        resolve_family_model("bbinom", False)
+        get_family_model("bbinom", False)
 
 
 def test_lookup_compiles_and_dispatches_search_strategies():
@@ -87,27 +90,17 @@ def test_lookup_compiles_and_dispatches_search_strategies():
         np.array([(0, -1)], dtype=hog_dtype),
         np.array([0, 1], dtype=np.uint32),
     )
-    empty_f64 = np.empty(0, dtype=np.float64)
-    model = BetaBinomialModel(
-        FAMILY_MODEL_BINOMIAL,
-        np.empty((0, 0), dtype=np.float64),
-        np.empty((0, 0), dtype=np.float64),
-        empty_f64,
-        empty_f64,
-        np.empty(0, dtype=np.bool_),
-        np.empty(0, dtype=np.uint32),
-        np.empty(0, dtype=np.uint32),
-    )
+    family_probability = np.array([1e-6])
+    model = make_family_model("binomial", family_probability)
     n_codes = alphabet.n**k
-    full_index = SearchIndex(
+    full_index = make_search_index(
         np.arange(n_codes + 1, dtype=np.uint32),
         np.zeros(n_codes, dtype=np.uint32),
         np.array([1e-6]),
-        np.array([1e-6]),
         SEARCH_SEQUENCE,
-        np.int64(0),
-        np.int64(0),
-        *model,
+        0,
+        0,
+        model,
     )
     empty_index = full_index._replace(
         table_idx=np.zeros(n_codes + 1, dtype=np.uint32),
@@ -123,14 +116,11 @@ def test_lookup_compiles_and_dispatches_search_strategies():
         [
             ("id", np.uint32),
             ("pvalue", np.float64),
-            ("ss_pvalue", np.float64),
             ("count", np.uint32),
-            ("ss_count", np.uint32),
             ("score", np.uint32),
-            ("ss_score", np.uint32),
             ("normcount", np.float64),
             ("overlap", np.float64),
-            ("decision_source", np.uint8),
+            ("modality", np.uint8),
         ]
     )
     subfamily_result_dtype = np.dtype(
@@ -141,7 +131,7 @@ def test_lookup_compiles_and_dispatches_search_strategies():
         ]
     )
     structure_index = full_index._replace(
-        decision_source=SEARCH_STRUCTURE
+        modality=SEARCH_STRUCTURE
     )
     kernel = object.__new__(MergeSearch)._lookup
 
@@ -167,7 +157,7 @@ def test_lookup_compiles_and_dispatches_search_strategies():
         config = SearchConfig(
             mode,
             1,
-            1.0,
+            0.0,
             0.0,
             0.1,
             True,
@@ -185,8 +175,11 @@ def test_lookup_compiles_and_dispatches_search_strategies():
         )
         assert family_results["id"][0, 0] == 1
         assert (
-            family_results["decision_source"][0, 0]
+            family_results["modality"][0, 0]
             == expected_source
         )
 
     assert kernel.nopython_signatures
+    assert kernel.targetoptions["nogil"]
+    assert dispatch_sequence.targetoptions["nogil"]
+    assert place_sequence.targetoptions["nogil"]

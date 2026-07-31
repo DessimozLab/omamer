@@ -24,15 +24,19 @@ from omamer.index import (
     select_kmer_max_df,
     validate_kmer_percentage,
 )
-from omamer.stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
+from omamer.stat_models import (
+    FamilyModel,
+    FamilyModelParameters,
+    bbinom_eval_n,
+    beta_binomial_neglogccdf,
+    beta_binomial_params_for_n,
+    family_expected_count,
+    family_log_correction,
+    family_neglogccdf,
+)
 from omamer.compression import ctz, naive_ctz, popcount, select1_in_word
 from omamer.compression import to_elias_fano, from_elias_fano
-from omamer.merge_search import (
-    BetaBinomialModel,
-    FAMILY_MODEL_BETA_BINOMIAL,
-    family_log_correction,
-    search_seq_kmers,
-)
+from omamer.merge_search import search_seq_kmers
 
 
 def popcount_naive(x):
@@ -543,8 +547,6 @@ def test_modality_index_arrays_selects_structure_or_raises():
 
 
 def test_bbinom_eval_n_clamps_to_trained_range():
-    from omamer.merge_search import bbinom_eval_n
-
     n_min = np.asarray([0, 45], dtype=np.uint32)
     n_max = np.asarray([0, 1096], dtype=np.uint32)
 
@@ -557,11 +559,6 @@ def test_bbinom_eval_n_clamps_to_trained_range():
 
 
 def test_family_neglogccdf_clamps_out_of_range_n():
-    from omamer.merge_search import (
-        family_neglogccdf,
-        family_expected_count,
-    )
-
     q_coef = np.asarray([[0.0, 0.1, -0.05]], dtype=np.float64)
     kappa_coef = np.asarray([[np.log(20.0), 0.25]], dtype=np.float64)
     center = np.asarray([np.log(100.0)], dtype=np.float64)
@@ -570,8 +567,9 @@ def test_family_neglogccdf_clamps_out_of_range_n():
     ref = np.asarray([0.01])
     n_min = np.asarray([50], dtype=np.uint32)
     n_max = np.asarray([200], dtype=np.uint32)
-    model = BetaBinomialModel(
-        FAMILY_MODEL_BETA_BINOMIAL,
+    model = FamilyModelParameters(
+        FamilyModel.BETA_BINOMIAL,
+        ref,
         q_coef,
         kappa_coef,
         center,
@@ -584,8 +582,8 @@ def test_family_neglogccdf_clamps_out_of_range_n():
     # Query N=400 is above the trained max -> q/kappa evaluated at N=200, but the
     # Beta-Binomial tail and count still use the actual N=400. This must equal
     # scoring an in-range query of N=200 evaluated at the same boundary.
-    out_of_range = family_neglogccdf(0, 30, 400, ref, model)
-    at_boundary = family_neglogccdf(0, 30, 200, ref, model)
+    out_of_range = family_neglogccdf(0, 30, 400, model)
+    at_boundary = family_neglogccdf(0, 30, 200, model)
     alpha, beta, q = beta_binomial_params_for_n(200, q_coef[0], kappa_coef[0], center[0], scale[0])
     expected = beta_binomial_neglogccdf(30, 400, alpha, beta)
     np.testing.assert_allclose(out_of_range, expected, rtol=1e-9)
@@ -593,5 +591,5 @@ def test_family_neglogccdf_clamps_out_of_range_n():
     assert not np.isclose(out_of_range, at_boundary)
 
     # Expected count uses clamped q but actual N.
-    ec = family_expected_count(0, 400, ref, model)
+    ec = family_expected_count(0, 400, model)
     np.testing.assert_allclose(ec, q * 400, rtol=1e-9)

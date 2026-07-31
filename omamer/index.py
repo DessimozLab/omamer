@@ -91,7 +91,7 @@ def filtered_hog_kmer_counts(table_idx, table_buff, max_df, n_hogs):
 
 
 ## functions to cumulate HOG k-mer counts
-@numba.njit
+@numba.njit(nogil=True)
 def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
     current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint32)
 

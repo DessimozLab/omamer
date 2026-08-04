@@ -454,7 +454,10 @@ def test_fit_family_bbinom_from_hist_returns_importable_row():
 
 
 def test_failed_bbinom_optimizer_row_is_not_valid(monkeypatch):
-    def failed_minimize(objective, theta0, method, bounds, jac):
+    calls = []
+
+    def failed_minimize(objective, theta0, method, bounds, jac, options=None):
+        calls.append(options)
         return SimpleNamespace(
             success=False,
             x=np.full_like(theta0, 3.0),
@@ -473,12 +476,74 @@ def test_failed_bbinom_optimizer_row_is_not_valid(monkeypatch):
     )
 
     assert row["optimizer_success"] is False
+    assert row["optimizer_attempt_count"] == 7
+    assert row["optimizer_successful_attempt"] == ""
     assert row["fit_valid"] is False
     assert "optimizer_failed" in row["fit_invalid_reason"].split(";")
     # Failed fits retain a diagnostic row, but use the explicit initial
     # coefficients rather than the optimizer's untrusted iterate.
     np.testing.assert_allclose(row["q_coef_1"], 0.0)
     np.testing.assert_allclose(row["kappa_coef_0"], np.log(1000.0))
+    assert calls[0] is None
+    assert all(call == {"maxls": 100} for call in calls[1:])
+
+
+def test_failed_bbinom_optimizer_is_retried_without_perturbing_successes(
+    monkeypatch,
+):
+    from scipy.optimize import minimize as scipy_minimize
+
+    calls = []
+
+    def fail_once_then_minimize(
+        objective,
+        theta0,
+        method,
+        bounds,
+        jac,
+        options=None,
+    ):
+        calls.append(options)
+        if len(calls) == 1:
+            return SimpleNamespace(
+                success=False,
+                x=theta0,
+                fun=objective(theta0),
+                message="line search failed",
+                status=2,
+                nit=5,
+                nfev=10,
+            )
+        return scipy_minimize(
+            objective,
+            theta0,
+            method=method,
+            bounds=bounds,
+            jac=jac,
+            options=options,
+        )
+
+    monkeypatch.setattr(
+        "omamer.bbinom_fit.minimize",
+        fail_once_then_minimize,
+    )
+    row = fit_family_bbinom_from_hist(
+        7,
+        [
+            (20, 1, 10),
+            (20, 2, 8),
+            (40, 2, 10),
+            (40, 3, 9),
+            (80, 4, 11),
+            (80, 5, 7),
+        ],
+        {20: 80, 40: 80, 80: 80},
+    )
+
+    assert row["optimizer_success"] is True
+    assert row["optimizer_attempt_count"] == 2
+    assert row["optimizer_successful_attempt"] == "retry_scaled_maxls100"
+    assert calls == [None, {"maxls": 100}]
 
 
 def test_bbinom_valid_mask_rejects_rails_and_legacy_failed_initial_fit():

@@ -90,6 +90,27 @@ def filtered_hog_kmer_counts(table_idx, table_buff, max_df, n_hogs):
     return hog_counts
 
 
+@numba.njit(cache=True, nogil=True)
+def family_kmer_occurrence(table_idx, table_buff, hog2fam, max_df, n_families):
+    """
+    Weight each retained k-mer by its family document frequency (DF).
+    Returns the weighted occurrences and the number of retained postings.
+    """
+    fam_occ = np.zeros(n_families, dtype=np.int64)
+    n_postings = 0
+    cutoff = np.int64(max_df)
+    for kmer in range(table_idx.size - 1):
+        lo = np.int64(table_idx[kmer])
+        hi = np.int64(table_idx[kmer + 1])
+        df = hi - lo
+        if df == 0 or (cutoff != 0 and df > cutoff):
+            continue
+        for pos in range(lo, hi):
+            fam_occ[hog2fam[table_buff[pos]]] += df
+        n_postings += df
+    return fam_occ, n_postings
+
+
 ## functions to cumulate HOG k-mer counts
 @numba.njit(nogil=True)
 def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
@@ -373,16 +394,11 @@ class Index(object):
             table_idx[kk:] = ii_table_buff
             return ii_table_buff
 
-        def estimate_family_prob(hog_counts, h2f):
-            @numba.njit
-            def count_family_occurrence(hog_counts, h2f):
-                c = np.zeros(h2f.max() + 1, dtype=np.uint64)
-                for hog in range(hog_counts.size):
-                    c[h2f[hog]] += hog_counts[hog]
-                return c
-
-            fam_occ = count_family_occurrence(hog_counts, h2f)
-            return fam_occ / hog_counts.sum()
+        def estimate_family_prob(table_idx, table_buff, h2f, max_df):
+            fam_occ, n_postings = family_kmer_occurrence(
+                table_idx, table_buff, h2f, max_df, len(self.db.family_table)
+            )
+            return fam_occ / n_postings
 
         def estimate_hog_prob(hog_counts, fam_tab, level_arr, hog2parent):
             @numba.njit(parallel=True, nogil=True)
@@ -515,7 +531,7 @@ class Index(object):
         )
 
         # compute the family / hog probability estimates, assuming binomial distns
-        fam_prob = estimate_family_prob(hog_kmer_counts, h2f)
+        fam_prob = estimate_family_prob(table_idx, table_buff, h2f, self.kmer_max_df)
         self.db.db.create_carray(
             idx, "FamilyProbability", obj=fam_prob, filters=self.db.compression_filters
         )
@@ -587,7 +603,9 @@ class Index(object):
                 idx, "SSTableBuffer", obj=ss_table_buff, filters=self.db.compression_filters
             )
 
-            fam_ss_prob = estimate_family_prob(ss_hog_kmer_counts, h2f)
+            fam_ss_prob = estimate_family_prob(
+                ss_table_idx, ss_table_buff, h2f, self.ss_kmer_max_df
+            )
             self.db.db.create_carray(
                 idx, "SSFamilyProbability", obj=fam_ss_prob, filters=self.db.compression_filters
             )

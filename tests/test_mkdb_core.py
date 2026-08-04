@@ -21,6 +21,19 @@ def _hog_level(family, hog_id, taxon, completeness, members):
     return family, hog_id, taxon, completeness, members
 
 
+class _StubHDF5File:
+    """Stands in for the PyTables file behind the Database node properties."""
+
+    def __init__(self, **nodes):
+        self._nodes = {"/" + name: node for name, node in nodes.items()}
+
+    def get_node(self, path):
+        return self._nodes[path]
+
+    def __contains__(self, path):
+        return path in self._nodes
+
+
 def _hog_selector(logic="OR"):
     """Build the minimal object required by select_and_strip_OMA_HOGs."""
     taxonomy = np.asarray(
@@ -37,7 +50,7 @@ def _hog_selector(logic="OR"):
     selector.min_fam_size = 6
     selector.min_fam_completeness = 0.5
     selector.logic = logic
-    selector._db_Taxonomy = taxonomy
+    selector.db = _StubHDF5File(Taxonomy=taxonomy)
     return selector
 
 
@@ -203,10 +216,9 @@ def test_hog_and_family_tables(tmp_path):
 
 
 class TinyIndexDatabase:
-    """Minimal database adapter needed by the sequence index builder."""
+    """Minimal OMAmerDBLike adapter needed by the sequence index builder."""
 
     def __init__(self, path):
-        self.mode = "w"
         self._compr = tables.Filters(complevel=0)
         self.db = tables.open_file(path, mode="w", filters=self._compr)
         self._create_tables()
@@ -257,11 +269,35 @@ class TinyIndexDatabase:
             obj=np.asarray([0, 1, 2, 2, 3], dtype=np.uint32),
         )
 
-        self._db_Protein = protein
-        self._db_HOG = hog
-        self._db_Family = family
-        self._db_Species = species
-        self._db_LevelOffsets = self.db.root.LevelOffsets
+    # The subset of OMAmerDBLike that Index reads while building the k-mer table.
+
+    @property
+    def protein_table(self):
+        return self.db.root.Protein
+
+    @property
+    def hog_table(self):
+        return self.db.root.HOG
+
+    @property
+    def family_table(self):
+        return self.db.root.Family
+
+    @property
+    def species_table(self):
+        return self.db.root.Species
+
+    @property
+    def level_offset_carray(self):
+        return self.db.root.LevelOffsets
+
+    @property
+    def compression_filters(self):
+        return self._compr
+
+    @property
+    def access_mode(self):
+        return "w"
 
     def close(self):
         self.db.close()
@@ -272,12 +308,10 @@ def test_tiny_sequence_index(tmp_path):
     try:
         index = Index(db, k=2, reduced_alphabet=False, hidden_taxa=())
         sequence_buffer = np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1")
-        suffix_array = index._build_suffixarray(
-            index.alphabet.translate(sequence_buffer),
-            len(db._db_Protein),
-        )
-        index._build_kmer_table(sequence_buffer, suffix_array)
+        # Without a 3Di buffer only the sequence half of the index is built.
+        index.build_kmer_table(sequence_buffer, None)
 
+        assert "/Index/SSTableIndex" not in db.db
         table_index = db.db.root.Index.TableIndex[:]
         table_buffer = db.db.root.Index.TableBuffer[:]
         nonempty_codes = np.flatnonzero(np.diff(table_index))
@@ -296,5 +330,35 @@ def test_tiny_sequence_index(tmp_path):
             db.db.root.Index.HOGProbability[:],
             [0.5, 0.0, 0.5],
         )
+    finally:
+        db.close()
+
+
+def test_tiny_structure_index(tmp_path):
+    """A 3Di buffer adds a structure half without disturbing the sequence half."""
+    db = TinyIndexDatabase(tmp_path / "tiny-structure-index.h5")
+    try:
+        index = Index(db, k=2, reduced_alphabet=False, hidden_taxa=())
+        sequence_buffer = np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1")
+        # The same proteins relabelled, so the two halves index disjoint k-mer
+        # codes but must agree on every derived probability.
+        structure_buffer = np.frombuffer(b"CCCC CCCD CCCE ", dtype="S1")
+        index.build_kmer_table(sequence_buffer, structure_buffer)
+
+        idx = db.db.root.Index
+        assert "/Index/SSTableIndex" in db.db
+
+        structure_index = idx.SSTableIndex[:]
+        nonempty_codes = np.flatnonzero(np.diff(structure_index))
+        # "CC", "CD" and "CE" over the 21-letter alphabet.
+        np.testing.assert_array_equal(nonempty_codes, [22, 23, 24])
+        np.testing.assert_array_equal(structure_index[nonempty_codes], [0, 2, 3])
+        np.testing.assert_array_equal(structure_index[nonempty_codes + 1], [2, 3, 4])
+        np.testing.assert_array_equal(idx.SSTableBuffer[:], [0, 2, 0, 2])
+
+        np.testing.assert_allclose(idx.SSFamilyProbability[:], [0.75, 0.75])
+        np.testing.assert_allclose(idx.SSHOGProbability[:], [0.5, 0.0, 0.5])
+        np.testing.assert_allclose(idx.SSFamilyProbability[:], idx.FamilyProbability[:])
+        np.testing.assert_allclose(idx.SSHOGProbability[:], idx.HOGProbability[:])
     finally:
         db.close()

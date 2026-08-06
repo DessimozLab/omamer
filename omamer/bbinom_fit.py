@@ -797,14 +797,74 @@ def fit_family_bbinom_from_hist(
             weights,
         )[1]
 
+    bounds = [
+        (-BBINOM_COEFFICIENT_BOUND, BBINOM_COEFFICIENT_BOUND)
+    ] * theta0.size
+
+    def optimise_retry(start):
+        divisor = float(weights.sum())
+        return minimize(
+            lambda theta: objective(theta) / divisor,
+            start,
+            jac=lambda theta: gradient(theta) / divisor,
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxls": 100},
+        )
+
+    # Preserve the historical fit for every family where it succeeds.  A
+    # larger line-search budget and mean-NLL scaling are only used to recover
+    # failures, so this change cannot perturb existing successful fits.
     result = minimize(
         objective,
         theta0,
         jac=gradient,
         method="L-BFGS-B",
-        bounds=[(-BBINOM_COEFFICIENT_BOUND, BBINOM_COEFFICIENT_BOUND)]
-        * theta0.size,
+        bounds=bounds,
     )
+    optimizer_attempt_count = 1
+    optimizer_successful_attempt = "initial" if result.success else ""
+    initial_result = result
+    if not result.success:
+        result = optimise_retry(theta0)
+        optimizer_attempt_count += 1
+        if result.success:
+            optimizer_successful_attempt = "retry_scaled_maxls100"
+
+    # If the same-start retry is still insufficient, try a small, fixed set of
+    # initial dispersions and retain the converged solution with the greatest
+    # (unscaled) likelihood.
+    if not result.success:
+        successful = []
+        for kappa_start in (1.0, 10.0, 100.0, 1000.0, 3000.0):
+            start = theta0.copy()
+            start[int(q_degree) + 1] = math.log(kappa_start)
+            attempt = optimise_retry(start)
+            optimizer_attempt_count += 1
+            attempt_theta = np.asarray(attempt.x, dtype=np.float64)
+            if (
+                attempt.success
+                and np.all(np.isfinite(attempt_theta))
+                and np.isfinite(objective(attempt_theta))
+                and np.all(
+                    np.abs(attempt_theta)
+                    < BBINOM_COEFFICIENT_BOUND
+                    - BBINOM_COEFFICIENT_BOUND_TOLERANCE
+                )
+            ):
+                successful.append(
+                    (objective(attempt_theta), kappa_start, attempt)
+                )
+        if successful:
+            _, kappa_start, result = min(successful, key=lambda item: item[0])
+            optimizer_successful_attempt = "multistart_kappa_{}".format(
+                int(kappa_start)
+            )
+        else:
+            # Keep the original failed result as the diagnostic result and the
+            # historical initial coefficients as the explicit fallback.
+            result = initial_result
+
     optimizer_success = bool(result.success)
     theta = np.asarray(
         result.x if optimizer_success else theta0,
@@ -854,6 +914,8 @@ def fit_family_bbinom_from_hist(
         "bbinom_loglik_gain": float(loglik - binomial_loglik),
         "aic": float(2 * theta.size - 2 * loglik),
         "optimizer_success": optimizer_success,
+        "optimizer_attempt_count": optimizer_attempt_count,
+        "optimizer_successful_attempt": optimizer_successful_attempt,
         "optimizer_message": str(result.message),
         "optimizer_status": int(getattr(result, "status", -1)),
         "optimizer_nit": int(getattr(result, "nit", -1)),

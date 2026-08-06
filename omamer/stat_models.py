@@ -28,6 +28,8 @@ from enum import IntEnum
 import numba
 import numpy as np
 
+from ._utils import LOG
+
 MAX_FAMILY_NEGLOGP = 20000.0
 
 
@@ -63,10 +65,230 @@ HogModelParameters = namedtuple(
     ("hog_probability",),
 )
 
+IndexModelData = namedtuple(
+    "IndexModelData",
+    (
+        "sequence_buffer",
+        "table_index",
+        "table_buffer",
+        "hog_kmer_counts",
+        "max_document_frequency",
+    ),
+)
+
 _EMPTY_F64 = np.empty(0, dtype=np.float64)
 _EMPTY_F64_2D = np.empty((0, 0), dtype=np.float64)
 _EMPTY_BOOL = np.empty(0, dtype=np.bool_)
 _EMPTY_U32 = np.empty(0, dtype=np.uint32)
+
+SUPPORTED_INDEX_MODELS = ("binomial", "beta-binomial")
+
+
+def validate_index_models(models):
+    """Validate the statistical models requested while building an index."""
+    if isinstance(models, str):
+        models = models.replace(",", " ").split()
+    selected = tuple(dict.fromkeys(models))
+    unknown = sorted(set(selected).difference(SUPPORTED_INDEX_MODELS))
+    if unknown:
+        raise ValueError(
+            "Unknown index model(s): {}".format(", ".join(unknown))
+        )
+    if not selected:
+        raise ValueError("At least one index model is required")
+    if "beta-binomial" in selected and "binomial" not in selected:
+        raise ValueError(
+            "The beta-binomial model requires the binomial fallback; "
+            "request both 'binomial' and 'beta-binomial'"
+        )
+    return selected
+
+
+@numba.njit(cache=True, nogil=True)
+def _family_kmer_occurrence(
+    table_index,
+    table_buffer,
+    hog_to_family,
+    max_document_frequency,
+    n_families,
+):
+    """Count family-weighted postings retained by the index filter."""
+    family_occurrence = np.zeros(n_families, dtype=np.int64)
+    n_postings = 0
+    cutoff = np.int64(max_document_frequency)
+    for kmer in range(table_index.size - 1):
+        start = np.int64(table_index[kmer])
+        stop = np.int64(table_index[kmer + 1])
+        document_frequency = stop - start
+        if document_frequency == 0 or (
+            cutoff != 0 and document_frequency > cutoff
+        ):
+            continue
+        for position in range(start, stop):
+            family_occurrence[hog_to_family[table_buffer[position]]] += (
+                document_frequency
+            )
+        n_postings += document_frequency
+    return family_occurrence, n_postings
+
+
+def estimate_family_probability(
+    table_index,
+    table_buffer,
+    hog_to_family,
+    max_document_frequency=0,
+    n_families=None,
+):
+    """Estimate independent binomial hit probabilities for every family."""
+    if n_families is None:
+        n_families = int(np.max(hog_to_family)) + 1
+    family_occurrence, n_postings = _family_kmer_occurrence(
+        table_index,
+        table_buffer,
+        hog_to_family,
+        max_document_frequency,
+        n_families,
+    )
+    if n_postings == 0:
+        raise RuntimeError("Cannot estimate family probabilities from an empty index")
+    return family_occurrence / n_postings
+
+
+@numba.njit(nogil=True)
+def cumulate_counts_1fam(
+    hog_cumulative_counts,
+    family_level_offsets,
+    hog_to_parent,
+):
+    current_best_child_count = np.zeros(
+        hog_cumulative_counts.shape,
+        dtype=np.uint32,
+    )
+    for level in range(family_level_offsets.size - 2):
+        bounds = family_level_offsets[-level - 3 : -level - 1]
+        hog_cumulative_counts[bounds[0] : bounds[1]] = np.add(
+            hog_cumulative_counts[bounds[0] : bounds[1]],
+            current_best_child_count[bounds[0] : bounds[1]],
+        )
+        for hog_offset in range(bounds[0], bounds[1]):
+            parent_offset = hog_to_parent[hog_offset]
+            if parent_offset != -1:
+                current = current_best_child_count[parent_offset]
+                current_best_child_count[parent_offset] = max(
+                    current,
+                    hog_cumulative_counts[hog_offset],
+                )
+
+
+@numba.njit(parallel=True, nogil=True)
+def _cumulate_hog_counts(
+    hog_counts,
+    family_level_offset,
+    family_level_count,
+    level_offsets,
+    hog_to_parent,
+):
+    cumulative = hog_counts.copy()
+    for family in numba.prange(family_level_offset.size):
+        start = family_level_offset[family]
+        stop = np.int32(start + family_level_count[family] + 2)
+        cumulate_counts_1fam(
+            cumulative,
+            level_offsets[start:stop],
+            hog_to_parent,
+        )
+    return cumulative
+
+
+def estimate_hog_probability(
+    hog_counts,
+    family_level_offset,
+    family_level_count,
+    level_offsets,
+    hog_to_parent,
+):
+    """Estimate binomial HOG probabilities after hierarchy cumulation."""
+    total = hog_counts.sum()
+    if total == 0:
+        raise RuntimeError("Cannot estimate HOG probabilities from an empty index")
+    occurrence = _cumulate_hog_counts(
+        hog_counts,
+        family_level_offset,
+        family_level_count,
+        level_offsets,
+        hog_to_parent,
+    )
+    return occurrence / total
+
+
+def _write_binomial_model(db, index_group, modality, data):
+    prefix = "" if modality == "seq" else "SS"
+    hog_to_family = db.hog_table.col("FamOff")
+    family_probability = estimate_family_probability(
+        data.table_index,
+        data.table_buffer,
+        hog_to_family,
+        data.max_document_frequency,
+        len(db.family_table),
+    )
+    hog_probability = estimate_hog_probability(
+        data.hog_kmer_counts,
+        db.family_table.col("LevelOff"),
+        db.family_table.col("LevelNum"),
+        db.level_offset_carray[:],
+        db.hog_table.col("ParentOff"),
+    )
+    db.db.create_carray(
+        index_group,
+        prefix + "FamilyProbability",
+        obj=family_probability,
+        filters=db.compression_filters,
+    )
+    db.db.create_carray(
+        index_group,
+        prefix + "HOGProbability",
+        obj=hog_probability,
+        filters=db.compression_filters,
+    )
+
+
+def learn_index_models(
+    db,
+    index_group,
+    modality_data,
+    models=("binomial",),
+    bbinom_options=None,
+):
+    """Learn and persist every requested model for every indexed modality."""
+    models = validate_index_models(models)
+    bbinom_options = dict(bbinom_options or {})
+
+    for modality, data in modality_data.items():
+        LOG.info("Learning binomial model for modality '%s'", modality)
+        _write_binomial_model(db, index_group, modality, data)
+
+    if "beta-binomial" in models:
+        from .bbinom_coefficients import store_bbinom_coefficients
+        from .bbinom_fit import fit_bbinom_coefficients_from_buffer
+
+        for modality, data in modality_data.items():
+            LOG.info("Learning beta-binomial model for modality '%s'", modality)
+            rows = fit_bbinom_coefficients_from_buffer(
+                db,
+                data.sequence_buffer,
+                modality=modality,
+                table_index=data.table_index,
+                table_buffer=data.table_buffer,
+                **bbinom_options,
+            )
+            store_bbinom_coefficients(
+                db,
+                rows,
+                modalities=(modality,),
+                kmer_percentage=db.ki.kmer_percentage,
+            )
+
+    index_group._f_setattr("models", ",".join(models))
 
 
 def get_family_model(policy, has_coefficients):

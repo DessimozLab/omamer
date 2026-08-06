@@ -38,13 +38,10 @@ family prior, so the filter removes broad posting lists; this is especially
 useful for 3Di. Ties at the cut-off are retained.
 
 The percentage and the sequence/3Di document-frequency cut-offs are stored in
-the database. Search applies them automatically, including removing filtered
-query k-mers from the effective query length. `compute-bbinom` also uses the
-database setting automatically, and `import-bbinom` rejects coefficients fitted
-with a different percentage. A filtered search therefore requires a database
-built with the desired filter rather than a search-time override. The search
-and fitting commands still accept `--kmer_percentage` as an optional
-compatibility assertion, but reject it when it differs from the database.
+the database. Search and build-time statistical model fitting apply them
+automatically, including removing filtered query k-mers from the effective
+query length. A filtered search therefore requires a database built with the
+desired filter rather than a search-time override.
 
 ## Usage
 Required arguments: ``--db``, ``--query``
@@ -123,6 +120,13 @@ The taxon from the predicted HOG that is closest from the reference taxon (given
 This is currently reliant on the OMA browser's database file and the species phylogeny of HOGs. Building using OrthoXML files available shortly. 
  - https://omabrowser.org/All/OmaServer.h5
  - https://omabrowser.org/All/speciestree.nwk
+
+By default, `mkdb` learns both binomial and length-aware beta-binomial family
+models for every indexed modality. A sequence-only database therefore stores
+two models; adding `--structures` stores both models for sequence and 3Di.
+Use `--models binomial` for a faster binomial-only build. Beta-binomial fitting
+samples the selected source proteins directly during indexing and excludes a
+protein from its own family's null distribution.
 ## Usage
 Required arguments: ``--db``, ``--oma_path``
 

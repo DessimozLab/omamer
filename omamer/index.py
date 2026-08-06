@@ -29,6 +29,7 @@ from property_manager import lazy_property
 from ._utils import LOG
 from .alphabets import Alphabet, get_transform
 from .hierarchy import get_lca_off, get_leaves
+from .stat_models import IndexModelData, learn_index_models, validate_index_models
 from .typing import OMAmerDBLike
 
 
@@ -90,51 +91,6 @@ def filtered_hog_kmer_counts(table_idx, table_buff, max_df, n_hogs):
     return hog_counts
 
 
-@numba.njit(cache=True, nogil=True)
-def family_kmer_occurrence(table_idx, table_buff, hog2fam, max_df, n_families):
-    """
-    Weight each retained k-mer by its family document frequency (DF).
-    Returns the weighted occurrences and the number of retained postings.
-    """
-    fam_occ = np.zeros(n_families, dtype=np.int64)
-    n_postings = 0
-    cutoff = np.int64(max_df)
-    for kmer in range(table_idx.size - 1):
-        lo = np.int64(table_idx[kmer])
-        hi = np.int64(table_idx[kmer + 1])
-        df = hi - lo
-        if df == 0 or (cutoff != 0 and df > cutoff):
-            continue
-        for pos in range(lo, hi):
-            fam_occ[hog2fam[table_buff[pos]]] += df
-        n_postings += df
-    return fam_occ, n_postings
-
-
-## functions to cumulate HOG k-mer counts
-@numba.njit(nogil=True)
-def cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent):
-    current_best_child_count = np.zeros(hog_cum_counts.shape, dtype=np.uint32)
-
-    # iterate over level offsets backward
-    for i in range(fam_level_offsets.size - 2):
-        x = fam_level_offsets[-i - 3 : -i - 1]
-
-        # when reaching level, sum all hog counts with their best child count
-        hog_cum_counts[x[0] : x[1]] = np.add(
-            hog_cum_counts[x[0] : x[1]], current_best_child_count[x[0] : x[1]]
-        )
-
-        # update current_best_child_count of the parents of the current hogs
-        for j in range(x[0], x[1]):
-            parent_off = hog2parent[j]
-
-            # only if parent exists
-            if parent_off != -1:
-                c = current_best_child_count[hog2parent[j]]
-                current_best_child_count[hog2parent[j]] = max(c, hog_cum_counts[j])
-
-
 class Index(object):
     def __init__(
         self,
@@ -143,6 +99,8 @@ class Index(object):
         reduced_alphabet=False,
         hidden_taxa=(),
         kmer_percentage=100.0,
+        models=("binomial",),
+        bbinom_options=None,
     ):
         # load database object
         self.db = db
@@ -159,6 +117,15 @@ class Index(object):
             )
             self.kmer_max_df = int(getattr(attrs, "kmer_max_df", 0))
             self.ss_kmer_max_df = int(getattr(attrs, "ss_kmer_max_df", 0))
+            stored_models = getattr(attrs, "models", None)
+            if stored_models is None:
+                stored_models = (
+                    "binomial,bbinom"
+                    if "/Index/FamilyBBinomValid" in self.db.db
+                    else "binomial"
+                )
+            self.models = validate_index_models(stored_models)
+            self.bbinom_options = {}
             if self.kmer_percentage < 100.0 and self.kmer_max_df <= 0:
                 raise ValueError(
                     "Database records a filtered kmer_percentage but has no "
@@ -180,6 +147,8 @@ class Index(object):
             self.kmer_percentage = validate_kmer_percentage(kmer_percentage)
             self.kmer_max_df = 0
             self.ss_kmer_max_df = 0
+            self.models = validate_index_models(models)
+            self.bbinom_options = dict(bbinom_options or {})
 
         self.alphabet = Alphabet(n=alphabet_n)
 
@@ -394,37 +363,6 @@ class Index(object):
             table_idx[kk:] = ii_table_buff
             return ii_table_buff
 
-        def estimate_family_prob(table_idx, table_buff, h2f, max_df):
-            fam_occ, n_postings = family_kmer_occurrence(
-                table_idx, table_buff, h2f, max_df, len(self.db.family_table)
-            )
-            return fam_occ / n_postings
-
-        def estimate_hog_prob(hog_counts, fam_tab, level_arr, hog2parent):
-            @numba.njit(parallel=True, nogil=True)
-            def cumulate_counts_nfams(
-                hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent
-            ):
-                hog_cum_counts = hog_counts.copy()
-
-                for i in numba.prange(len(fam_level_off)):
-                    s = fam_level_off[i]
-                    e = np.int32(s + fam_level_num[i] + 2)
-                    fam_level_offsets = level_arr[s:e]
-                    cumulate_counts_1fam(hog_cum_counts, fam_level_offsets, hog2parent)
-
-                return hog_cum_counts
-
-            hog_occ = cumulate_counts_nfams(
-                hog_counts,
-                fam_tab.col("LevelOff"),
-                fam_tab.col("LevelNum"),
-                level_arr[:],
-                hog2parent,
-            )
-
-            return hog_occ / hog_counts.sum()
-
         def apply_information_filter(table_idx, table_buff, hog_counts, modality):
             if self.kmer_percentage == 100.0:
                 return hog_counts, 0
@@ -530,21 +468,15 @@ class Index(object):
             idx, "TableBuffer", obj=table_buff, filters=self.db.compression_filters
         )
 
-        # compute the family / hog probability estimates, assuming binomial distns
-        fam_prob = estimate_family_prob(table_idx, table_buff, h2f, self.kmer_max_df)
-        self.db.db.create_carray(
-            idx, "FamilyProbability", obj=fam_prob, filters=self.db.compression_filters
-        )
-
-        hog_prob = estimate_hog_prob(
-            hog_kmer_counts,
-            self.db.family_table,
-            self.db.level_offset_carray,
-            self.db.hog_table.col("ParentOff"),
-        )
-        self.db.db.create_carray(
-            idx, "HOGProbability", obj=hog_prob, filters=self.db.compression_filters
-        )
+        modality_data = {
+            "seq": IndexModelData(
+                seq_buff,
+                table_idx,
+                table_buff,
+                hog_kmer_counts,
+                self.kmer_max_df,
+            )
+        }
 
         ############################
         # structure index
@@ -603,20 +535,19 @@ class Index(object):
                 idx, "SSTableBuffer", obj=ss_table_buff, filters=self.db.compression_filters
             )
 
-            fam_ss_prob = estimate_family_prob(
-                ss_table_idx, ss_table_buff, h2f, self.ss_kmer_max_df
-            )
-            self.db.db.create_carray(
-                idx, "SSFamilyProbability", obj=fam_ss_prob, filters=self.db.compression_filters
-            )
-
-            hog_ss_prob = estimate_hog_prob(
+            modality_data["ss"] = IndexModelData(
+                ss_buff,
+                ss_table_idx,
+                ss_table_buff,
                 ss_hog_kmer_counts,
-                self.db.family_table,
-                self.db.level_offset_carray,
-                self.db.hog_table.col("ParentOff"),
-            )
-            self.db.db.create_carray(
-                idx, "SSHOGProbability", obj=hog_ss_prob, filters=self.db.compression_filters
+                self.ss_kmer_max_df,
             )
         ############################
+
+        learn_index_models(
+            self.db,
+            idx,
+            modality_data,
+            models=self.models,
+            bbinom_options=self.bbinom_options,
+        )

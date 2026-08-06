@@ -39,6 +39,7 @@ compression = Compression.NONE
 def mkdb_oma(args):
     from .database import DatabaseFromOMABrowser, DatabaseFromOrthoXML
     from .index import Index, validate_kmer_percentage
+    from .stat_models import validate_index_models
 
     from ete3 import Tree
     import os
@@ -48,6 +49,9 @@ def mkdb_oma(args):
     assert args.k < 8, "Max k-mer size is 7."
     args.kmer_percentage = validate_kmer_percentage(
         getattr(args, "kmer_percentage", 100.0)
+    )
+    args.models = validate_index_models(
+        getattr(args, "models", ("binomial", "beta-binomial"))
     )
     LOG.info("Create database from OMA build")
     LOG.info("arguments for build:")
@@ -142,6 +146,26 @@ def mkdb_oma(args):
         reduced_alphabet=args.reduced_alphabet,
         hidden_taxa=hidden_taxa,
         kmer_percentage=args.kmer_percentage,
+        models=args.models,
+        bbinom_options={
+            "n_buckets": getattr(args, "bbinom_n_buckets", 24),
+            "min_records_per_n": getattr(
+                args, "bbinom_min_records_per_n", 50
+            ),
+            "max_records_per_n": getattr(
+                args, "bbinom_max_records_per_n", 500
+            ),
+            "min_nonzero_queries": getattr(
+                args, "bbinom_min_nonzero_queries", 20
+            ),
+            "max_families": getattr(args, "bbinom_max_families", 0),
+            "min_family_prob": getattr(args, "bbinom_min_family_prob", 0.0),
+            "workers": getattr(args, "bbinom_fit_workers", 1),
+            "max_histogram_gb": getattr(
+                args, "bbinom_max_histogram_gb", 3.0
+            ),
+            "seed": getattr(args, "bbinom_seed", 42),
+        },
     )
     db.ki.sp_filter
     db.ki.build_kmer_table(seq_buff, ss_buff)
@@ -445,45 +469,6 @@ def info_db(args):
         for k, v in _format_info_db(db):
             print(f"  {k:23s}:{v!s:>40}")
         print_line(80, file=sys.stdout)
-
-
-def import_bbinom(args):
-    from .bbinom_coefficients import import_bbinom_coefficients
-    from .database import Database
-
-    with Database(args.db, mode="a") as db:
-        written = import_bbinom_coefficients(db, args.coefficients)
-
-    for modality, count in sorted(written.items()):
-        LOG.info("Imported {} beta-binomial coefficient rows for {}".format(count, modality))
-
-
-def compute_bbinom(args):
-    from .bbinom_fit import compute_bbinom_coefficients
-    from .database import Database
-
-    with Database(args.db, mode="r") as db:
-        _check_db_kmer_percentage(db, getattr(args, "kmer_percentage", None))
-        compute_bbinom_coefficients(
-            db,
-            sequence_paths=args.sequences,
-            output_path=args.out,
-            family_offsets_path=args.family_offsets,
-            max_families=args.max_families,
-            min_family_prob=args.min_family_prob,
-            n_values=args.n_values,
-            n_buckets=args.n_buckets,
-            min_records_per_n=args.min_records_per_n,
-            max_records_per_n=args.max_records_per_n,
-            chunksize=args.chunksize,
-            seed=args.seed,
-            min_nonzero_queries=args.min_nonzero_queries,
-            workers=args.fit_workers,
-            n_summary_path=args.n_summary_out,
-            modality=args.modality,
-            max_histogram_gb=args.max_histogram_gb,
-            n_counts_cache=args.n_counts_cache,
-        )
 
 
 def _check_db_kmer_percentage(db, requested_percentage):

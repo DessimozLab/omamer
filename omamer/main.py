@@ -1,7 +1,7 @@
 """
     OMAmer - tree-driven and alignment-free protein assignment to sub-families
 
-    (C) 2024-2025 Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
+    (C) 2024-present Nikolai Romashchenko <nikolai.romashchenko@unil.ch>
     (C) 2022-2023 Alex Warwick Vesztrocy <alex.warwickvesztrocy@unil.ch>
     (C) 2019-2021 Victor Rossier <victor.rossier@unil.ch> and
                   Alex Warwick Vesztrocy <alex@warwickvesztrocy.co.uk>
@@ -32,14 +32,13 @@ def main():
         ArgumentDefaultsHelpFormatter,
     )
     from tables import PerformanceWarning
-    import logging
     import multiprocessing as mp
     import os
     import sys
     import warnings
 
     from . import __version__, __copyright__
-    from ._runners import mkdb_oma, search, info_db, import_bbinom, compute_bbinom
+    from ._runners import mkdb_oma, search, info_db
 
     class NoSubparsersMetavarFormatter(HelpFormatter):
         def _format_action(self, action):
@@ -158,6 +157,68 @@ def main():
              "at search time; 100 disables filtering.",
     )
     mkdb_parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=("binomial", "beta-binomial"),
+        default=("binomial", "beta-binomial"),
+        help="Statistical family models to learn for every indexed modality. "
+        "Beta-binomial requires binomial as its fallback.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_n_buckets",
+        default=24,
+        type=int,
+        help="Number of exact unique-k-mer-count buckets used for beta-binomial fitting.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_min_records_per_n",
+        default=50,
+        type=int,
+        help="Minimum source proteins required for an exact-N fitting bucket.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_max_records_per_n",
+        default=500,
+        type=int,
+        help="Maximum sampled source proteins per exact-N fitting bucket; 0 uses all.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_min_nonzero_queries",
+        default=20,
+        type=int,
+        help="Minimum nonzero null hits required to fit one family.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_max_families",
+        default=0,
+        type=int,
+        help="Optional random fitting cap for debugging; 0 fits every family.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_min_family_prob",
+        default=0.0,
+        type=float,
+        help="Fit families whose binomial probability is at least this value.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_fit_workers",
+        default=1,
+        type=int,
+        help="Worker processes used for per-family beta-binomial fits.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_max_histogram_gb",
+        default=3.0,
+        type=float,
+        help="Maximum RAM for one beta-binomial histogram batch; 0 is unbounded.",
+    )
+    mkdb_parser.add_argument(
+        "--bbinom_seed",
+        default=42,
+        type=int,
+        help="Random seed for beta-binomial source-protein sampling.",
+    )
+    mkdb_parser.add_argument(
         "--oma_path",
         help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk). [BROWSERBUILD]",
     )
@@ -227,7 +288,7 @@ def main():
     )
     search_parser.add_argument(
         "--family_model",
-        choices=("auto", "binomial", "bbinom"),
+        choices=("auto", "binomial", "beta-binomial"),
         default="auto",
         help="Family significance model. Auto uses stored beta-binomial coefficients when available.",
     )
@@ -325,165 +386,6 @@ def main():
         "--db",
         required=True,
         help="Path to an existing database (including filename).",
-    )
-
-    import_bbinom_parser = subparsers.add_parser(
-        "import-bbinom",
-        formatter_class=ArgumentDefaultsHelpFormatter,
-        help="Import precomputed beta-binomial family coefficients into a database.",
-        description="Import precomputed length-aware beta-binomial coefficients into /Index for search-time family scoring.",
-    )
-    import_bbinom_parser.set_defaults(func=import_bbinom)
-    import_bbinom_parser.add_argument(
-        "-d",
-        "--db",
-        required=True,
-        help="Path to an existing database (including filename).",
-    )
-    import_bbinom_parser.add_argument(
-        "-c",
-        "--coefficients",
-        required=True,
-        help="Path to coefficient TSV/CSV with family_offset, modality, log_n_center, log_n_scale, q_coef_0..2, and kappa_coef_0..1.",
-    )
-    import_bbinom_parser.add_argument(
-        "--log_level",
-        default="info",
-        choices=["debug", "info", "warning"],
-        help="Logging level.",
-    )
-
-    compute_bbinom_parser = subparsers.add_parser(
-        "compute-bbinom",
-        formatter_class=ArgumentDefaultsHelpFormatter,
-        help="Fit precomputed beta-binomial family coefficients from sequence FASTA records.",
-        description="Fit length-aware beta-binomial coefficients for amino-acid or 3Di searches using an existing OMAmer index and external query-like FASTA records.",
-    )
-    compute_bbinom_parser.set_defaults(func=compute_bbinom)
-    compute_bbinom_parser.add_argument(
-        "-d",
-        "--db",
-        required=True,
-        help="Path to an existing indexed OMAmer database.",
-    )
-    compute_bbinom_parser.add_argument(
-        "-s",
-        "--sequences",
-        nargs="+",
-        required=True,
-        help="FASTA file(s) of query-like training records. For --modality seq these are amino-acid sequences; for --modality ss these are 3Di structure sequences. The OMAmer DB does not retain original sequence buffers.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--modality",
-        default="seq",
-        choices=["seq", "ss"],
-        help="Which family background to fit: seq (amino-acid index) or ss (3Di structure index).",
-    )
-    compute_bbinom_parser.add_argument(
-        "--kmer_percentage",
-        default=None,
-        type=float,
-        help="Optional compatibility check for the database's build-time k-mer "
-             "percentage. Fitting always uses the stored value.",
-    )
-    compute_bbinom_parser.add_argument(
-        "-o",
-        "--out",
-        required=True,
-        help="Output TSV path for beta-binomial coefficients.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--family_offsets",
-        help="Optional file of family offsets to fit. Accepts one integer per line or a TSV with a family_offset column.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--max_families",
-        default=0,
-        type=int,
-        help="Optional random cap on selected families; 0 means no cap.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--min_family_prob",
-        default=0.0,
-        type=float,
-        help="When --family_offsets is not provided, fit families with FamilyProbability at least this value.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--n_values",
-        help="Comma- or space-separated exact unique-kmer counts to use. If omitted, values are chosen across the eligible N range.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--n_buckets",
-        default=24,
-        type=int,
-        help="Number of exact-N buckets to choose when --n_values is omitted. Use 0 for all eligible N values.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--min_records_per_n",
-        default=50,
-        type=int,
-        help="Minimum available sequence records required for an exact-N bucket.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--max_records_per_n",
-        default=500,
-        type=int,
-        help="Maximum sampled sequence records per selected exact-N bucket. Use 0 for all records.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--min_nonzero_queries",
-        default=20,
-        type=int,
-        help=(
-            "Minimum number of sampled queries with nonzero hits required "
-            "to fit a family (default: 20)."
-        ),
-    )
-    compute_bbinom_parser.add_argument(
-        "--n_summary_out",
-        help="Optional TSV path to write exact-N availability and selection summary.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--n_counts_cache",
-        help=(
-            "Optional .npy cache for per-record exact unique-kmer counts. "
-            "An existing cache skips the full counting scan."
-        ),
-    )
-    compute_bbinom_parser.add_argument(
-        "-c",
-        "--chunksize",
-        default=10000,
-        type=int,
-        help="Number of FASTA records to read per chunk.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--seed",
-        default=42,
-        type=int,
-        help="Random seed for family and record sampling.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--fit_workers",
-        default=1,
-        type=int,
-        help="Number of worker processes for per-family scipy fits.",
-    )
-    compute_bbinom_parser.add_argument(
-        "--max_histogram_gb",
-        default=3.0,
-        type=float,
-        help=(
-            "Maximum RAM used by one dense family-hit histogram batch. "
-            "Families are split into multiple batches when necessary; "
-            "use 0 for one unbounded batch."
-        ),
-    )
-    compute_bbinom_parser.add_argument(
-        "--log_level",
-        default="info",
-        choices=["debug", "info", "warning"],
-        help="Logging level.",
     )
 
     args = parser.parse_args()

@@ -44,11 +44,11 @@ from .hierarchy import (
     get_root_leaf_offsets,
     is_taxon_implied,
 )
-from .index import cumulate_counts_1fam
 from .sequence_buffer import SequenceBuffer
 from .stat_models import (
     FamilyScoringParameters,
     HogModelParameters,
+    cumulate_counts_1fam,
     family_log_correction,
     filter_family_candidates,
     make_family_model,

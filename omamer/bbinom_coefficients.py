@@ -220,7 +220,9 @@ def _write_modality_coefficients(db, index_group, modality, rows):
     h5.create_carray(index_group, names["n_min"], obj=n_min, filters=filters)
     h5.create_carray(index_group, names["n_max"], obj=n_max, filters=filters)
 
-    return int(valid.sum()), rejected
+    valid_count = int(valid.sum())
+    unfitted_count = n_families - len(rows)
+    return valid_count, rejected, unfitted_count
 
 
 def _coefficient_kmer_percentage(rows):
@@ -237,20 +239,54 @@ def _coefficient_kmer_percentage(rows):
     return float(percentages[0])
 
 
-def import_bbinom_coefficients(db, coefficient_path):
+def store_bbinom_coefficients(
+    db,
+    coefficients,
+    modalities=None,
+    kmer_percentage=None,
+):
+    """Persist fitted coefficient rows without an intermediate text file."""
     if "/Index" not in db.db:
         raise ValueError("Database has no /Index group")
 
-    df = read_bbinom_coefficients(coefficient_path)
+    df = coefficients.copy()
     index_group = db.db.root.Index
     db_percentage = float(
         getattr(index_group._v_attrs, "kmer_percentage", 100.0)
     )
+    if kmer_percentage is not None and not np.isclose(
+        float(kmer_percentage),
+        db_percentage,
+    ):
+        raise ValueError(
+            "Beta-binomial coefficients use kmer_percentage={}, but the "
+            "database was built with kmer_percentage={}".format(
+                kmer_percentage,
+                db_percentage,
+            )
+        )
 
-    grouped = list(df.groupby("modality", sort=True))
+    grouped = {
+        modality: rows
+        for modality, rows in df.groupby("modality", sort=True)
+    } if "modality" in df.columns else {}
+    if modalities is None:
+        modalities = tuple(sorted(grouped))
+    else:
+        modalities = tuple(dict.fromkeys(modalities))
+    unknown = sorted(set(modalities).difference(BBINOM_NODE_NAMES))
+    if unknown:
+        raise ValueError(
+            "Unknown modalities: {}".format(", ".join(unknown))
+        )
+
     percentages = {
-        modality: _coefficient_kmer_percentage(rows)
-        for modality, rows in grouped
+        modality: (
+            _coefficient_kmer_percentage(grouped[modality])
+            if modality in grouped and len(grouped[modality])
+            else db_percentage
+        )
+        for modality in modalities
     }
     for modality, percentage in percentages.items():
         if not np.isclose(percentage, db_percentage):
@@ -262,8 +298,9 @@ def import_bbinom_coefficients(db, coefficient_path):
             )
 
     written = {}
-    for modality, rows in grouped:
-        valid_count, invalid_count = _write_modality_coefficients(
+    for modality in modalities:
+        rows = grouped.get(modality, df.iloc[0:0])
+        valid_count, invalid_count, unfitted_count = _write_modality_coefficients(
             db,
             index_group,
             modality,
@@ -285,6 +322,10 @@ def import_bbinom_coefficients(db, coefficient_path):
         index_group._f_setattr(
             "{}_bbinom_invalid_count".format(modality),
             invalid_count,
+        )
+        index_group._f_setattr(
+            "{}_bbinom_unfitted_count".format(modality),
+            unfitted_count,
         )
 
     index_group._f_setattr("bbinom_model", "length_aware_beta_binomial")

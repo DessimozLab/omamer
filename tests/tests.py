@@ -6,10 +6,7 @@ from types import SimpleNamespace
 from scipy.stats import betabinom
 from scipy.optimize import check_grad
 from omamer.alphabets import Alphabet, get_transform
-from omamer.bbinom_coefficients import (
-    bbinom_coefficient_valid_mask,
-    import_bbinom_coefficients,
-)
+from omamer.bbinom_coefficients import bbinom_coefficient_valid_mask
 from omamer.bbinom_fit import (
     DenseFamilyHitHistogram,
     _bbinom_objective_and_gradient,
@@ -263,76 +260,6 @@ def test_beta_binomial_length_aware_parameter_reconstruction():
     np.testing.assert_allclose(q, 0.5)
     np.testing.assert_allclose(alpha, 10.0)
     np.testing.assert_allclose(beta, 10.0)
-
-
-def test_import_bbinom_coefficients_writes_modality_arrays(tmp_path):
-    db_path = tmp_path / "test.h5"
-    coeff_path = tmp_path / "coefficients.tsv"
-    coeff_path.write_text(
-        "\t".join(
-            [
-                "family_offset",
-                "modality",
-                "log_n_center",
-                "log_n_scale",
-                "q_coef_0",
-                "q_coef_1",
-                "q_coef_2",
-                "kappa_coef_0",
-                "kappa_coef_1",
-                "n_train_min",
-                "n_train_max",
-                "fit_valid",
-                "optimizer_success",
-            ]
-        )
-        + "\n"
-        + "1\tseq\t4.0\t1.5\t0.1\t0.2\t0.3\t2.0\t0.4\t52\t277\ttrue\ttrue\n"
-        + "2\tss\t4.1\t1.6\t0.5\t0.6\t0.7\t3.0\t0.8\t52\t277\ttrue\ttrue\n"
-        + "0\tss\t4.1\t1.6\t50.0\t0.6\t0.7\t3.0\t0.8\t52\t277\tfalse\ttrue\n"
-    )
-
-    family_descr = {"ID": tables.UInt32Col()}
-    filters = tables.Filters(complevel=0)
-    with tables.open_file(db_path, "w") as h5:
-        fam = h5.create_table("/", "Family", family_descr)
-        for i in range(3):
-            row = fam.row
-            row["ID"] = i
-            row.append()
-        fam.flush()
-        h5.create_group("/", "Index")
-
-    class FakeDB:
-        def __init__(self, h5):
-            self.db = h5
-            self.compression_filters = filters
-
-        @property
-        def family_table(self):
-            return self.db.root.Family
-
-    with tables.open_file(db_path, "a") as h5:
-        h5.root.Index._f_setattr("kmer_percentage", 80.0)
-        with pytest.raises(ValueError, match="database was built"):
-            import_bbinom_coefficients(FakeDB(h5), coeff_path)
-        assert "/Index/FamilyBBinomValid" not in h5
-
-        h5.root.Index._f_setattr("kmer_percentage", 100.0)
-        written = import_bbinom_coefficients(FakeDB(h5), coeff_path)
-        assert written == {"seq": 1, "ss": 1}
-        assert h5.root.Index._v_attrs["bbinom_model"] == "length_aware_beta_binomial"
-        # Old coefficient TSVs omit the column and are explicitly marked as
-        # compatible with the unfiltered structural search.
-        assert h5.root.Index._v_attrs["ss_bbinom_kmer_percentage"] == 100.0
-        assert h5.root.Index._v_attrs["seq_bbinom_kmer_percentage"] == 100.0
-        assert h5.root.Index._v_attrs["ss_bbinom_valid_count"] == 1
-        assert h5.root.Index._v_attrs["ss_bbinom_invalid_count"] == 1
-        assert h5.root.Index._v_attrs["ss_bbinom_validity_policy_version"] == 1
-        np.testing.assert_array_equal(h5.root.Index.FamilyBBinomValid[:], [False, True, False])
-        np.testing.assert_array_equal(h5.root.Index.SSFamilyBBinomValid[:], [False, False, True])
-        np.testing.assert_allclose(h5.root.Index.FamilyBBinomQCoef[1], [0.1, 0.2, 0.3])
-        np.testing.assert_allclose(h5.root.Index.SSFamilyBBinomKappaCoef[2], [3.0, 0.8])
 
 
 def test_choose_sequence_n_values_selects_eligible_buckets():

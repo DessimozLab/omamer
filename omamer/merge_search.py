@@ -686,6 +686,8 @@ class MergeSearch(object):
         self.db = ki.db
         self.ki = ki
         self.has_structure = self.db.has_structure()
+        self.resolved_family_models = {}
+        self._reported_family_models = set()
 
         self.include_extant_genes = include_extant_genes
         if (
@@ -907,31 +909,63 @@ class MergeSearch(object):
             else self.ss_ref_fam_prob
         )
         if policy == "binomial":
-            return make_family_model(policy, probability)
-
-        if modality == "seq":
-            return make_family_model(
+            model = make_family_model(policy, probability)
+            valid = np.empty(0, dtype=np.bool_)
+        elif modality == "seq":
+            valid = self.ref_fam_bbinom_valid
+            model = make_family_model(
                 policy,
                 probability,
                 self.ref_fam_bbinom_q_coef,
                 self.ref_fam_bbinom_kappa_coef,
                 self.ref_fam_bbinom_center,
                 self.ref_fam_bbinom_scale,
-                self.ref_fam_bbinom_valid,
+                valid,
                 self.ref_fam_bbinom_n_min,
                 self.ref_fam_bbinom_n_max,
             )
-        return make_family_model(
-            policy,
-            probability,
-            self.ss_ref_fam_bbinom_q_coef,
-            self.ss_ref_fam_bbinom_kappa_coef,
-            self.ss_ref_fam_bbinom_center,
-            self.ss_ref_fam_bbinom_scale,
-            self.ss_ref_fam_bbinom_valid,
-            self.ss_ref_fam_bbinom_n_min,
-            self.ss_ref_fam_bbinom_n_max,
-        )
+        else:
+            valid = self.ss_ref_fam_bbinom_valid
+            model = make_family_model(
+                policy,
+                probability,
+                self.ss_ref_fam_bbinom_q_coef,
+                self.ss_ref_fam_bbinom_kappa_coef,
+                self.ss_ref_fam_bbinom_center,
+                self.ss_ref_fam_bbinom_scale,
+                valid,
+                self.ss_ref_fam_bbinom_n_min,
+                self.ss_ref_fam_bbinom_n_max,
+            )
+
+        resolved = "beta-binomial" if model.valid.size else "binomial"
+        self.resolved_family_models[modality] = resolved
+        report_key = (modality, policy, resolved)
+        if report_key not in self._reported_family_models:
+            if policy == "auto" and valid.size and not np.any(valid):
+                LOG.warning(
+                    "The %s index stores beta-binomial arrays but has no valid "
+                    "fits; family_model='auto' resolved to binomial",
+                    modality,
+                )
+            if policy == "binomial":
+                LOG.info(
+                    "Resolved family model for modality '%s': binomial "
+                    "(explicitly requested)",
+                    modality,
+                )
+            else:
+                LOG.info(
+                    "Resolved family model for modality '%s': %s "
+                    "(requested %s; %d/%d valid beta-binomial fits)",
+                    modality,
+                    resolved,
+                    policy,
+                    int(np.count_nonzero(valid)),
+                    int(valid.size),
+                )
+            self._reported_family_models.add(report_key)
+        return model
 
     def _search_components(self, modality, family_model_policy):
         """Build disjoint k-mer, family-model, and HOG-model carriers."""

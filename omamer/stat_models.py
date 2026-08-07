@@ -262,6 +262,9 @@ def learn_index_models(
     """Learn and persist every requested model for every indexed modality."""
     models = validate_index_models(models)
     bbinom_options = dict(bbinom_options or {})
+    n_values_by_modality = dict(
+        bbinom_options.pop("n_values_by_modality", {}) or {}
+    )
 
     for modality, data in modality_data.items():
         LOG.info("Learning binomial model for modality '%s'", modality)
@@ -271,15 +274,30 @@ def learn_index_models(
         from .bbinom_coefficients import store_bbinom_coefficients
         from .bbinom_fit import fit_bbinom_coefficients_from_buffer
 
+        unavailable_n_values = sorted(
+            modality
+            for modality, values in n_values_by_modality.items()
+            if values is not None and modality not in modality_data
+        )
+        if unavailable_n_values:
+            raise ValueError(
+                "Beta-binomial fitting options supplied for unavailable "
+                "modality: {}".format(", ".join(unavailable_n_values))
+            )
+
         for modality, data in modality_data.items():
             LOG.info("Learning beta-binomial model for modality '%s'", modality)
+            fit_options = dict(bbinom_options)
+            modality_n_values = n_values_by_modality.get(modality)
+            if modality_n_values is not None:
+                fit_options["n_values"] = modality_n_values
             rows = fit_bbinom_coefficients_from_buffer(
                 db,
                 data.sequence_buffer,
                 modality=modality,
                 table_index=data.table_index,
                 table_buffer=data.table_buffer,
-                **bbinom_options,
+                **fit_options,
             )
             store_bbinom_coefficients(
                 db,

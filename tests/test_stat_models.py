@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numba
 import numpy as np
 import pytest
@@ -8,6 +10,7 @@ from omamer.stat_models import (
     FamilyScoringParameters,
     filter_family_candidates,
     get_family_model,
+    learn_index_models,
     make_family_model,
     score_family_candidates,
 )
@@ -61,6 +64,66 @@ def test_family_model_enum_compiles_in_parallel_nogil():
 
     assert np.all(result)
     assert apply.nopython_signatures
+
+
+def test_index_model_learning_uses_modality_specific_n_values(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        "omamer.stat_models._write_binomial_model",
+        lambda *args, **kwargs: None,
+    )
+
+    def fake_buffer(db, sequence_buffer, **kwargs):
+        calls.append(("buffer", sequence_buffer, kwargs))
+        return None
+
+    monkeypatch.setattr(
+        "omamer.bbinom_fit.fit_bbinom_coefficients_from_buffer",
+        fake_buffer,
+    )
+    monkeypatch.setattr(
+        "omamer.bbinom_coefficients.store_bbinom_coefficients",
+        lambda *args, **kwargs: None,
+    )
+
+    class FakeIndexGroup:
+        def __init__(self):
+            self.attrs = {}
+
+        def _f_setattr(self, name, value):
+            self.attrs[name] = value
+
+    index_group = FakeIndexGroup()
+    data = {
+        modality: SimpleNamespace(
+            sequence_buffer="{}-buffer".format(modality),
+            table_index=np.asarray([0], dtype=np.uint32),
+            table_buffer=np.empty(0, dtype=np.uint32),
+        )
+        for modality in ("seq", "ss")
+    }
+    db = SimpleNamespace(ki=SimpleNamespace(kmer_percentage=100.0))
+
+    learn_index_models(
+        db,
+        index_group,
+        data,
+        models=("binomial", "beta-binomial"),
+        bbinom_options={
+            "n_values_by_modality": {"ss": "50,100"},
+        },
+    )
+
+    assert [call[:2] for call in calls] == [
+        ("buffer", "seq-buffer"),
+        ("buffer", "ss-buffer"),
+    ]
+    assert "n_values" not in calls[0][2]
+    assert calls[1][2]["n_values"] == "50,100"
+    for _, _, kwargs in calls:
+        assert "n_values_by_modality" not in kwargs
+    assert index_group.attrs["models"] == "binomial,beta-binomial"
 
 
 def test_family_candidate_operations_dispatch_and_fallback():

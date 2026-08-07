@@ -4,7 +4,6 @@ Fit length-aware beta-binomial family coefficients from sequence FASTA records.
 from __future__ import annotations
 
 import math
-import os
 from array import array
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
@@ -1091,6 +1090,26 @@ def _fit_sampled_bbinom_coefficients(
     return pd.DataFrame()
 
 
+def _store_training_metadata(
+    db,
+    modality,
+    *,
+    source,
+    selected_n,
+    record_count,
+    sampled_record_count,
+):
+    """Persist enough fitting provenance to audit a built database."""
+    attrs = db.db.root.Index._v_attrs
+    prefix = "{}_bbinom_training_".format(modality)
+    attrs[prefix + "source"] = source
+    attrs[prefix + "n_values"] = ",".join(
+        map(str, np.asarray(selected_n).tolist())
+    )
+    attrs[prefix + "record_count"] = int(record_count)
+    attrs[prefix + "sampled_record_count"] = int(sampled_record_count)
+
+
 def fit_bbinom_coefficients_from_buffer(
     db,
     sequence_buffer,
@@ -1162,6 +1181,14 @@ def fit_bbinom_coefficients_from_buffer(
         sequence_buffer,
         n_records,
         sampled_by_n,
+    )
+    _store_training_metadata(
+        db,
+        modality,
+        source="database_protein_buffer",
+        selected_n=selected_n,
+        record_count=n_records,
+        sampled_record_count=len(sampled_indices),
     )
     protein_hogs = db.protein_table.col("HOGoff")
     hog_families = db.hog_table.col("FamOff")

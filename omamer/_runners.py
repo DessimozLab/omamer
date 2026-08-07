@@ -148,6 +148,9 @@ def mkdb_oma(args):
         kmer_percentage=args.kmer_percentage,
         models=args.models,
         bbinom_options={
+            "n_values_by_modality": {
+                "ss": getattr(args, "bbinom_ss_n_values", None),
+            },
             "n_buckets": getattr(args, "bbinom_n_buckets", 24),
             "min_records_per_n": getattr(
                 args, "bbinom_min_records_per_n", 50
@@ -341,6 +344,22 @@ def search(args):
                         file=args.out,
                     )
                     print("!db-path: {}".format(db.filename), file=args.out)
+                    print(
+                        "!family-model-requested: {}".format(
+                            getattr(args, "family_model", "auto")
+                        ),
+                        file=args.out,
+                    )
+                    resolved_models = ",".join(
+                        "{}:{}".format(modality, model)
+                        for modality, model in sorted(
+                            ms.resolved_family_models.items()
+                        )
+                    )
+                    print(
+                        "!family-model-resolved: {}".format(resolved_models),
+                        file=args.out,
+                    )
 
                     # include some of the db metadata
                     db_info = dict(_format_info_db(db))

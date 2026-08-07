@@ -1,4 +1,5 @@
 from itertools import combinations
+from types import SimpleNamespace
 
 import numba
 import numpy as np
@@ -91,6 +92,27 @@ def test_resolve_family_model():
     )
     with pytest.raises(ValueError, match="requires beta-binomial"):
         get_family_model("bbinom", False)
+
+
+def test_auto_model_reports_all_invalid_beta_binomial_fallback(caplog):
+    search = SimpleNamespace(
+        ss_ref_fam_prob=np.asarray([0.01]),
+        ss_ref_fam_bbinom_q_coef=np.zeros((1, 3)),
+        ss_ref_fam_bbinom_kappa_coef=np.zeros((1, 2)),
+        ss_ref_fam_bbinom_center=np.zeros(1),
+        ss_ref_fam_bbinom_scale=np.ones(1),
+        ss_ref_fam_bbinom_valid=np.zeros(1, dtype=np.bool_),
+        ss_ref_fam_bbinom_n_min=np.ones(1, dtype=np.uint32),
+        ss_ref_fam_bbinom_n_max=np.ones(1, dtype=np.uint32),
+        resolved_family_models={},
+        _reported_family_models=set(),
+    )
+
+    model = MergeSearch._family_model(search, "ss", "auto")
+
+    assert model.kind == FamilyModel.BINOMIAL
+    assert search.resolved_family_models == {"ss": "binomial"}
+    assert "stores beta-binomial arrays but has no valid fits" in caplog.text
 
 
 def test_lookup_compiles_and_dispatches_search_strategies():

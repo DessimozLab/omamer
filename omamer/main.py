@@ -165,6 +165,12 @@ def main():
         "Beta-binomial requires binomial as its fallback.",
     )
     mkdb_parser.add_argument(
+        "--bbinom_ss_n_values",
+        help="Comma- or space-separated exact unique-k-mer counts used for "
+        "3Di beta-binomial fitting. If omitted, buckets are selected from "
+        "the database structures.",
+    )
+    mkdb_parser.add_argument(
         "--bbinom_n_buckets",
         default=24,
         type=int,

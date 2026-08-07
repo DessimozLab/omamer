@@ -26,75 +26,84 @@ import numba
 import numpy as np
 
 
-@numba.njit(nogil=True)
-def fam_res_compare(x1, x2):
+FAMILY_SORT_NORMCOUNT = 1
+FAMILY_SORT_PVALUE = 2
+
+
+def resolve_family_sorting(policy):
+    """Resolve a user-facing family-ranking policy to its Numba code."""
+    policies = {
+        "normcount": FAMILY_SORT_NORMCOUNT,
+        "pvalue": FAMILY_SORT_PVALUE,
+    }
+    try:
+        return policies[policy]
+    except KeyError:
+        raise ValueError(
+            "family_sorting must be 'normcount' or 'pvalue', got {!r}".format(
+                policy
+            )
+        ) from None
+
+
+@numba.njit(nogil=True, inline="always")
+def fam_res_compare(x1, x2, sorting):
     """
-    Compare two family results and order them according to normcount, overlap and pvalue.
+    Compare two family results using the selected descending field order.
     """
-    # normalised count
-    if x1["normcount"] != x2["normcount"]:
-        # greater first
-        return -1 if (x1["normcount"] > x2["normcount"]) else 1
-    else:
+    if sorting == FAMILY_SORT_PVALUE:
+        if x1["pvalue"] != x2["pvalue"]:
+            # pvalue is stored in -log units, so greater is more significant.
+            return -1 if x1["pvalue"] > x2["pvalue"] else 1
         if x1["overlap"] != x2["overlap"]:
-            # greater first
-            return -1 if (x1["overlap"] > x2["overlap"]) else 1
-        else:
-            if x1["pvalue"] != x2["pvalue"]:
-                # greater first. note, we use neglog units
-                return -1 if (x1["pvalue"] > x2["pvalue"]) else 1
+            return -1 if x1["overlap"] > x2["overlap"] else 1
+        if x1["normcount"] != x2["normcount"]:
+            return -1 if x1["normcount"] > x2["normcount"] else 1
+    else:
+        if x1["normcount"] != x2["normcount"]:
+            return -1 if x1["normcount"] > x2["normcount"] else 1
+        if x1["overlap"] != x2["overlap"]:
+            return -1 if x1["overlap"] > x2["overlap"] else 1
+        if x1["pvalue"] != x2["pvalue"]:
+            return -1 if x1["pvalue"] > x2["pvalue"] else 1
     # equal. take whichever.
     return 0
 
 
-@numba.njit(nogil=True)
-def fam_res_less(x1, x2):
+@numba.njit(nogil=True, inline="always")
+def fam_res_less(x1, x2, sorting):
     """
     Same as fam_res_compare, but operates as '<'
     """
-    if x1["normcount"] != x2["normcount"]:
-        return x1["normcount"] < x2["normcount"]
-
-    if x1["overlap"] != x2["overlap"]:
-        return x1["overlap"] < x2["overlap"]
-
-    if x1["pvalue"] != x2["pvalue"]:
-        return x1["pvalue"] < x2["pvalue"]
-
-    return False
+    return fam_res_compare(x1, x2, sorting) > 0
 
 
-@numba.njit(nogil=True)
-def fam_res_le(x1, x2):
+@numba.njit(nogil=True, inline="always")
+def fam_res_le(x1, x2, sorting):
     """
     Same as fam_res_compare, but operates as '<='
     """
-    if not fam_res_less(x1, x2):
-        return x1["normcount"] == x2["normcount"] and \
-            x1["overlap"] == x2["overlap"] and \
-            x1["pvalue"] == x2["pvalue"]
-
-    return True
+    return fam_res_compare(x1, x2, sorting) >= 0
 
 
-@numba.njit(nogil=True)
-def fam_res_greater(x1, x2):
+@numba.njit(nogil=True, inline="always")
+def fam_res_greater(x1, x2, sorting):
     """
     Same as fam_res_compare, but operates as '>'
     """
-    return not fam_res_le(x1, x2)
+    return fam_res_compare(x1, x2, sorting) < 0
 
 
-@numba.njit(nogil=True)
-def fam_res_ge(x1, x2):
+@numba.njit(nogil=True, inline="always")
+def fam_res_ge(x1, x2, sorting):
     """
     Same as fam_res_compare, but operates as '>='
     """
-    return not fam_res_less(x1, x2)
+    return fam_res_compare(x1, x2, sorting) <= 0
 
 
 @numba.njit(nogil=True)
-def family_result_argsort(x, ii):
+def family_result_argsort(x, ii, sorting):
     """
     argsort of family results using defined comparison above.
     uses an implementation of quicksort.
@@ -108,7 +117,7 @@ def family_result_argsort(x, ii):
     else:
         for i in ii:
             # need to implement the order here.
-            j = fam_res_compare(x[i], x[ii[0]])
+            j = fam_res_compare(x[i], x[ii[0]], sorting)
             if j < 0:
                 # LHS of pivot
                 bfs.append(i)
@@ -120,28 +129,28 @@ def family_result_argsort(x, ii):
                 pvs.append(i)
 
         if len(bfs) > 0:
-            bfs = family_result_argsort(x, bfs)
+            bfs = family_result_argsort(x, bfs, sorting)
         if len(afs) > 0:
-            afs = family_result_argsort(x, afs)
+            afs = family_result_argsort(x, afs, sorting)
 
         return bfs + pvs + afs
 
 
 @numba.njit(nogil=True)
-def family_result_sort(x, k):
+def family_result_sort(x, k, sorting=FAMILY_SORT_NORMCOUNT):
     """
-    Sort the family results according to normcount, overlap and pvalue (to break ties).
-    this uses a quicksort implementation as np.argsort does not support struct type in numba.
+    Select and sort family results using the requested descending field order.
+    This uses quickselect followed by quicksort because Numba's np.argsort
+    does not support structured records.
     """
 
     # Quickselect top k results
     idx = np.arange(len(x))
-    _ = _select(x, idx, k, 0, len(x) - 1)
+    _ = _select(x, idx, k, 0, len(x) - 1, sorting)
     x = x[idx[:k]]
 
-    # Now mergesort the selected results, because we need to
-    # report them sorted
-    idx = family_result_argsort(x, list(range(len(x))))
+    # Now quicksort the selected results because we need to report them sorted.
+    idx = family_result_argsort(x, list(range(len(x))), sorting)
     y = np.zeros_like(x)
     for i in range(len(x)):
         y[i] = x[idx[i]]
@@ -156,7 +165,7 @@ def _swap(array, i, j):
 
 
 @numba.njit(nogil=True)
-def _partition(x, idx, low, high):
+def _partition(x, idx, low, high, sorting):
     """
     Index-based version of the partition algorithm of
     quicksort. Juggles indexes of the idx array that
@@ -165,11 +174,11 @@ def _partition(x, idx, low, high):
     mid = (low + high) >> 1
 
     # Use median of three {low, middle, high} as the pivot
-    if fam_res_greater(x[idx[mid]], x[idx[low]]):
+    if fam_res_greater(x[idx[mid]], x[idx[low]], sorting):
         _swap(idx, mid, low)
-    if fam_res_greater(x[idx[high]], x[idx[mid]]):
+    if fam_res_greater(x[idx[high]], x[idx[mid]], sorting):
         _swap(idx, high, mid)
-        if fam_res_greater(x[idx[mid]], x[idx[low]]):
+        if fam_res_greater(x[idx[mid]], x[idx[low]], sorting):
             _swap(idx, low, mid)
 
     pivot = x[idx[mid]]
@@ -179,7 +188,7 @@ def _partition(x, idx, low, high):
     # Collect elements that are > pivot in the beginning
     i = low
     for j in range(low, high):
-        if fam_res_greater(x[idx[j]], pivot):
+        if fam_res_greater(x[idx[j]], pivot, sorting):
             _swap(idx, i, j)
             i += 1
 
@@ -190,19 +199,19 @@ def _partition(x, idx, low, high):
 
 
 @numba.njit(nogil=True)
-def _select(x, idx, k, low, high):
+def _select(x, idx, k, low, high, sorting):
     """
     Select the k'th largest element of the x array
     """
     if k >= len(x):
         return len(x)
 
-    i = _partition(x, idx, low, high)
+    i = _partition(x, idx, low, high, sorting)
     while i != k:
         if i < k:
             low = i + 1
-            i = _partition(x, idx, low, high)
+            i = _partition(x, idx, low, high, sorting)
         else:
             high = i - 1
-            i = _partition(x, idx, low, high)
+            i = _partition(x, idx, low, high, sorting)
     return idx[k]

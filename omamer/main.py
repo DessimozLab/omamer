@@ -298,6 +298,14 @@ def main():
         default="auto",
         help="Family significance model. Auto uses stored beta-binomial coefficients when available.",
     )
+    search_parser.add_argument(
+        "--family_sorting",
+        choices=("normcount", "pvalue"),
+        default="normcount",
+        help="Ranking of significant family candidates. 'normcount' uses "
+        "normcount, overlap, then -log(p); 'pvalue' uses -log(p), overlap, "
+        "then normcount.",
+    )
 
     search_parser.add_argument(
         "--threshold",

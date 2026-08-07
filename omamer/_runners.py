@@ -326,6 +326,7 @@ def search(args):
                 ref_taxon_off=ref_taxoff,
                 search_mode=getattr(args, "search_mode", "auto"),
                 family_model=getattr(args, "family_model", "auto"),
+                family_sorting=getattr(args, "family_sorting", "normcount"),
             )
             t_search1 = time()
 
@@ -358,6 +359,12 @@ def search(args):
                     )
                     print(
                         "!family-model-resolved: {}".format(resolved_models),
+                        file=args.out,
+                    )
+                    print(
+                        "!family-sorting: {}".format(
+                            getattr(args, "family_sorting", "normcount")
+                        ),
                         file=args.out,
                     )
 

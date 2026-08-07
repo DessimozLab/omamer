@@ -37,7 +37,7 @@ from .bbinom_coefficients import (
     BBINOM_VALIDITY_POLICY_VERSION,
     bbinom_coefficient_valid_mask,
 )
-from .family_sort import family_result_sort
+from .family_sort import family_result_sort, resolve_family_sorting
 from .hierarchy import (
     get_children,
     get_hog_member_prots,
@@ -126,6 +126,7 @@ PlacementConfig = namedtuple(
         "top_n_families",
         "subfamily_score_threshold",
         "family_only",
+        "family_sorting",
     ),
 )
 
@@ -614,8 +615,8 @@ def place_sequence(
         return False
 
     # 5. Store results
-    # - a. sort by normcount, then overlap, then p-value for tie-breaking
-    qres = family_result_sort(qres, top_n_fams)
+    # - a. rank the significant family candidates using the requested policy
+    qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
 
     # - b. store results
     family_results["id"][sequence_id, :top_n_fams] = qres["id"][:top_n_fams] + 1
@@ -1006,6 +1007,7 @@ class MergeSearch(object):
         ref_taxon_off=None,
         search_mode="auto",
         family_model="auto",
+        family_sorting="normcount",
     ):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
@@ -1056,6 +1058,7 @@ class MergeSearch(object):
             top_n_fams,
             sst,
             family_only,
+            resolve_family_sorting(family_sorting),
         )
         family_scoring = FamilyScoringParameters(
             -math.log(alpha),

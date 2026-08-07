@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from omamer.alphabets import Alphabet, get_transform
+from omamer.family_sort import FAMILY_SORT_NORMCOUNT
 from omamer.merge_search import (
     SEARCH_SEQUENCE,
     SEARCH_SEQUENCE_THEN_STRUCTURE,
@@ -178,7 +179,7 @@ def test_lookup_compiles_and_dispatches_search_strategies():
         modality=SEARCH_STRUCTURE
     )
     hog_model = HogModelParameters(np.array([1e-6]))
-    placement = PlacementConfig(1, 0.1, True)
+    placement = PlacementConfig(1, 0.1, True, FAMILY_SORT_NORMCOUNT)
     family_scoring = FamilyScoringParameters(0.0, 0.0)
     kernel = object.__new__(MergeSearch)._lookup
 

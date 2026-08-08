@@ -149,6 +149,7 @@ def mkdb_oma(args):
         models=args.models,
         bbinom_options={
             "n_values_by_modality": {
+                "seq": getattr(args, "bbinom_seq_n_values", None),
                 "ss": getattr(args, "bbinom_ss_n_values", None),
             },
             "n_buckets": getattr(args, "bbinom_n_buckets", 24),
@@ -171,6 +172,22 @@ def mkdb_oma(args):
         },
     )
     db.ki.sp_filter
+
+    # Write the training buffers before the index consumes them: mkdb is the
+    # only point where they exist, and a later refit cannot reconstruct them
+    # from the database, which stores k-mer tables but no sequences.
+    training_buffers_out = getattr(args, "training_buffers_out", None)
+    if training_buffers_out:
+        from .training_buffers import write_training_buffers
+
+        write_training_buffers(
+            training_buffers_out,
+            k=args.k,
+            alphabet_n=db.ki.alphabet.n,
+            n_records=len(db.protein_table),
+            buffers={"seq": seq_buff, "ss": ss_buff},
+        )
+
     db.ki.build_kmer_table(seq_buff, ss_buff)
     db.add_metadata()
     db.add_md5_hash()
@@ -495,6 +512,147 @@ def info_db(args):
         for k, v in _format_info_db(db):
             print(f"  {k:23s}:{v!s:>40}")
         print_line(80, file=sys.stdout)
+
+
+def _resolve_refit_modalities(db, requested):
+    from .refit import available_modalities
+
+    have = available_modalities(db)
+    if requested in (None, "both"):
+        return have
+    if requested not in have:
+        raise ValueError(
+            "Database has no '{}' index (available: {})".format(
+                requested, ", ".join(have)
+            )
+        )
+    return (requested,)
+
+
+def set_kmer_filter(args):
+    """Rewrite a database's k-mer information filter in place."""
+    from .database import Database
+    from .refit import drop_bbinom_coefficients, set_kmer_filter as apply_filter
+
+    with Database(args.db, mode="a") as db:
+        # Every indexed modality, always: kmer_percentage is a single attribute
+        # and Index rejects a database that records a filtered percentage while
+        # some modality still has a zero cutoff.
+        modalities = _resolve_refit_modalities(db, "both")
+        apply_filter(db, args.kmer_percentage, modalities=modalities)
+        if not args.keep_bbinom:
+            # The stored coefficients describe a background that no longer
+            # exists. Leaving them in place would silently score queries
+            # against the wrong null.
+            drop_bbinom_coefficients(db, modalities=modalities)
+        db.db.flush()
+
+
+def refit_bbinom(args):
+    """Refit beta-binomial coefficients for an existing database."""
+    import pandas as pd
+
+    from .database import Database
+    from .bbinom_fit import parse_family_shard
+    from .refit import refit_modality
+    from .training_buffers import TrainingBuffers
+
+    shard = parse_family_shard(getattr(args, "family_shard", None))
+    write_in_place = args.out is None
+    mode = "a" if write_in_place else "r"
+
+    with Database(args.db, mode=mode) as db, TrainingBuffers(args.buffers) as buffers:
+        buffers.check_compatible(db)
+        _check_db_kmer_percentage(db, getattr(args, "kmer_percentage", None))
+        modalities = _resolve_refit_modalities(db, args.modality)
+        missing = [m for m in modalities if m not in buffers.modalities]
+        if missing:
+            raise ValueError(
+                "Training buffers lack the {} modality needed for this "
+                "refit".format(", ".join(missing))
+            )
+
+        n_values = {"seq": args.seq_n_values, "ss": args.ss_n_values}
+        collected = []
+        for modality in modalities:
+            rows = refit_modality(
+                db,
+                buffers,
+                modality,
+                n_values=n_values[modality],
+                n_buckets=args.n_buckets,
+                min_records_per_n=args.min_records_per_n,
+                max_records_per_n=args.max_records_per_n,
+                min_nonzero_queries=args.min_nonzero_queries,
+                max_families=args.max_families,
+                min_family_prob=args.min_family_prob,
+                seed=args.seed,
+                workers=args.fit_workers,
+                max_histogram_gb=args.max_histogram_gb,
+                family_offsets_path=args.family_offsets,
+                family_shard=shard,
+                n_counts_cache=_shard_free_cache_path(args, modality),
+                # A shard fits only part of the family set, so it must not
+                # claim in the database that it trained the whole thing.
+                store_metadata=write_in_place and shard is None,
+            )
+            collected.append(rows)
+
+        coefficients = pd.concat(collected, ignore_index=True)
+        if write_in_place:
+            if shard is not None:
+                raise ValueError(
+                    "A sharded refit must write a coefficient file (-o) and be "
+                    "merged with import-bbinom; writing one shard in place "
+                    "would blank every family outside it"
+                )
+            from .bbinom_coefficients import store_bbinom_coefficients
+            from .refit import mark_models
+
+            store_bbinom_coefficients(db, coefficients, modalities=modalities)
+            mark_models(db, True)
+            db.db.flush()
+            LOG.info("Stored %d coefficient rows in %s", len(coefficients), args.db)
+        else:
+            coefficients.to_csv(args.out, sep="\t", index=False)
+            LOG.info("Wrote %d coefficient rows to %s", len(coefficients), args.out)
+
+
+def _shard_free_cache_path(args, modality):
+    """Per-modality N-count cache path, shared by every shard of a run."""
+    if not args.n_counts_cache:
+        return None
+    return "{}.{}.npz".format(args.n_counts_cache, modality)
+
+
+def import_bbinom(args):
+    """Merge fitted coefficient files into a database."""
+    import pandas as pd
+
+    from .bbinom_coefficients import read_bbinom_coefficients, store_bbinom_coefficients
+    from .database import Database
+
+    frames = [read_bbinom_coefficients(path) for path in args.coefficients]
+    coefficients = pd.concat(frames, ignore_index=True)
+    duplicated = coefficients.duplicated(["modality", "family_offset"])
+    if duplicated.any():
+        raise ValueError(
+            "Coefficient files overlap on {} (modality, family_offset) rows; "
+            "shards must be disjoint".format(int(duplicated.sum()))
+        )
+
+    with Database(args.db, mode="a") as db:
+        from .refit import mark_models
+
+        modalities = tuple(sorted(set(coefficients["modality"])))
+        written = store_bbinom_coefficients(db, coefficients, modalities=modalities)
+        mark_models(db, True)
+        db.db.flush()
+
+    for modality in modalities:
+        count = int((coefficients["modality"] == modality).sum())
+        LOG.info("Imported %d beta-binomial coefficient rows for %s", count, modality)
+    return written
 
 
 def _check_db_kmer_percentage(db, requested_percentage):

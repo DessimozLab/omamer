@@ -1,6 +1,32 @@
 
 # Change log
 
+## Unreleased
+
+### Added
+
+- `set-kmer-filter`, `refit-bbinom` and `import-bbinom`: re-derive family models
+  on a built database instead of rebuilding it. Neither the PMI k-mer filter nor
+  the beta-binomial design affects the k-mer tables, so one `mkdb` can serve a
+  whole sweep of filters and N grids.
+- `mkdb --training_buffers_out`: write the sequence and 3Di buffers to a sidecar
+  so a later refit can rebuild each null query's k-mer set. Only `mkdb` can
+  produce it -- the database stores k-mer tables, not sequences.
+- `refit-bbinom --family_shard i/n`: fit one contiguous shard of families, for
+  fanning a large build out over nodes. Shards draw the same null sample from
+  the same seed, so sharded and whole runs agree exactly.
+- `refit-bbinom --n_counts_cache`: cache the per-record exact-N scan. Keyed by
+  the k-mer filter, and refuses to be reused across filters.
+- `mkdb --bbinom_seq_n_values`, alongside the existing `--bbinom_ss_n_values`.
+
+### Changed
+
+- `import-bbinom` accepts several coefficient files and merges them, rejecting
+  overlapping shards. Stored arrays cover every family, so a partial import
+  would blank the rest.
+- The stored `models` attribute is now maintained when coefficients are added or
+  dropped, so `info` cannot advertise a model the database does not carry.
+
 ## Version 2.1.2
 
 ### Fixed

@@ -38,7 +38,14 @@ def main():
     import warnings
 
     from . import __version__, __copyright__
-    from ._runners import mkdb_oma, search, info_db
+    from ._runners import (
+        import_bbinom,
+        info_db,
+        mkdb_oma,
+        refit_bbinom,
+        search,
+        set_kmer_filter,
+    )
 
     class NoSubparsersMetavarFormatter(HelpFormatter):
         def _format_action(self, action):
@@ -165,10 +172,23 @@ def main():
         "Beta-binomial requires binomial as its fallback.",
     )
     mkdb_parser.add_argument(
+        "--bbinom_seq_n_values",
+        help="Comma- or space-separated exact unique-k-mer counts used for "
+        "amino-acid beta-binomial fitting. If omitted, buckets are selected "
+        "from the database sequences.",
+    )
+    mkdb_parser.add_argument(
         "--bbinom_ss_n_values",
         help="Comma- or space-separated exact unique-k-mer counts used for "
         "3Di beta-binomial fitting. If omitted, buckets are selected from "
         "the database structures.",
+    )
+    mkdb_parser.add_argument(
+        "--training_buffers_out",
+        help="Write the sequence and 3Di buffers to this HDF5 sidecar so that "
+        "refit-bbinom can re-fit family models later without rebuilding the "
+        "index. Only mkdb can produce it: the database itself keeps k-mer "
+        "tables, not sequences.",
     )
     mkdb_parser.add_argument(
         "--bbinom_n_buckets",
@@ -400,6 +420,208 @@ def main():
         "--db",
         required=True,
         help="Path to an existing database (including filename).",
+    )
+
+    ############################
+    # re-deriving family models on a built database
+    #
+    # Neither the k-mer filter nor the beta-binomial design affects the k-mer
+    # tables, which is where mkdb spends its time. These two commands let a
+    # sweep reuse one build.
+
+    filter_parser = subparsers.add_parser(
+        "set-kmer-filter",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+        help="Change the PMI k-mer information filter of an existing database.",
+        description="Rewrite kmer_percentage, the stored document-frequency "
+        "cutoff and the binomial probabilities derived from it. The k-mer "
+        "tables are untouched, so this is far cheaper than rebuilding.",
+    )
+    filter_parser.set_defaults(func=set_kmer_filter)
+    filter_parser.add_argument(
+        "-d", "--db", required=True, help="Path to an existing database."
+    )
+    filter_parser.add_argument(
+        "--kmer_percentage",
+        required=True,
+        type=float,
+        help="Percentage of indexed k-mer types to retain, ranked by "
+        "pointwise mutual information; 100 disables filtering.",
+    )
+    # No --modality here on purpose: kmer_percentage is one database-level
+    # attribute, and Index refuses to open a database whose percentage is
+    # filtered while a modality still has no cutoff. Applying it to one
+    # modality would leave the database unopenable.
+    filter_parser.add_argument(
+        "--keep_bbinom",
+        action="store_true",
+        help="Keep existing beta-binomial coefficients. They were fitted "
+        "against the previous filter, so they no longer describe the null; "
+        "only use this if you are about to refit.",
+    )
+    filter_parser.add_argument(
+        "--log_level",
+        default="info",
+        choices=["debug", "info", "warning"],
+        help="Logging level.",
+    )
+
+    refit_parser = subparsers.add_parser(
+        "refit-bbinom",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+        help="Refit beta-binomial family coefficients on an existing database.",
+        description="Re-fit length-aware beta-binomial coefficients using the "
+        "training buffers written by 'mkdb --training_buffers_out'. Pass "
+        "--family_shard to split one fit across nodes, then merge the "
+        "coefficient files with import-bbinom.",
+    )
+    refit_parser.set_defaults(func=refit_bbinom)
+    refit_parser.add_argument(
+        "-d", "--db", required=True, help="Path to an existing indexed database."
+    )
+    refit_parser.add_argument(
+        "-b",
+        "--buffers",
+        required=True,
+        help="Training-buffer sidecar written by mkdb --training_buffers_out.",
+    )
+    refit_parser.add_argument(
+        "-o",
+        "--out",
+        help="Write coefficients to this TSV instead of storing them in the "
+        "database. Required for a sharded fit.",
+    )
+    refit_parser.add_argument(
+        "--modality",
+        default="both",
+        choices=["seq", "ss", "both"],
+        help="Which modality to refit.",
+    )
+    refit_parser.add_argument(
+        "--seq_n_values",
+        help="Comma- or space-separated exact unique-k-mer counts for the "
+        "amino-acid fit. Overrides --n_buckets.",
+    )
+    refit_parser.add_argument(
+        "--ss_n_values",
+        help="Comma- or space-separated exact unique-k-mer counts for the 3Di "
+        "fit. Overrides --n_buckets.",
+    )
+    refit_parser.add_argument(
+        "--n_buckets",
+        default=24,
+        type=int,
+        help="Number of exact-N design points chosen when no explicit N "
+        "values are given. Selection is linear in N; 0 uses every eligible N.",
+    )
+    refit_parser.add_argument(
+        "--min_records_per_n",
+        default=50,
+        type=int,
+        help="Minimum source proteins required for an exact-N design point.",
+    )
+    refit_parser.add_argument(
+        "--max_records_per_n",
+        default=500,
+        type=int,
+        help="Maximum sampled source proteins per exact-N point; 0 uses all.",
+    )
+    refit_parser.add_argument(
+        "--min_nonzero_queries",
+        default=20,
+        type=int,
+        help="Minimum nonzero null hits required to fit one family.",
+    )
+    refit_parser.add_argument(
+        "--max_families",
+        default=0,
+        type=int,
+        help="Optional random fitting cap for debugging; 0 fits every family.",
+    )
+    refit_parser.add_argument(
+        "--min_family_prob",
+        default=0.0,
+        type=float,
+        help="Fit families whose binomial probability is at least this value.",
+    )
+    refit_parser.add_argument(
+        "--family_offsets",
+        help="Optional file of family offsets to fit, one integer per line or "
+        "a TSV with a family_offset column.",
+    )
+    refit_parser.add_argument(
+        "--family_shard",
+        help="Fit only one contiguous shard of the selected families, as "
+        "'i/n' with i zero-based. Every shard draws the same null sample, so "
+        "sharded and whole runs agree.",
+    )
+    refit_parser.add_argument(
+        "--n_counts_cache",
+        help="Path prefix for the per-record exact-N scan cache. Shards of "
+        "one fit should share it; it is keyed by the k-mer filter and refuses "
+        "to be reused across filters.",
+    )
+    refit_parser.add_argument(
+        "--fit_workers",
+        default=1,
+        type=int,
+        help="Worker processes used for per-family fits.",
+    )
+    refit_parser.add_argument(
+        "--max_histogram_gb",
+        default=3.0,
+        type=float,
+        help="Maximum RAM for one family histogram batch; 0 is unbounded. "
+        "Each extra batch repeats the whole hit-counting pass, so prefer one "
+        "batch, or shard families across nodes.",
+    )
+    refit_parser.add_argument(
+        "--seed",
+        default=42,
+        type=int,
+        help="Random seed for null source-protein sampling.",
+    )
+    refit_parser.add_argument(
+        "--kmer_percentage",
+        default=None,
+        type=float,
+        help="Optional compatibility check against the database's stored "
+        "k-mer percentage. Fitting always uses the stored value; change it "
+        "with set-kmer-filter first.",
+    )
+    refit_parser.add_argument(
+        "--log_level",
+        default="info",
+        choices=["debug", "info", "warning"],
+        help="Logging level.",
+    )
+
+    import_parser = subparsers.add_parser(
+        "import-bbinom",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+        help="Import fitted beta-binomial coefficients into a database.",
+        description="Merge one or more coefficient TSVs, as written by "
+        "refit-bbinom, into an existing database's /Index group. Pass every "
+        "shard of a fit at once: stored arrays cover all families, so "
+        "importing a subset blanks the rest.",
+    )
+    import_parser.set_defaults(func=import_bbinom)
+    import_parser.add_argument(
+        "-d", "--db", required=True, help="Path to an existing database."
+    )
+    import_parser.add_argument(
+        "-c",
+        "--coefficients",
+        required=True,
+        nargs="+",
+        help="Coefficient TSV/CSV files with family_offset, modality, "
+        "log_n_center, log_n_scale, q_coef_0..2 and kappa_coef_0..1.",
+    )
+    import_parser.add_argument(
+        "--log_level",
+        default="info",
+        choices=["debug", "info", "warning"],
+        help="Logging level.",
     )
 
     args = parser.parse_args()

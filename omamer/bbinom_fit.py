@@ -4,6 +4,7 @@ Fit length-aware beta-binomial family coefficients from sequence FASTA records.
 from __future__ import annotations
 
 import math
+import os
 from array import array
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
@@ -111,8 +112,25 @@ def _unique_valid_codes(
     return codes
 
 
-def _buffer_record_bounds(sequence_buffer, expected_records):
-    """Return sequence starts/stops for a space-delimited mkdb buffer."""
+def _buffer_record_bounds(sequence_buffer, expected_records, bounds=None):
+    """Return sequence starts/stops for a space-delimited mkdb buffer.
+
+    ``bounds`` short-circuits the delimiter scan when a caller already holds
+    the offsets, e.g. from a training-buffer sidecar. The scan itself needs a
+    transient boolean mask the size of the whole buffer, which is worth
+    avoiding on LUCA-scale builds.
+    """
+    if bounds is not None:
+        starts, stops = bounds
+        starts = np.asarray(starts, dtype=np.int64)
+        stops = np.asarray(stops, dtype=np.int64)
+        if starts.size != int(expected_records):
+            raise ValueError(
+                "Supplied record bounds hold {} records, expected {}".format(
+                    starts.size, expected_records
+                )
+            )
+        return starts, stops
     byte_view = np.asarray(sequence_buffer).view(np.uint8)
     stops = np.flatnonzero(byte_view == ord(" ")).astype(np.int64)
     if stops.size != int(expected_records):
@@ -136,9 +154,10 @@ def scan_buffer_unique_counts(
     alphabet,
     table_index,
     kmer_filter_max_df=0,
+    bounds=None,
 ):
     """Count exact unique k-mers directly from an mkdb sequence buffer."""
-    starts, stops = _buffer_record_bounds(sequence_buffer, expected_records)
+    starts, stops = _buffer_record_bounds(sequence_buffer, expected_records, bounds)
     transform = get_transform(k, alphabet.DIGITS_AA)
     x_flag = table_index.size - 1
     counts = np.empty(starts.size, dtype=np.uint32)
@@ -163,9 +182,10 @@ def load_sampled_buffer_sequences(
     sequence_buffer,
     expected_records,
     sampled_by_n,
+    bounds=None,
 ):
     """Materialize only sampled records from an mkdb sequence buffer."""
-    starts, stops = _buffer_record_bounds(sequence_buffer, expected_records)
+    starts, stops = _buffer_record_bounds(sequence_buffer, expected_records, bounds)
     selected = {
         int(record): int(n)
         for n, indices in sampled_by_n.items()
@@ -349,6 +369,116 @@ def select_family_offsets(db, family_offsets_path=None, min_family_prob=0.0, max
         rng = np.random.default_rng(seed)
         families = np.sort(rng.choice(families, size=int(max_families), replace=False))
     return families.astype(np.int64, copy=False)
+
+
+def parse_family_shard(value):
+    """Parse an ``i/n`` family shard selector into a zero-based (i, n)."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if "/" not in text:
+        raise ValueError(
+            "family shard must look like 'i/n', got {!r}".format(value)
+        )
+    index_text, count_text = text.split("/", 1)
+    index, count = int(index_text), int(count_text)
+    if count < 1:
+        raise ValueError("family shard count must be >= 1")
+    if not 0 <= index < count:
+        raise ValueError(
+            "family shard index {} outside 0..{}".format(index, count - 1)
+        )
+    return index, count
+
+
+def apply_family_shard(families, shard):
+    """Return the contiguous slice of ``families`` belonging to one shard.
+
+    Sharding is by family, never by null query: every shard samples the same
+    background records from the same seed, so a sharded run and a whole run
+    produce identical coefficients. Contiguous slices keep each shard's
+    histogram rows adjacent, which is what bounds its memory.
+    """
+    if shard is None:
+        return families
+    index, count = shard
+    edges = np.linspace(0, families.size, count + 1).astype(np.int64)
+    selected = families[edges[index] : edges[index + 1]]
+    LOG.info(
+        "Family shard %d/%d: %d of %d families (offsets %s..%s)",
+        index + 1,
+        count,
+        selected.size,
+        families.size,
+        selected[0] if selected.size else "-",
+        selected[-1] if selected.size else "-",
+    )
+    return selected
+
+
+def load_or_scan_unique_counts(
+    sequence_buffer,
+    n_records,
+    k,
+    alphabet,
+    table_index,
+    kmer_filter_max_df,
+    bounds=None,
+    cache_path=None,
+):
+    """Return per-record exact unique-k-mer counts, caching the scan.
+
+    The counts depend on the k-mer filter, so a cache written for one
+    ``kmer_percentage`` must not be reused for another. The cache records the
+    cutoff it was built with and refuses a mismatch rather than silently
+    fitting the wrong N grid.
+    """
+    if cache_path and os.path.exists(cache_path):
+        with np.load(cache_path) as cached:
+            cached_max_df = int(cached["kmer_filter_max_df"])
+            cached_records = int(cached["n_records"])
+            counts = cached["counts"]
+        if cached_max_df != int(kmer_filter_max_df):
+            raise ValueError(
+                "{} was built with kmer_filter_max_df={} but this fit uses "
+                "{}; delete it or use a per-filter cache path".format(
+                    cache_path, cached_max_df, kmer_filter_max_df
+                )
+            )
+        if cached_records != int(n_records):
+            raise ValueError(
+                "{} holds {} records but the database has {}".format(
+                    cache_path, cached_records, n_records
+                )
+            )
+        LOG.info("Loaded %d exact-N values from %s", counts.size, cache_path)
+        return counts
+
+    counts = scan_buffer_unique_counts(
+        sequence_buffer,
+        n_records,
+        k,
+        alphabet,
+        table_index,
+        kmer_filter_max_df,
+        bounds=bounds,
+    )
+    if cache_path:
+        # Write through a handle: np.savez would otherwise append ".npz" and
+        # the existence check above would never find its own cache. Write to a
+        # unique temporary and rename, so that shards of one sharded fit racing
+        # on the same path cannot leave a half-written cache behind.
+        temp_path = "{}.{}.tmp".format(cache_path, os.getpid())
+        with open(temp_path, "wb") as handle:
+            np.savez(
+                handle,
+                counts=counts,
+                kmer_filter_max_df=np.int64(kmer_filter_max_df),
+                n_records=np.int64(n_records),
+            )
+        os.replace(temp_path, cache_path)
+        LOG.info("Cached %d exact-N values in %s", counts.size, cache_path)
+    return counts
 
 
 def collect_family_hit_histograms(
@@ -1127,6 +1257,11 @@ def fit_bbinom_coefficients_from_buffer(
     min_nonzero_queries=20,
     workers=1,
     max_histogram_gb=3.0,
+    family_offsets_path=None,
+    family_shard=None,
+    bounds=None,
+    n_counts_cache=None,
+    store_metadata=True,
 ):
     """Fit beta-binomial coefficients from buffers retained during mkdb."""
     if modality not in ("seq", "ss"):
@@ -1136,6 +1271,7 @@ def fit_bbinom_coefficients_from_buffer(
 
     families = select_family_offsets(
         db,
+        family_offsets_path=family_offsets_path,
         min_family_prob=min_family_prob,
         max_families=max_families,
         seed=seed,
@@ -1144,6 +1280,9 @@ def fit_bbinom_coefficients_from_buffer(
     if families.size == 0:
         raise RuntimeError("No families selected for fitting")
     LOG.info("Selected {} families for beta-binomial fitting".format(families.size))
+    families = apply_family_shard(families, family_shard)
+    if families.size == 0:
+        raise RuntimeError("Family shard selected no families")
 
     index_node, buffer_node = _modality_index_arrays(db, modality)
     if table_index is None:
@@ -1152,13 +1291,15 @@ def fit_bbinom_coefficients_from_buffer(
         table_buffer = buffer_node[:]
     kmer_filter_max_df = _modality_kmer_max_df(db, modality)
     n_records = len(db.protein_table)
-    n_unique = scan_buffer_unique_counts(
+    n_unique = load_or_scan_unique_counts(
         sequence_buffer,
         n_records,
         db.ki.k,
         db.ki.alphabet,
         table_index,
         kmer_filter_max_df,
+        bounds=bounds,
+        cache_path=n_counts_cache,
     )
     _, selected_n = choose_sequence_n_values(
         n_unique,
@@ -1181,15 +1322,17 @@ def fit_bbinom_coefficients_from_buffer(
         sequence_buffer,
         n_records,
         sampled_by_n,
+        bounds=bounds,
     )
-    _store_training_metadata(
-        db,
-        modality,
-        source="database_protein_buffer",
-        selected_n=selected_n,
-        record_count=n_records,
-        sampled_record_count=len(sampled_indices),
-    )
+    if store_metadata:
+        _store_training_metadata(
+            db,
+            modality,
+            source="database_protein_buffer",
+            selected_n=selected_n,
+            record_count=n_records,
+            sampled_record_count=len(sampled_indices),
+        )
     protein_hogs = db.protein_table.col("HOGoff")
     hog_families = db.hog_table.col("FamOff")
     sampled_family_offsets = hog_families[protein_hogs[sampled_indices]]

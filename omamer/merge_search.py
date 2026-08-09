@@ -619,15 +619,16 @@ def place_sequence(
     qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
 
     # - b. store results
-    family_results["id"][sequence_id, :top_n_fams] = qres["id"][:top_n_fams] + 1
-    family_results["pvalue"][sequence_id, :top_n_fams] = qres["pvalue"][:top_n_fams]
-    family_results["count"][sequence_id, :top_n_fams] = qres["count"][:top_n_fams]
-    family_results["normcount"][sequence_id, :top_n_fams] = qres["normcount"][:top_n_fams]
-    family_results["overlap"][sequence_id, :top_n_fams] = qres["overlap"][:top_n_fams]
-    family_results["modality"][sequence_id, :top_n_fams] = index.modality
+    n_store = min(len(qres), top_n_fams)
+    family_results["id"][sequence_id, :n_store] = qres["id"][:n_store] + 1
+    family_results["pvalue"][sequence_id, :n_store] = qres["pvalue"][:n_store]
+    family_results["count"][sequence_id, :n_store] = qres["count"][:n_store]
+    family_results["normcount"][sequence_id, :n_store] = qres["normcount"][:n_store]
+    family_results["overlap"][sequence_id, :n_store] = qres["overlap"][:n_store]
+    family_results["modality"][sequence_id, :n_store] = index.modality
 
     # 5. Place within families
-    for i in range(min(len(qres), top_n_fams)):
+    for i in range(n_store):
         entry = fam_tab[qres["id"][i]]
         hog_s = entry["HOGoff"]
         hog_e = hog_s + entry["HOGnum"]

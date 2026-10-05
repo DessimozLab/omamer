@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import tables
+from property_manager import set_property
 
 from omamer.database import Database, DatabaseFromOMA
 from omamer.index import Index
@@ -360,5 +361,54 @@ def test_tiny_structure_index(tmp_path):
         np.testing.assert_allclose(idx.SSHOGProbability[:], [0.5, 0.0, 0.5])
         np.testing.assert_allclose(idx.SSFamilyProbability[:], idx.FamilyProbability[:])
         np.testing.assert_allclose(idx.SSHOGProbability[:], idx.HOGProbability[:])
+    finally:
+        db.close()
+
+
+def test_modalities_keep_independent_information_filters(tmp_path):
+    db = TinyIndexDatabase(tmp_path / "filtered-index.h5")
+    try:
+        index = Index(db, k=2, kmer_percentage=50)
+        index.build_kmer_table(
+            np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1"),
+            np.frombuffer(b"CCCC CCCC CCCC ", dtype="S1"),
+        )
+
+        idx = db.db.root.Index
+        assert index.kmer_max_df == idx._v_attrs.kmer_max_df == 1
+        assert index.ss_kmer_max_df == idx._v_attrs.ss_kmer_max_df == 2
+        np.testing.assert_array_equal(idx.TableBuffer[:], [0, 2, 0, 2])
+        np.testing.assert_array_equal(idx.SSTableBuffer[:], [0, 2])
+        np.testing.assert_allclose(idx.FamilyProbability[:], [0.5, 0.5])
+        np.testing.assert_allclose(idx.SSFamilyProbability[:], [1.0, 1.0])
+        np.testing.assert_allclose(idx.HOGProbability[:], [0.5, 0.0, 0.5])
+        np.testing.assert_allclose(idx.SSHOGProbability[:], [0.5, 0.0, 0.5])
+    finally:
+        db.close()
+
+
+def test_hidden_species_excluded_from_both_modalities(tmp_path):
+    db = TinyIndexDatabase(tmp_path / "hidden-species-index.h5")
+    try:
+        index = Index(db, k=2)
+        set_property(index, "sp_filter", np.asarray([True, False]))
+        index.build_kmer_table(
+            np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1"),
+            np.frombuffer(b"CCCC CCCD CCCE ", dtype="S1"),
+        )
+
+        idx = db.db.root.Index
+        for prefix, expected_codes in (("", [0, 1]), ("SS", [22, 23])):
+            table_index = getattr(idx, prefix + "TableIndex")[:]
+            np.testing.assert_array_equal(
+                np.flatnonzero(np.diff(table_index)), expected_codes
+            )
+            np.testing.assert_array_equal(getattr(idx, prefix + "TableBuffer")[:], [0, 0])
+            np.testing.assert_allclose(
+                getattr(idx, prefix + "FamilyProbability")[:], [1.0, 0.0]
+            )
+            np.testing.assert_allclose(
+                getattr(idx, prefix + "HOGProbability")[:], [1.0, 0.0, 0.0]
+            )
     finally:
         db.close()

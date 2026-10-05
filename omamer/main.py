@@ -422,13 +422,6 @@ def main():
         help="Path to an existing database (including filename).",
     )
 
-    ############################
-    # re-deriving family models on a built database
-    #
-    # Neither the k-mer filter nor the beta-binomial design affects the k-mer
-    # tables, which is where mkdb spends its time. These two commands let a
-    # sweep reuse one build.
-
     filter_parser = subparsers.add_parser(
         "set-kmer-filter",
         formatter_class=ArgumentDefaultsHelpFormatter,
@@ -448,10 +441,6 @@ def main():
         help="Percentage of indexed k-mer types to retain, ranked by "
         "pointwise mutual information; 100 disables filtering.",
     )
-    # No --modality here on purpose: kmer_percentage is one database-level
-    # attribute, and Index refuses to open a database whose percentage is
-    # filtered while a modality still has no cutoff. Applying it to one
-    # modality would leave the database unopenable.
     filter_parser.add_argument(
         "--keep_bbinom",
         action="store_true",

@@ -120,7 +120,7 @@ class Index(object):
             stored_models = getattr(attrs, "models", None)
             if stored_models is None:
                 stored_models = (
-                    "binomial,bbinom"
+                    "binomial,beta-binomial"
                     if "/Index/FamilyBBinomValid" in self.db.db
                     else "binomial"
                 )

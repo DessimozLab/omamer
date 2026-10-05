@@ -23,6 +23,7 @@
 """
 import math
 from collections import namedtuple
+from dataclasses import dataclass
 from time import time
 
 import numba
@@ -34,6 +35,7 @@ from property_manager import cached_property, lazy_property
 from ._utils import LOG
 from .alphabets import get_transform
 from .bbinom_coefficients import (
+    BBINOM_NODE_NAMES,
     BBINOM_VALIDITY_POLICY_VERSION,
     bbinom_coefficient_valid_mask,
 )
@@ -46,6 +48,7 @@ from .hierarchy import (
 )
 from .sequence_buffer import SequenceBuffer
 from .stat_models import (
+    FamilyModelParameters,
     FamilyScoringParameters,
     HogModelParameters,
     cumulate_counts_1fam,
@@ -60,13 +63,7 @@ SEARCH_STRUCTURE = 2
 SEARCH_SEQUENCE_THEN_STRUCTURE = 3
 
 
-################################################################################
-# Definitions for namedtuples that are used as composite
-# types in pure numba code. Those are to aggregate many of
-# related parameters and dispatch the Strategy design pattern
-# in numba code without passing dozens of parameters to
-# the main search function.
-
+# Array carriers passed to Numba.
 SequenceBatch = namedtuple("SequenceBatch", ("buffer", "offsets"))
 
 
@@ -77,9 +74,6 @@ def select_from_batch(batch: SequenceBatch, seq_id: int):
     ]
 
 
-# Modality-specific k-mer data. Statistical models are separate arguments at
-# the parallel-kernel boundary, keeping ownership non-overlapping without
-# nesting array-bearing namedtuples (which Numba's gufunc lowering rejects).
 KmerIndex = namedtuple(
     "KmerIndex",
     (
@@ -111,13 +105,7 @@ SearchDatabase = namedtuple(
 )
 
 
-LookupConfig = namedtuple(
-    "LookupConfig",
-    (
-        "mode",
-        "num_threads",
-    ),
-)
+LookupConfig = namedtuple("LookupConfig", ("mode", "num_threads"))
 
 
 PlacementConfig = namedtuple(
@@ -130,10 +118,6 @@ PlacementConfig = namedtuple(
     ),
 )
 
-# Namedtuple for thread-local arrays used in search.
-# Every thread has these arrays allocated for their
-# search needs beforehand. This is to avoid allocating
-# O(|num_fams|) per-thread everytime search is called.
 SearchScratch = namedtuple(
     "SearchScratch",
     (
@@ -147,7 +131,6 @@ SearchScratch = namedtuple(
         "num_hit_hogs",
     ),
 )
-################################################################################
 
 
 def resolve_search_mode(mode, has_sequence, has_structure):
@@ -176,9 +159,7 @@ def resolve_search_mode(mode, has_sequence, has_structure):
         ) from None
     if not available:
         raise ValueError(
-            "search_mode={!r} requires matching query data and index".format(
-                mode
-            )
+            "search_mode={!r} requires matching query data and index".format(mode)
         )
     return selected
 
@@ -193,6 +174,63 @@ QUERY_FAMILY_RESULT_DTYPE = np.dtype(
     ]
 )
 
+
+SearchResults = namedtuple("SearchResults", ("families", "subfamilies"))
+
+
+def make_search_results(n_queries, top_n_families):
+    family_dtype = np.dtype(
+        [
+            ("id", np.uint32),
+            ("pvalue", np.float64),
+            ("count", np.uint32),
+            ("score", np.uint32),
+            ("normcount", np.float64),
+            ("overlap", np.float64),
+            ("modality", np.uint8),
+        ]
+    )
+    subfamily_dtype = np.dtype(
+        [("id", np.uint32), ("score", np.float64), ("count", np.uint32)]
+    )
+    shape = (n_queries, top_n_families)
+    return SearchResults(
+        np.zeros(shape, dtype=family_dtype),
+        np.zeros(shape, dtype=subfamily_dtype),
+    )
+
+
+@dataclass(frozen=True)
+class SearchModality:
+    queries: SequenceBatch
+    index: KmerIndex
+    family_model: FamilyModelParameters
+    hog_model: HogModelParameters
+
+    def search(
+        self, results, database, placement, family_scoring, num_threads, fallback=None
+    ):
+        # Numba's parallel lowering requires flat, array-bearing carriers.
+        mode = (
+            self.index.modality if fallback is None else SEARCH_SEQUENCE_THEN_STRUCTURE
+        )
+        secondary = self if fallback is None else fallback
+        lookup_queries(
+            results.families,
+            results.subfamilies,
+            self.queries,
+            secondary.queries,
+            database,
+            self.index,
+            self.family_model,
+            self.hog_model,
+            secondary.index,
+            secondary.family_model,
+            secondary.hog_model,
+            LookupConfig(mode, num_threads),
+            placement,
+            family_scoring,
+        )
 
 
 ## generic functions
@@ -339,8 +377,6 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
     thread_num_hit_hogs = 0
     n_skipped = 0
 
-    # define the HOG->family column view out of the loop
-    # (to avoid refetching the struct field on every k-mer)
     hog2fam = hog_tab["FamOff"]
 
     # iterate unique k-mers
@@ -357,15 +393,10 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
         hi = table_idx[kmer + 1]
         df = hi - lo
 
-        # The build-time information filter is represented by its maximum
-        # family document frequency. This is equivalent to the PMI threshold
-        # selected by mkdb and keeps all ties at the cutoff.
         if 0 < kmer_filter_max_df < df:
             n_skipped += 1
             continue
 
-        # Single fused pass over the k-mer's HOGs. Each HOG maps to exactly one
-        # family, so we update the HOG and family counters together
         for j in range(lo, hi):
             hog = table_buff[j]
 
@@ -551,17 +582,13 @@ def place_sequence(
     n_kmers = query_len - (k - 1)
     x_flag = table_idx.size - 1
 
-    # Double check we don't have short peptides (of len < k)
-    if n_kmers == 0:
+    if n_kmers <= 0:
         return False
 
     # get sequence k-mers
     (r1, p1, _) = parse_seq(sequence, digits_lookup, n_kmers, k, trans, x_flag)
 
-    # Skip if only one k-mer with X
-    if len(r1) > 1:
-        pass
-    elif r1[0] == x_flag:
+    if len(r1) == 1 and r1[0] == x_flag:
         return False
 
     thread_id = numba.get_thread_id()
@@ -575,7 +602,6 @@ def place_sequence(
         thread_id,
     )
 
-    # Only unpack the thread-local views needed after k-mer counting.
     thread_hit_fams = scratch.hit_families[thread_id]
     thread_hog_counts = scratch.hog_counts[thread_id]
     thread_fam_counts = scratch.family_counts[thread_id]
@@ -589,8 +615,6 @@ def place_sequence(
     qres["id"][:] = idx
     qres["count"][:] = thread_fam_counts[idx]
 
-    # Effective query length: unique k-mers actually searched, i.e. excluding
-    # k-mers dropped by the build-time information filter.
     n = len(r1) - n_skipped
 
     # cheap filter: is # of k-mers at the expected number?
@@ -609,7 +633,6 @@ def place_sequence(
     if len(qres) == 0:
         return False
 
-    # Apply the model-specific significance bound and exact family scoring
     qres = score_family_candidates(qres, n, family_model, family_scoring)
     if len(qres) == 0:
         return False
@@ -659,10 +682,8 @@ def place_sequence(
         # place on path
         choice = 0  # default root
         choice_score = 0.0
-        best_score = -1
         for j in np.argwhere(fam_bestpath).flatten():
             sf_score = fam_hog_scores[j]
-            best_score = max(best_score, sf_score)
             if sf_score >= sst:
                 choice = j
                 choice_score = sf_score
@@ -775,170 +796,66 @@ class MergeSearch(object):
         return self.db._db_Index_SSHOGProbability[:]
 
     @lazy_property
-    def ref_fam_bbinom_q_coef(self):
-        if "/Index/FamilyBBinomQCoef" in self.db.db:
-            return self.db._db_Index_FamilyBBinomQCoef[:]
-        return np.empty((0, 0), dtype=np.float64)
+    def ref_fam_bbinom(self):
+        return self._load_bbinom_coefficients("seq")
 
     @lazy_property
-    def ref_fam_bbinom_kappa_coef(self):
-        if "/Index/FamilyBBinomKappaCoef" in self.db.db:
-            return self.db._db_Index_FamilyBBinomKappaCoef[:]
-        return np.empty((0, 0), dtype=np.float64)
+    def ss_ref_fam_bbinom(self):
+        return self._load_bbinom_coefficients("ss")
 
-    @lazy_property
-    def ref_fam_bbinom_center(self):
-        if "/Index/FamilyBBinomLogNCenter" in self.db.db:
-            return self.db._db_Index_FamilyBBinomLogNCenter[:]
-        return np.empty(0, dtype=np.float64)
+    def _load_bbinom_coefficients(self, modality):
+        coefficients = {
+            "q_coef": np.empty((0, 0), dtype=np.float64),
+            "kappa_coef": np.empty((0, 0), dtype=np.float64),
+            "center": np.empty(0, dtype=np.float64),
+            "scale": np.empty(0, dtype=np.float64),
+            "valid": np.empty(0, dtype=np.bool_),
+            "n_min": np.empty(0, dtype=np.uint32),
+            "n_max": np.empty(0, dtype=np.uint32),
+        }
+        for field, node in BBINOM_NODE_NAMES[modality].items():
+            path = "/Index/" + node
+            if path in self.db.db:
+                coefficients[field] = self.db.db.get_node(path)[:]
 
-    @lazy_property
-    def ref_fam_bbinom_scale(self):
-        if "/Index/FamilyBBinomLogNScale" in self.db.db:
-            return self.db._db_Index_FamilyBBinomLogNScale[:]
-        return np.empty(0, dtype=np.float64)
-
-    @lazy_property
-    def ref_fam_bbinom_valid(self):
-        if "/Index/FamilyBBinomValid" in self.db.db:
-            stored = self.db._db_Index_FamilyBBinomValid[:]
+        stored = coefficients["valid"]
+        if stored.size:
             attrs = self.db.db.root.Index._v_attrs
             policy_version = getattr(
-                attrs,
-                "seq_bbinom_validity_policy_version",
-                0,
+                attrs, modality + "_bbinom_validity_policy_version", 0
             )
-            valid = bbinom_coefficient_valid_mask(
+            coefficients["valid"] = bbinom_coefficient_valid_mask(
                 stored,
-                self.ref_fam_bbinom_q_coef,
-                self.ref_fam_bbinom_kappa_coef,
-                self.ref_fam_bbinom_center,
-                self.ref_fam_bbinom_scale,
+                coefficients["q_coef"],
+                coefficients["kappa_coef"],
+                coefficients["center"],
+                coefficients["scale"],
                 reject_initial_fallback=(
                     policy_version < BBINOM_VALIDITY_POLICY_VERSION
                 ),
             )
-            rejected = int(np.count_nonzero(stored) - np.count_nonzero(valid))
+            rejected = int(
+                np.count_nonzero(stored) - np.count_nonzero(coefficients["valid"])
+            )
             if rejected:
                 LOG.warning(
-                    "Disabled %d invalid legacy sequence beta-binomial fits",
+                    "Disabled %d invalid legacy %s beta-binomial fits",
                     rejected,
+                    "sequence" if modality == "seq" else "structure",
                 )
-            return valid
-        return np.empty(0, dtype=np.bool_)
-
-    @lazy_property
-    def ref_fam_bbinom_n_min(self):
-        if "/Index/FamilyBBinomNTrainMin" in self.db.db:
-            return self.db._db_Index_FamilyBBinomNTrainMin[:]
-        return np.empty(0, dtype=np.uint32)
-
-    @lazy_property
-    def ref_fam_bbinom_n_max(self):
-        if "/Index/FamilyBBinomNTrainMax" in self.db.db:
-            return self.db._db_Index_FamilyBBinomNTrainMax[:]
-        return np.empty(0, dtype=np.uint32)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_q_coef(self):
-        if "/Index/SSFamilyBBinomQCoef" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomQCoef[:]
-        return np.empty((0, 0), dtype=np.float64)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_kappa_coef(self):
-        if "/Index/SSFamilyBBinomKappaCoef" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomKappaCoef[:]
-        return np.empty((0, 0), dtype=np.float64)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_center(self):
-        if "/Index/SSFamilyBBinomLogNCenter" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomLogNCenter[:]
-        return np.empty(0, dtype=np.float64)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_scale(self):
-        if "/Index/SSFamilyBBinomLogNScale" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomLogNScale[:]
-        return np.empty(0, dtype=np.float64)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_valid(self):
-        if "/Index/SSFamilyBBinomValid" in self.db.db:
-            stored = self.db._db_Index_SSFamilyBBinomValid[:]
-            attrs = self.db.db.root.Index._v_attrs
-            policy_version = getattr(
-                attrs,
-                "ss_bbinom_validity_policy_version",
-                0,
-            )
-            valid = bbinom_coefficient_valid_mask(
-                stored,
-                self.ss_ref_fam_bbinom_q_coef,
-                self.ss_ref_fam_bbinom_kappa_coef,
-                self.ss_ref_fam_bbinom_center,
-                self.ss_ref_fam_bbinom_scale,
-                reject_initial_fallback=(
-                    policy_version < BBINOM_VALIDITY_POLICY_VERSION
-                ),
-            )
-            rejected = int(np.count_nonzero(stored) - np.count_nonzero(valid))
-            if rejected:
-                LOG.warning(
-                    "Disabled %d invalid legacy structure beta-binomial fits",
-                    rejected,
-                )
-            return valid
-        return np.empty(0, dtype=np.bool_)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_n_min(self):
-        if "/Index/SSFamilyBBinomNTrainMin" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomNTrainMin[:]
-        return np.empty(0, dtype=np.uint32)
-
-    @lazy_property
-    def ss_ref_fam_bbinom_n_max(self):
-        if "/Index/SSFamilyBBinomNTrainMax" in self.db.db:
-            return self.db._db_Index_SSFamilyBBinomNTrainMax[:]
-        return np.empty(0, dtype=np.uint32)
+        return coefficients
 
     def _family_model(self, modality, policy):
-        probability = (
-            self.ref_fam_prob
-            if modality == "seq"
-            else self.ss_ref_fam_prob
-        )
+        probability = self.ref_fam_prob if modality == "seq" else self.ss_ref_fam_prob
         if policy == "binomial":
             model = make_family_model(policy, probability)
             valid = np.empty(0, dtype=np.bool_)
-        elif modality == "seq":
-            valid = self.ref_fam_bbinom_valid
-            model = make_family_model(
-                policy,
-                probability,
-                self.ref_fam_bbinom_q_coef,
-                self.ref_fam_bbinom_kappa_coef,
-                self.ref_fam_bbinom_center,
-                self.ref_fam_bbinom_scale,
-                valid,
-                self.ref_fam_bbinom_n_min,
-                self.ref_fam_bbinom_n_max,
-            )
         else:
-            valid = self.ss_ref_fam_bbinom_valid
-            model = make_family_model(
-                policy,
-                probability,
-                self.ss_ref_fam_bbinom_q_coef,
-                self.ss_ref_fam_bbinom_kappa_coef,
-                self.ss_ref_fam_bbinom_center,
-                self.ss_ref_fam_bbinom_scale,
-                valid,
-                self.ss_ref_fam_bbinom_n_min,
-                self.ss_ref_fam_bbinom_n_max,
+            coefficients = (
+                self.ref_fam_bbinom if modality == "seq" else self.ss_ref_fam_bbinom
             )
+            valid = coefficients["valid"]
+            model = make_family_model(policy, probability, **coefficients)
 
         resolved = "beta-binomial" if model.valid.size else "binomial"
         self.resolved_family_models[modality] = resolved
@@ -969,30 +886,53 @@ class MergeSearch(object):
             self._reported_family_models.add(report_key)
         return model
 
-    def _search_components(self, modality, family_model_policy):
-        """Build disjoint k-mer, family-model, and HOG-model carriers."""
+    @cached_property
+    def _search_database(self):
+        return SearchDatabase(
+            self.trans,
+            self.ki.k,
+            self.ki.alphabet.DIGITS_AA_LOOKUP,
+            self.fam_tab,
+            self.hog_tab,
+            self.level_arr,
+        )
+
+    def _search_modality(self, modality, buffer, family_model_policy):
         if modality == "seq":
-            model = self._family_model("seq", family_model_policy)
-            return (
-                make_kmer_index(
-                    self.kmer_table["idx"],
-                    self.kmer_table["buff"],
-                    SEARCH_SEQUENCE,
-                    self.ki.kmer_max_df,
-                ),
-                model,
-                HogModelParameters(self.ref_hog_prob),
+            table, source, cutoff, hog_probability = (
+                self.kmer_table,
+                SEARCH_SEQUENCE,
+                self.ki.kmer_max_df,
+                self.ref_hog_prob,
             )
-        model = self._family_model("ss", family_model_policy)
-        return (
-            make_kmer_index(
-                self.ss_kmer_table["idx"],
-                self.ss_kmer_table["buff"],
+        else:
+            table, source, cutoff, hog_probability = (
+                self.ss_kmer_table,
                 SEARCH_STRUCTURE,
                 self.ki.ss_kmer_max_df,
-            ),
-            model,
-            HogModelParameters(self.ss_ref_hog_prob),
+                self.ss_ref_hog_prob,
+            )
+        return SearchModality(
+            SequenceBatch(buffer.buff, buffer.idx),
+            make_kmer_index(table["idx"], table["buff"], source, cutoff),
+            self._family_model(modality, family_model_policy),
+            HogModelParameters(hog_probability),
+        )
+
+    def _search_plan(self, mode, sbuff, ssbuff, family_model_policy):
+        if mode == SEARCH_SEQUENCE:
+            selected = (("seq", sbuff),)
+        elif mode == SEARCH_STRUCTURE:
+            selected = (("ss", ssbuff),)
+        else:
+            if len(sbuff.idx) != len(ssbuff.idx):
+                raise ValueError(
+                    "Sequence and structure queries must have matching counts"
+                )
+            selected = (("seq", sbuff), ("ss", ssbuff))
+        return tuple(
+            self._search_modality(modality, buffer, family_model_policy)
+            for modality, buffer in selected
         )
 
     def merge_search(
@@ -1014,47 +954,14 @@ class MergeSearch(object):
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
 
-        # resolve search mode
-        has_sequence = len(seqs) > 0
-        has_structure = self.has_structure and len(struct_seqs) > 0
-        mode = resolve_search_mode(search_mode, has_sequence, has_structure)
-
-        database = SearchDatabase(
-            self.trans,
-            self.ki.k,
-            self.ki.alphabet.DIGITS_AA_LOOKUP,
-            self.fam_tab,
-            self.hog_tab,
-            self.level_arr,
+        mode = resolve_search_mode(
+            search_mode,
+            len(seqs) > 0,
+            self.has_structure and len(struct_seqs) > 0,
         )
-
-        sequence_components = (
-            self._search_components("seq", family_model)
-            if mode != SEARCH_STRUCTURE
-            else None
-        )
-        structure_components = (
-            self._search_components("ss", family_model)
-            if mode != SEARCH_SEQUENCE
-            else None
-        )
-
-        if sequence_components is None:
-            sequence_components = structure_components
-        if structure_components is None:
-            structure_components = sequence_components
-
-        sequence_index, sequence_family_model, sequence_hog_model = (
-            sequence_components
-        )
-        structure_index, structure_family_model, structure_hog_model = (
-            structure_components
-        )
-
         if not 0.0 < alpha <= 1.0:
             raise ValueError("alpha must be in the interval (0, 1]")
-
-        lookup_config = LookupConfig(mode, numba.get_num_threads())
+        modalities = self._search_plan(mode, sbuff, ssbuff, family_model)
         placement = PlacementConfig(
             top_n_fams,
             sst,
@@ -1066,46 +973,8 @@ class MergeSearch(object):
             family_log_correction(family_correction, self.fam_tab.size),
         )
 
-        data_size = max(len(sbuff.idx) - 1, len(ssbuff.idx) - 1)
-
-        # allocate result arrays
-        family_results = np.zeros(
-            (data_size, top_n_fams),
-            dtype=np.dtype(
-                [
-                    ("id", np.uint32),
-                    ("pvalue", np.float64),
-                    ("count", np.uint32),
-                    ("score", np.uint32),
-                    ("normcount", np.float64),
-                    ("overlap", np.float64),
-                    ("modality", np.uint8),
-                ]
-            ),
-        )
-        subfam_results = np.zeros(
-            (data_size, top_n_fams),
-            dtype=np.dtype(
-                [("id", np.uint32), ("score", np.float64), ("count", np.uint32)]
-            ),
-        )
-
-        self._lookup(
-            family_results,
-            subfam_results,
-            SequenceBatch(sbuff.buff, sbuff.idx),
-            SequenceBatch(ssbuff.buff, ssbuff.idx),
-            database,
-            sequence_index,
-            sequence_family_model,
-            sequence_hog_model,
-            structure_index,
-            structure_family_model,
-            structure_hog_model,
-            lookup_config,
-            placement,
-            family_scoring,
-        )
+        results = make_search_results(max(len(seqs), len(struct_seqs)), top_n_fams)
+        self._lookup(results, modalities, placement, family_scoring)
 
         t1 = time()
         td = max((t1 - t0), 1e-3)
@@ -1117,7 +986,12 @@ class MergeSearch(object):
         )
 
         return self.output_results(
-            family_results, subfam_results, sbuff, ssbuff, top_n_fams, ref_taxon_off
+            results.families,
+            results.subfamilies,
+            sbuff,
+            ssbuff,
+            top_n_fams,
+            ref_taxon_off,
         )
 
     @cached_property
@@ -1328,98 +1202,101 @@ class MergeSearch(object):
 
         return pd.DataFrame(data)[HEADER]
 
-    @lazy_property
-    def _lookup(self):
-        def func(
-            family_results,
-            subfam_results,
-            sequences,
-            structures,
-            database,
-            sequence_index,
-            sequence_family_model,
-            sequence_hog_model,
-            structure_index,
-            structure_family_model,
-            structure_hog_model,
-            lookup_config,
-            placement,
-            family_scoring,
-        ):
-            # allocate a collection of thread-local data structures
-            scratch = SearchScratch(
-                np.zeros(
-                    (lookup_config.num_threads, database.families.size),
-                    dtype=np.int32,
-                ),
-                np.zeros(
-                    (lookup_config.num_threads, database.hogs.size),
-                    dtype=np.int32,
-                ),
-                np.zeros(
-                    (lookup_config.num_threads, database.hogs.size),
-                    dtype=np.uint16,
-                ),
-                np.zeros(
-                    (lookup_config.num_threads, database.families.size),
-                    dtype=np.uint16,
-                ),
-                np.full(
-                    (lookup_config.num_threads, database.families.size),
-                    -1,
-                    dtype=np.int32,
-                ),
-                np.full(
-                    (lookup_config.num_threads, database.families.size),
-                    -1,
-                    dtype=np.int32,
-                ),
-                np.zeros(lookup_config.num_threads, dtype=np.uint32),
-                np.zeros(lookup_config.num_threads, dtype=np.uint32),
+    def _lookup(self, results, modalities, placement, family_scoring):
+        fallback = modalities[1] if len(modalities) == 2 else None
+        modalities[0].search(
+            results, self._search_database, placement, family_scoring,
+            numba.get_num_threads(), fallback,
+        )
+
+
+@numba.njit(parallel=True, nogil=True, cache=True)
+def lookup_queries(
+    family_results,
+    subfam_results,
+    sequences,
+    structures,
+    database,
+    sequence_index,
+    sequence_family_model,
+    sequence_hog_model,
+    structure_index,
+    structure_family_model,
+    structure_hog_model,
+    lookup_config,
+    placement,
+    family_scoring,
+):
+    scratch = SearchScratch(
+        np.zeros(
+            (lookup_config.num_threads, database.families.size),
+            dtype=np.int32,
+        ),
+        np.zeros(
+            (lookup_config.num_threads, database.hogs.size),
+            dtype=np.int32,
+        ),
+        np.zeros(
+            (lookup_config.num_threads, database.hogs.size),
+            dtype=np.uint16,
+        ),
+        np.zeros(
+            (lookup_config.num_threads, database.families.size),
+            dtype=np.uint16,
+        ),
+        np.full(
+            (lookup_config.num_threads, database.families.size),
+            -1,
+            dtype=np.int32,
+        ),
+        np.full(
+            (lookup_config.num_threads, database.families.size),
+            -1,
+            dtype=np.int32,
+        ),
+        np.zeros(lookup_config.num_threads, dtype=np.uint32),
+        np.zeros(lookup_config.num_threads, dtype=np.uint32),
+    )
+
+    n_iter = (
+        structures.offsets.size - 1
+        if lookup_config.mode == SEARCH_STRUCTURE
+        else sequences.offsets.size - 1
+    )
+
+    for sequence_id in numba.prange(n_iter):
+        placed = False
+
+        # search sequence
+        if lookup_config.mode != SEARCH_STRUCTURE:
+            sequence = select_from_batch(sequences, sequence_id)
+            placed = place_sequence(
+                family_results,
+                subfam_results,
+                sequence,
+                sequence_id,
+                database,
+                sequence_index,
+                sequence_family_model,
+                sequence_hog_model,
+                placement,
+                family_scoring,
+                scratch,
             )
 
-            n_iter = (
-                structures.offsets.size - 1
-                if lookup_config.mode == SEARCH_STRUCTURE
-                else sequences.offsets.size - 1
+        # if failed and we have structure, search structure
+        if lookup_config.mode != SEARCH_SEQUENCE and not placed:
+            structure = select_from_batch(structures, sequence_id)
+            place_sequence(
+                family_results,
+                subfam_results,
+                structure,
+                sequence_id,
+                database,
+                structure_index,
+                structure_family_model,
+                structure_hog_model,
+                placement,
+                family_scoring,
+                scratch,
             )
-
-            for sequence_id in numba.prange(n_iter):
-                placed = False
-
-                # search sequence
-                if lookup_config.mode != SEARCH_STRUCTURE:
-                    sequence = select_from_batch(sequences, sequence_id)
-                    placed = place_sequence(
-                        family_results,
-                        subfam_results,
-                        sequence,
-                        sequence_id,
-                        database,
-                        sequence_index,
-                        sequence_family_model,
-                        sequence_hog_model,
-                        placement,
-                        family_scoring,
-                        scratch,
-                    )
-
-                # if failed and we have structure, search structure
-                if lookup_config.mode != SEARCH_SEQUENCE and not placed:
-                    structure = select_from_batch(structures, sequence_id)
-                    place_sequence(
-                        family_results,
-                        subfam_results,
-                        structure,
-                        sequence_id,
-                        database,
-                        structure_index,
-                        structure_family_model,
-                        structure_hog_model,
-                        placement,
-                        family_scoring,
-                        scratch,
-                    )
-
-        return numba.jit(func, parallel=True, nopython=True, nogil=True, cache=True)
-        #return func

@@ -35,14 +35,15 @@ requirements = [
     "alive_progress",
     "biopython",
     "ete3",
+    "legacy-cgi; python_version>='3.13'",  # ete3 imports cgi, removed in 3.13
     "lxml",
     "numba",
-    "numpy<2",     # pytables has no numpy2 compatible version yet
-    "pandas>2.0.0",
+    "numpy>=1.26",
+    "pandas>2.0.0,<3",
     "property_manager",
     "Rmath4",
     "scipy",
-    "tables",
+    "tables>=3.10",  # first release supporting numpy 2
     "tqdm",
 ]
 extra_requirements = {"build": ["pysais"]}

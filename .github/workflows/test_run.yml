@@ -7,9 +7,17 @@ jobs:
 
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        include:
+          - python-version: "3.12"
+            numpy: "numpy>=2"
+          - python-version: "3.14"
+            numpy: "numpy>=2"
+          - python-version: "3.12"
+            numpy: "numpy<2"
 
+    name: Python ${{ matrix.python-version }}, ${{ matrix.numpy }}
     steps:
       - uses: actions/checkout@v5
       - name: Set up Python ${{ matrix.python-version }}
@@ -20,22 +28,26 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install flake8 pytest
-          pip install .
+          pip install ".[build]" "${{ matrix.numpy }}"
+          python -c "import numpy, sys; print(sys.version, numpy.__version__)"
       - name: Lint with flake8
         run: |
           # stop the build if there are Python syntax errors or undefined names
           flake8 . --exit-zero --count --select=E9,F63,F7,F82 --show-source --statistics
           # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - name: Cache test omamer db file
+        uses: actions/cache@v4
+        with:
+          path: test-db
+          key: omamer-test-db-All.May2026-Homininae
       - name: Download test omamer db file
         run: |
-          wget -O Homininae.h5 'https://omabrowser.org/All/Homininae.h5'
-      - name: Download sample fasta file
+          mkdir -p test-db
+          # a fixed release, as the golden search results in tests/data depend on it
+          [ -f test-db/Homininae.h5 ] || wget -O test-db/Homininae.h5 'https://omabrowser.org/All.May2026/Homininae.h5'
+      - name: Test
+        env:
+          OMAMER_SEARCH_DB: ${{ github.workspace }}/test-db/Homininae.h5
         run: |
-         wget -O human_sample.fa 'https://rest.uniprot.org/uniprotkb/search?format=fasta&query=%28%28proteome%3AUP000005640%29%29&size=200'
-         head -n 10 human_sample.fa
-      - name: Test 
-        run: |
-          ls -l
-          omamer search --db Homininae.h5 --query human_sample.fa --out human_sample.omamer
-          cat human_sample.omamer
+          pytest tests -rs

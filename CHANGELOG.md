@@ -1,6 +1,18 @@
 
 # Change log
 
+## Unreleased
+
+### Changed
+
+- Support numpy 2 (numpy >= 1.26 and pytables >= 3.10 are now required)
+- CI runs the test suite with Python 3.12 and 3.14 and with numpy 1 and 2,
+  including search results checked against golden files
+
+### Fixed
+
+- Python 3.13+: install `legacy-cgi`, which ete3 still needs
+
 ## Version 2.1.2
 
 ### Fixed

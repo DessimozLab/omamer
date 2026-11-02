@@ -11,7 +11,8 @@ Set ``OMAMER_MKDB_SOURCES_DIR`` to a directory containing
 
 ``OMAMER_MKDB_SOURCES_ROOT`` sets the root taxon (default: the root of the
 species tree). Both databases are built once per module; this takes a few
-minutes for a dataset of ~30 species.
+minutes for a dataset of ~30 species. CI downloads such a dataset from
+Zenodo, see the ``mkdb-sources`` job in ``.github/workflows/test_run.yml``.
 
 The two databases store different protein IDs (OMA IDs vs. the FASTA IDs) and
 may number HOGs and families in a different order, so everything is compared

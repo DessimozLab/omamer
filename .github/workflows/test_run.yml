@@ -51,3 +51,54 @@ jobs:
           OMAMER_SEARCH_DB: ${{ github.workspace }}/test-db/Homininae.h5
         run: |
           pytest tests -rs
+
+  mkdb-sources:
+    # builds the same database from an OMA browser HDF5 file and from the
+    # FastOMA OrthoXML + proteomes it was converted from, see
+    # tests/test_mkdb_sources.py. Takes ~6 minutes and ~5 GB of memory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    name: mkdb from OMA browser and OrthoXML
+    env:
+      # Zenodo record with omamer-mkdb-sources-fungi.tar.gz, which unpacks to
+      # omamer-mkdb-sources-fungi/{OmaServer.h5,speciestree.nwk,
+      # FastOMA_HOGs.orthoxml,proteomes/*.fa}
+      ZENODO_RECORD: "00000000"
+      DATASET: omamer-mkdb-sources-fungi
+      DATASET_SHA256: ""
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install ".[build]" "numpy>=2"
+      - name: Cache test dataset
+        uses: actions/cache@v4
+        with:
+          path: test-data/${{ env.DATASET }}
+          key: ${{ env.DATASET }}-zenodo-${{ env.ZENODO_RECORD }}
+      - name: Download test dataset
+        run: |
+          mkdir -p test-data
+          if [ ! -d "test-data/$DATASET" ]; then
+            wget --no-verbose -O "test-data/$DATASET.tar.gz" \
+              "https://zenodo.org/records/$ZENODO_RECORD/files/$DATASET.tar.gz?download=1"
+            if [ -n "$DATASET_SHA256" ]; then
+              echo "$DATASET_SHA256  test-data/$DATASET.tar.gz" | sha256sum -c -
+            else
+              echo "::warning::DATASET_SHA256 is not set, the download is not verified"
+            fi
+            tar -xzf "test-data/$DATASET.tar.gz" -C test-data
+            rm "test-data/$DATASET.tar.gz"
+          fi
+          ls -l "test-data/$DATASET"
+      - name: Test
+        env:
+          OMAMER_MKDB_SOURCES_DIR: ${{ github.workspace }}/test-data/${{ env.DATASET }}
+        run: |
+          pytest tests/test_mkdb_sources.py -rs

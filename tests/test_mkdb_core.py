@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import tables
 
 from omamer.database import Database, DatabaseFromOMA
+from omamer.hierarchy import get_root_leaf_offsets
 from omamer.index import Index
 
 HOG_LEVEL_DTYPE = np.dtype(
@@ -202,6 +204,62 @@ def test_hog_and_family_tables(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("sep", [".", b"."])
+def test_find_parent_hog_skips_missing_levels(sep):
+    """A duplication nested in a duplication has no HOG for the middle level."""
+    as_id = (lambda x: x) if isinstance(sep, str) else str.encode
+    hogs = np.asarray(
+        sorted(as_id(h) for h in ("1", "1.1a", "1.1b.1a", "1.1b.1b", "1.1b.1b.2a"))
+    )
+
+    def parent(hog_id):
+        off = Database.find_parent_hog(as_id(hog_id), hogs)
+        return None if off == -1 else hogs[off]
+
+    assert parent("1") is None
+    assert parent("1.1a") == as_id("1")
+    # HOG 1.1b does not exist, the parent is the closest existing ancestor
+    assert parent("1.1b.1a") == as_id("1")
+    assert parent("1.1b.1b") == as_id("1")
+    assert parent("1.1b.1b.2a") == as_id("1.1b.1b")
+
+
+def test_hog_table_with_missing_intermediate_hog(tmp_path):
+    db = Database(tmp_path / "hogs.h5", root_taxon="Root", mode="w")
+    try:
+        hogs = [b"1", b"1.1a", b"1.1b.1a", b"1.1b.1b", b"1.1b.1b.2a"]
+        db.update_hog_and_fam_tabs(
+            fam2hogs={1: hogs},
+            hog2taxoff={h: 0 for h in hogs},
+            hog2protoffs={h: [i] for i, h in enumerate(hogs)},
+            hog2oma_hog={h: b"HOG:000" + h for h in hogs},
+            hog2gene_nr={h: 1 for h in hogs},
+            hog2completeness={h: 1.0 for h in hogs},
+        )
+        ids = [db.get_hog_id(i) for i in range(len(hogs))]
+        parents = {
+            ids[i]: ids[p] if p >= 0 else None
+            for i, p in enumerate(db._db_HOG.col("ParentOff"))
+        }
+        assert parents == {
+            "HOG:0001": None,
+            "HOG:0001.1a": "HOG:0001",
+            "HOG:0001.1b.1a": "HOG:0001",
+            "HOG:0001.1b.1b": "HOG:0001",
+            "HOG:0001.1b.1b.2a": "HOG:0001.1b.1b",
+        }
+    finally:
+        db.close()
+
+
+def test_root_leaf_offsets_detects_cycle():
+    np.testing.assert_array_equal(
+        get_root_leaf_offsets(2, np.asarray([-1, 0, 1], dtype=np.int32)), [0, 1, 2]
+    )
+    with pytest.raises(ValueError, match="cycle"):
+        get_root_leaf_offsets(2, np.asarray([-1, 2, 1], dtype=np.int32))
+
+
 class TinyIndexDatabase:
     """Minimal database adapter needed by the sequence index builder."""
 
@@ -298,3 +356,4 @@ def test_tiny_sequence_index(tmp_path):
         )
     finally:
         db.close()
+

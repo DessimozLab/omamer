@@ -16,6 +16,10 @@
 ### Fixed
 
 - Python 3.13+: install `legacy-cgi`, which ete3 still needs
+- `mkdb` no longer runs out of memory on HOGs with a duplication nested
+  directly in another duplication (e.g. FastOMA output), where an intermediate
+  HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
+  their own parent, so the k-mer table computation looped forever.
 
 ## Version 2.1.2
 

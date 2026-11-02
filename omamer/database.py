@@ -609,18 +609,20 @@ class Database(object):
 
     @staticmethod
     def find_parent_hog(hog_id, hogs):
-        if isinstance(hog_id, str):
-            split_hog = hog_id.split(".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, ".".join(split_hog[:-1]))
-            return parent_hog
-        elif isinstance(hog_id, bytes):
-            split_hog = hog_id.split(b".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, b".".join(split_hog[:-1]))
-            return parent_hog
+        """
+        Offset in the sorted array hogs of the closest ancestor of hog_id, or -1.
+
+        Intermediate HOGs can be missing, e.g. for a duplication nested directly
+        in another duplication HOG:1.1a.1a exists but HOG:1.1a does not.
+        """
+        sep = "." if isinstance(hog_id, str) else b"."
+        split_hog = hog_id.split(sep)
+        for i in range(len(split_hog) - 1, 0, -1):
+            parent_id = sep.join(split_hog[:i])
+            parent_hog = np.searchsorted(hogs, parent_id)
+            if parent_hog < len(hogs) and hogs[parent_hog] == parent_id:
+                return parent_hog
+        return -1
 
     def add_median_seqlen_col(self):
         """

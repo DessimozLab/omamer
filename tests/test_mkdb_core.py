@@ -357,3 +357,80 @@ def test_tiny_sequence_index(tmp_path):
     finally:
         db.close()
 
+
+def test_insert_missing_hog_levels():
+    """OrthoXML HOGs get the implied levels that pyoma adds for the OMA browser."""
+    from ete3 import Tree
+    from lxml import etree
+
+    from omamer.orthoxml_parser import (
+        HOG,
+        NS,
+        TaxonomyLevels,
+        is_orthologGroup_node,
+    )
+
+    def og(level, *children):
+        return (
+            f'<orthologGroup><property name="TaxRange" value="{level}"/>'
+            + "".join(children)
+            + "</orthologGroup>"
+        )
+
+    def pg(*children):
+        return "<paralogGroup>" + "".join(children) + "</paralogGroup>"
+
+    def gene(i):
+        return f'<geneRef id="{i}"/>'
+
+    # a duplication in R, nested in it a second one in AB, and genes several
+    # levels below their parent orthologGroup
+    xml = og(
+        "R",
+        pg(pg(og("AB", gene(1), gene(2)), gene(3)), og("ABC", gene(4), gene(5))),
+        gene(6),
+    ).replace(
+        "<orthologGroup>", f'<orthologGroup xmlns="{NS["OrthoXML"]}" id="1">', 1
+    )
+    species = {1: "A", 2: "B", 3: "A", 4: "A", 5: "C", 6: "D"}
+    hog = HOG(etree.fromstring(xml))
+    hog.insert_missing_levels(
+        TaxonomyLevels(Tree("(((A,B)AB,C)ABC,D)R;", format=1)), species.get
+    )
+
+    levels = sorted(
+        (n.attrib["og"], hog.get_properties(n)["TaxRange"])
+        for n in hog.struct.iter()
+        if is_orthologGroup_node(n)
+    )
+    assert levels == [
+        ("1", "D"),
+        ("1", "R"),
+        # the duplication in R has no orthologGroup for 1.1a in the OrthoXML
+        ("1.1a", "ABC"),
+        ("1.1a.1a", "A"),
+        ("1.1a.1a", "AB"),
+        ("1.1a.1a", "B"),
+        ("1.1a.1b", "A"),
+        ("1.1a.1b", "AB"),
+        ("1.1b", "A"),
+        ("1.1b", "AB"),
+        ("1.1b", "ABC"),
+        ("1.1b", "C"),
+    ]
+    # the genes keep their subHOGs
+    assert {g.attrib["id"]: g.attrib["og"] for g in hog.geneRefs()} == {
+        "1": "1.1a.1a",
+        "2": "1.1a.1a",
+        "3": "1.1a.1b",
+        "4": "1.1b",
+        "5": "1.1b",
+        "6": "1",
+    }
+
+    # inserting again changes nothing
+    before = etree.tostring(hog.struct)
+    hog.insert_missing_levels(
+        TaxonomyLevels(Tree("(((A,B)AB,C)ABC,D)R;", format=1)), species.get
+    )
+    assert etree.tostring(hog.struct) == before

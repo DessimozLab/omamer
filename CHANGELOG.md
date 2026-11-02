@@ -12,6 +12,10 @@
   every result row, which made it very slow on large databases
 - CI runs the test suite with Python 3.12 and 3.14 and with numpy 1 and 2,
   including search results checked against golden files
+- `mkdb --orthoxml` adds the taxonomic levels that a HOG spans implicitly, as
+  pyoma does for the OMA browser. A subHOG now starts at the level of the
+  duplication that created it, and nested duplications get their intermediate
+  HOG, so FastOMA output gives the same database as the OMA browser build
 
 ### Fixed
 
@@ -20,6 +24,7 @@
   directly in another duplication (e.g. FastOMA output), where an intermediate
   HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
   their own parent, so the k-mer table computation looped forever.
+- `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
 
 ## Version 2.1.2
 

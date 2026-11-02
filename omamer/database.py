@@ -1071,8 +1071,14 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.oxml_path = oxml_path
         self.hog_parser = OrthoxmlParser(oxml_path)
 
-    def parse_oxml(self, nspecies_below):
-        from .orthoxml_parser import is_orthologGroup_node
+    def parse_oxml(self, nspecies_below, stree_path):
+        from ete3 import Tree
+        from .orthoxml_parser import TaxonomyLevels, is_orthologGroup_node
+
+        taxonomy = TaxonomyLevels(Tree(stree_path, format=1, quoted_node_names=True))
+
+        def gene_species(gene_id):
+            return self.hog_parser.species.get_species(gene_id).name
 
         def generate_hog_tab(hog):
             # this is more memory intensive (we cache the results)
@@ -1145,6 +1151,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         entries = []
         LOG.debug("loading hog structure and membership from orthoxml")
         for hog in tqdm(self.hog_parser.iter_hogs(auto_clean=True), desc="Parsing HOGs"):
+            # same HOG levels as in the OMA browser
+            hog.insert_missing_levels(taxonomy, gene_species)
             hog_data = list(filter(lambda x: x is not None, generate_hog_tab(hog)))
             gene_data = list(generate_prot_tab(hog))
             hog_data += list(generate_hogs_for_prot(hog, gene_data))
@@ -1184,7 +1192,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.add_taxid_col()
 
         LOG.debug("build hog_table from orthoxml")
-        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below, stree_path)
 
         LOG.debug("select and strip OMA HOGs")
         (
@@ -1383,8 +1391,9 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         taxid_column = []
         i = -100
         for tax_name in self._db_Taxonomy.col("ID"):
-            sp = self.hog_parser.species[tax_name]
-            if sp is not None and hasattr(sp, "NCBITaxID"):
+            sp = self.hog_parser.species[tax_name.decode("ascii")]
+            # NCBITaxId="0" means unknown, e.g. in FastOMA output
+            if sp is not None and sp.NCBITaxID > 0:
                 taxid_column.append(sp.NCBITaxID)
             else:
                 taxid_column.append(i)

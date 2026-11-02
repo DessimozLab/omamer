@@ -398,7 +398,7 @@ class Database(object):
         for fam_id, hogs in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
             ### hogs
             # sort by level
-            hogs = sorted(hogs, key=lambda x: len(x.split(b".")))
+            hogs = sorted(hogs, key=lambda x: (len(x.split(b".")), x))
             hog_num = len(hogs)
 
             # parents

@@ -6,6 +6,10 @@
 ### Changed
 
 - Support numpy 2 (numpy >= 1.26 and pytables >= 3.10 are now required)
+- `mkdb` stores the HOGs of a family level in a fixed order, so repeated builds
+  of the same input produce identical databases
+- `search --include_extant_genes` no longer reloads the database tables for
+  every result row, which made it very slow on large databases
 - CI runs the test suite with Python 3.12 and 3.14 and with numpy 1 and 2,
   including search results checked against golden files
 

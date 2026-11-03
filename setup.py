@@ -35,14 +35,16 @@ requirements = [
     "alive_progress",
     "biopython",
     "ete3",
+    "legacy-cgi; python_version>='3.13'",  # ete3 imports cgi, removed in 3.13
+    "six",  # needed by ete3, but not declared
     "lxml",
     "numba",
-    "numpy<2",     # pytables has no numpy2 compatible version yet
-    "pandas>2.0.0",
+    "numpy>=1.26",
+    "pandas>2.0.0,<3",
     "property_manager",
     "Rmath4",
     "scipy",
-    "tables",
+    "tables>=3.10.1",  # first release supporting numpy 2
     "tqdm",
 ]
 extra_requirements = {"build": ["pysais"]}
@@ -59,7 +61,7 @@ setup(
     packages=find_packages(),
     install_requires=requirements,
     extras_require=extra_requirements,
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     license="LGPLv3",
     #scripts=["bin/omamer"],
     entry_points={'console_scripts': ['omamer = omamer.main:main']}

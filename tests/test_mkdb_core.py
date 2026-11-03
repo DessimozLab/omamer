@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import tables
 
 from omamer.database import Database, DatabaseFromOMA
+from omamer.hierarchy import get_root_leaf_offsets
 from omamer.index import Index
 
 HOG_LEVEL_DTYPE = np.dtype(
@@ -202,6 +204,62 @@ def test_hog_and_family_tables(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("sep", [".", b"."])
+def test_find_parent_hog_skips_missing_levels(sep):
+    """A duplication nested in a duplication has no HOG for the middle level."""
+    as_id = (lambda x: x) if isinstance(sep, str) else str.encode
+    hogs = np.asarray(
+        sorted(as_id(h) for h in ("1", "1.1a", "1.1b.1a", "1.1b.1b", "1.1b.1b.2a"))
+    )
+
+    def parent(hog_id):
+        off = Database.find_parent_hog(as_id(hog_id), hogs)
+        return None if off == -1 else hogs[off]
+
+    assert parent("1") is None
+    assert parent("1.1a") == as_id("1")
+    # HOG 1.1b does not exist, the parent is the closest existing ancestor
+    assert parent("1.1b.1a") == as_id("1")
+    assert parent("1.1b.1b") == as_id("1")
+    assert parent("1.1b.1b.2a") == as_id("1.1b.1b")
+
+
+def test_hog_table_with_missing_intermediate_hog(tmp_path):
+    db = Database(tmp_path / "hogs.h5", root_taxon="Root", mode="w")
+    try:
+        hogs = [b"1", b"1.1a", b"1.1b.1a", b"1.1b.1b", b"1.1b.1b.2a"]
+        db.update_hog_and_fam_tabs(
+            fam2hogs={1: hogs},
+            hog2taxoff={h: 0 for h in hogs},
+            hog2protoffs={h: [i] for i, h in enumerate(hogs)},
+            hog2oma_hog={h: b"HOG:000" + h for h in hogs},
+            hog2gene_nr={h: 1 for h in hogs},
+            hog2completeness={h: 1.0 for h in hogs},
+        )
+        ids = [db.get_hog_id(i) for i in range(len(hogs))]
+        parents = {
+            ids[i]: ids[p] if p >= 0 else None
+            for i, p in enumerate(db._db_HOG.col("ParentOff"))
+        }
+        assert parents == {
+            "HOG:0001": None,
+            "HOG:0001.1a": "HOG:0001",
+            "HOG:0001.1b.1a": "HOG:0001",
+            "HOG:0001.1b.1b": "HOG:0001",
+            "HOG:0001.1b.1b.2a": "HOG:0001.1b.1b",
+        }
+    finally:
+        db.close()
+
+
+def test_root_leaf_offsets_detects_cycle():
+    np.testing.assert_array_equal(
+        get_root_leaf_offsets(2, np.asarray([-1, 0, 1], dtype=np.int32)), [0, 1, 2]
+    )
+    with pytest.raises(ValueError, match="cycle"):
+        get_root_leaf_offsets(2, np.asarray([-1, 2, 1], dtype=np.int32))
+
+
 class TinyIndexDatabase:
     """Minimal database adapter needed by the sequence index builder."""
 
@@ -298,3 +356,81 @@ def test_tiny_sequence_index(tmp_path):
         )
     finally:
         db.close()
+
+
+def test_insert_missing_hog_levels():
+    """OrthoXML HOGs get the implied levels that pyoma adds for the OMA browser."""
+    from ete3 import Tree
+    from lxml import etree
+
+    from omamer.orthoxml_parser import (
+        HOG,
+        NS,
+        TaxonomyLevels,
+        is_orthologGroup_node,
+    )
+
+    def og(level, *children):
+        return (
+            f'<orthologGroup><property name="TaxRange" value="{level}"/>'
+            + "".join(children)
+            + "</orthologGroup>"
+        )
+
+    def pg(*children):
+        return "<paralogGroup>" + "".join(children) + "</paralogGroup>"
+
+    def gene(i):
+        return f'<geneRef id="{i}"/>'
+
+    # a duplication in R, nested in it a second one in AB, and genes several
+    # levels below their parent orthologGroup
+    xml = og(
+        "R",
+        pg(pg(og("AB", gene(1), gene(2)), gene(3)), og("ABC", gene(4), gene(5))),
+        gene(6),
+    ).replace(
+        "<orthologGroup>", f'<orthologGroup xmlns="{NS["OrthoXML"]}" id="1">', 1
+    )
+    species = {1: "A", 2: "B", 3: "A", 4: "A", 5: "C", 6: "D"}
+    hog = HOG(etree.fromstring(xml))
+    hog.insert_missing_levels(
+        TaxonomyLevels(Tree("(((A,B)AB,C)ABC,D)R;", format=1)), species.get
+    )
+
+    levels = sorted(
+        (n.attrib["og"], hog.get_properties(n)["TaxRange"])
+        for n in hog.struct.iter()
+        if is_orthologGroup_node(n)
+    )
+    assert levels == [
+        ("1", "D"),
+        ("1", "R"),
+        # the duplication in R has no orthologGroup for 1.1a in the OrthoXML
+        ("1.1a", "ABC"),
+        ("1.1a.1a", "A"),
+        ("1.1a.1a", "AB"),
+        ("1.1a.1a", "B"),
+        ("1.1a.1b", "A"),
+        ("1.1a.1b", "AB"),
+        ("1.1b", "A"),
+        ("1.1b", "AB"),
+        ("1.1b", "ABC"),
+        ("1.1b", "C"),
+    ]
+    # the genes keep their subHOGs
+    assert {g.attrib["id"]: g.attrib["og"] for g in hog.geneRefs()} == {
+        "1": "1.1a.1a",
+        "2": "1.1a.1a",
+        "3": "1.1a.1b",
+        "4": "1.1b",
+        "5": "1.1b",
+        "6": "1",
+    }
+
+    # inserting again changes nothing
+    before = etree.tostring(hog.struct)
+    hog.insert_missing_levels(
+        TaxonomyLevels(Tree("(((A,B)AB,C)ABC,D)R;", format=1)), species.get
+    )
+    assert etree.tostring(hog.struct) == before

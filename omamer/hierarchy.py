@@ -35,6 +35,8 @@ def get_root_leaf_offsets(off, parent_arr):
     parent = parent_arr[off]
     while parent != -1:
         leaf_root.append(parent)
+        if len(leaf_root) > len(parent_arr):
+            raise ValueError("cycle in parent pointers")
         parent = parent_arr[parent]
     return np.array(leaf_root[::-1], dtype=np.uint32)
 

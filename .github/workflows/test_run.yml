@@ -16,6 +16,9 @@ jobs:
             numpy: "numpy>=2"
           - python-version: "3.12"
             numpy: "numpy<2"
+          # the oldest supported combination
+          - python-version: "3.10"
+            numpy: "numpy<2"
 
     name: Python ${{ matrix.python-version }}, ${{ matrix.numpy }}
     steps:
@@ -67,7 +70,9 @@ jobs:
             numpy: "numpy>=2"
           - python-version: "3.12"
             numpy: "numpy<2"
-
+          # the oldest supported combination
+          - python-version: "3.10"
+            numpy: "numpy<2"
 
     timeout-minutes: 45
     name: mkdb from OMA browser and OrthoXML - Python ${{ matrix.python-version }}, ${{ matrix.numpy }}

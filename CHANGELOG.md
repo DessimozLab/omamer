@@ -5,7 +5,9 @@
 
 ### Changed
 
-- Support numpy 2 (numpy >= 1.26 and pytables >= 3.10 are now required)
+- Support numpy 2 (numpy >= 1.26 and pytables >= 3.10.1 are now required)
+- Python >= 3.10 is now required (support for Python 3.8 and 3.9 is dropped,
+  as pytables >= 3.10 no longer supports them)
 - `mkdb` stores the HOGs of a family level in a fixed order, so repeated builds
   of the same input produce identical databases
 - `search --include_extant_genes` no longer reloads the database tables for

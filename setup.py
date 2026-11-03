@@ -44,7 +44,7 @@ requirements = [
     "property_manager",
     "Rmath4",
     "scipy",
-    "tables>=3.10",  # first release supporting numpy 2
+    "tables>=3.10.1",  # first release supporting numpy 2
     "tqdm",
 ]
 extra_requirements = {"build": ["pysais"]}
@@ -61,7 +61,7 @@ setup(
     packages=find_packages(),
     install_requires=requirements,
     extras_require=extra_requirements,
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     license="LGPLv3",
     #scripts=["bin/omamer"],
     entry_points={'console_scripts': ['omamer = omamer.main:main']}

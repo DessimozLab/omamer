@@ -3,11 +3,9 @@
 OMAmer is a novel alignment-free protein family assignment method, which limits over-specific subfamily assignments and is suited to phylogenomic databases with thousands of genomes. It is based on an innovative method using evolutionary-informed _k_-mers for alignment-free mapping to ancestral protein subfamilies. Whilst able to reject non-homologous family-level assignments, it has provided better and quicker subfamily-level assignments than a method based on closest sequences (using DIAMOND).
 
 # Installation
-Requires Python >= 3.8. Download the package from the PyPI, resolving the dependencies by using ``pip install omamer``.
+Requires Python >= 3.10. Download the package from the PyPI, resolving the dependencies by using ``pip install omamer``.
 
 Alternatively, clone this repository and install manually.
-
-Note: Python 3.12 is currently not supported, until the `numba` package is updated ([issue](https://github.com/numba/numba/issues/9197)).
 
 # Pre-Built Databases
 

@@ -27,6 +27,11 @@
   HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
   their own parent, so the k-mer table computation looped forever.
 - `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
+- `mkdb --reduced_alphabet` built a wrong k-mer table: k-mers that are equal
+  in the reduced alphabet, but not in the original sequences (e.g. `AS` and
+  `AT`), were stored as several runs, with duplicate and too specific HOG
+  entries. Searches with such databases placed many queries in the wrong
+  family. Databases built with `--reduced_alphabet` must be rebuilt.
 
 ## Version 2.1.2
 

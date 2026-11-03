@@ -358,6 +358,36 @@ def test_tiny_sequence_index(tmp_path):
         db.close()
 
 
+def test_tiny_sequence_index_reduced_alphabet(tmp_path):
+    # The reduced alphabet merges S and T into A, and N into D. The 2-mers of
+    # the proteins of family 0 (AS, SD and AT, TN) differ only in merged
+    # letters, so they must be stored as the same k-mers (AA and AD), with
+    # the LCA of both proteins (HOG 0) as their only entry for family 0.
+    db = TinyIndexDatabase(tmp_path / "tiny-index.h5")
+    try:
+        index = Index(db, k=2, reduced_alphabet=True, hidden_taxa=())
+        index.build_kmer_table(np.frombuffer(b"ASD ATN AAC ", dtype="S1"))
+
+        table_index = db.db.root.Index.TableIndex[:]
+        table_buffer = db.db.root.Index.TableBuffer[:]
+        assert len(table_index) == 13**2 + 1
+        nonempty_codes = np.flatnonzero(np.diff(table_index))
+
+        # digits of the reduced alphabet: A=0, C=1, D=2
+        np.testing.assert_array_equal(nonempty_codes, [0, 1, 2])  # AA, AC, AD
+        np.testing.assert_array_equal(table_index[nonempty_codes], [0, 2, 3])
+        np.testing.assert_array_equal(table_index[nonempty_codes + 1], [2, 3, 4])
+        np.testing.assert_array_equal(table_buffer, [0, 2, 2, 0])
+        np.testing.assert_allclose(
+            db.db.root.Index.FamilyProbability[:], [0.75, 0.75]
+        )
+        np.testing.assert_allclose(
+            db.db.root.Index.HOGProbability[:], [0.5, 0.0, 0.5]
+        )
+    finally:
+        db.close()
+
+
 def test_insert_missing_hog_levels():
     """OrthoXML HOGs get the implied levels that pyoma adds for the OMA browser."""
     from ete3 import Tree

@@ -93,10 +93,9 @@ class Index(object):
         assert "/Index" not in self.db.db, "Index has already been computed"
 
         # build suffix array with option to translate the sequence buffer first
-        sa = self._build_suffixarray(
-            self.alphabet.translate(seq_buff), len(self.db._db_Protein)
-        )
-        self._build_kmer_table(seq_buff, sa)
+        translated = self.alphabet.translate(seq_buff)
+        sa = self._build_suffixarray(translated, len(self.db._db_Protein))
+        self._build_kmer_table(seq_buff, sa, translated)
 
     @staticmethod
     def _build_suffixarray(seqs, n):
@@ -110,7 +109,17 @@ class Index(object):
         sa[:n].sort()  # Sort delimiters by position
         return sa
 
-    def _build_kmer_table(self, seq_buff, sa):
+    def _build_kmer_table(self, seq_buff, sa, translated=None):
+        """
+        Build the k-mer table from the suffix array of the translated sequence
+        buffer. The k-mer codes are computed from the original sequences, the
+        suffixes of a k-mer are found by comparing the translated ones, as with
+        a reduced alphabet different k-mers of the original sequences belong
+        to the same k-mer.
+        """
+        if translated is None:
+            translated = self.alphabet.translate(seq_buff)
+
         @numba.njit(parallel=True, nogil=True)
         def _compute_mask_and_filter(
             sa, sa_mask, sa_filter, k, n, prot2spoff, prot2hogoff, sp_filter
@@ -168,6 +177,7 @@ class Index(object):
         def _compute_kmer_table(
             sa,
             seq_buff,
+            translated,
             sa_mask,
             hog_fams,
             hog_parents,
@@ -190,10 +200,13 @@ class Index(object):
                     kk1 += int(DIGITS_AA_LOOKUP[kmer[i]] * trans[i])
 
                 ## find offset of new k-mer in sa (jj)
+                # the suffix array is sorted by the translated sequences, so
+                # the suffixes of the k-mer are compared in translated form
+                translated_kmer = translated[sa[ii] : (sa[ii] + k)].view(np.uint8)
                 # first in windows of 50s
                 # THIS MAY NEED TO BE INCREASED OVER TIME AND IS OPTIMISED FOR THE LUCA DB
                 jj = min(ii + 50, len(sa))
-                while (jj < len(sa)) and _same_kmer(seq_buff, sa, kmer, jj, k):
+                while (jj < len(sa)) and _same_kmer(translated, sa, translated_kmer, jj, k):
                     jj = min(jj + 50, len(sa))
 
                 # then, refine with binary search
@@ -201,7 +214,7 @@ class Index(object):
                 hi = jj
                 while lo < hi:
                     m = int(np.floor((lo + hi) / 2))
-                    if _same_kmer(seq_buff, sa, kmer, m, k):
+                    if _same_kmer(translated, sa, translated_kmer, m, k):
                         lo = m + 1
                     else:
                         hi = m
@@ -314,6 +327,7 @@ class Index(object):
         ii_table_buff = _compute_kmer_table(
             sa,
             seq_buff,
+            translated,
             sa_mask,
             h2f,
             self.db._db_HOG.col("ParentOff"),

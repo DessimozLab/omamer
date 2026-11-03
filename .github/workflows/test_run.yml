@@ -58,7 +58,9 @@ jobs:
   mkdb-sources:
     # builds the same database from an OMA browser HDF5 file and from the
     # FastOMA OrthoXML + proteomes it was converted from, see
-    # tests/test_mkdb_sources.py. Takes ~6 minutes and ~5 GB of memory.
+    # tests/test_mkdb_sources.py, plus a build with non-default index
+    # parameters, and searches all of them. Takes ~12 minutes and ~5 GB of
+    # memory.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

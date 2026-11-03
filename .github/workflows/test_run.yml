@@ -19,7 +19,7 @@ jobs:
 
     name: Python ${{ matrix.python-version }}, ${{ matrix.numpy }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
@@ -57,26 +57,39 @@ jobs:
     # FastOMA OrthoXML + proteomes it was converted from, see
     # tests/test_mkdb_sources.py. Takes ~6 minutes and ~5 GB of memory.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            numpy: "numpy>=2"
+          - python-version: "3.14"
+            numpy: "numpy>=2"
+          - python-version: "3.12"
+            numpy: "numpy<2"
+
+
     timeout-minutes: 45
-    name: mkdb from OMA browser and OrthoXML
+    name: mkdb from OMA browser and OrthoXML - Python ${{ matrix.python-version }}, ${{ matrix.numpy }}
+
     env:
       # Zenodo record with omamer-mkdb-sources-fungi.tar.gz, which unpacks to
       # omamer-mkdb-sources-fungi/{OmaServer.h5,speciestree.nwk,
       # FastOMA_HOGs.orthoxml,proteomes/*.fa}
-      ZENODO_RECORD: "00000000"
+      ZENODO_RECORD: "23910807"
       DATASET: omamer-mkdb-sources-fungi
-      DATASET_SHA256: ""
+      DATASET_SHA256: "e06f6b9b1cbb275db6598c99ac63d61848f651cc9e16b33cbec4a356b346d595"
     steps:
-      - uses: actions/checkout@v5
-      - name: Set up Python 3.12
+      - uses: actions/checkout@v7
+      - name: Set up Python 
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pytest
-          pip install ".[build]" "numpy>=2"
+          pip install ".[build]" "${{ matrix.numpy }}"
       - name: Cache test dataset
         uses: actions/cache@v4
         with:

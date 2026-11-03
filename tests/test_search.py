@@ -14,6 +14,7 @@ with ``OMAMER_UPDATE_SEARCH_GOLDEN=1`` and review the differences.
 from __future__ import annotations
 
 import csv
+import math
 import os
 import sys
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 
 from omamer.database import Database
 from omamer.main import main
+from omamer.results_reader import results_reader
 
 DATA = Path(__file__).parent / "data"
 QUERIES = DATA / "homininae_queries.fa"
@@ -37,9 +39,11 @@ SEARCH_OPTIONS = {
     "family_only": ["--family_only"],
     "extant_genes": ["--include_extant_genes"],
     "threads": ["-t", "2"],
+    # 210 queries in 5 chunks, the last one smaller than the others
+    "chunks": ["-c", "50"],
 }
 # searches whose output must be identical to another golden file
-SAME_GOLDEN = {"threads": "default"}
+SAME_GOLDEN = {"threads": "default", "chunks": "default"}
 
 
 @pytest.fixture(scope="module")
@@ -151,7 +155,38 @@ def test_search_matches_golden(name, search_output):
             f"golden files belong to database {expected_hash}, not {database_hash}; "
             "regenerate them with OMAMER_UPDATE_SEARCH_GOLDEN=1"
         )
-    assert lines == expected
+    assert len(lines) == len(expected)
+    differences = [
+        (nr, line, expected_line)
+        for nr, (line, expected_line) in enumerate(zip(lines, expected), 1)
+        if not _same_line(line, expected_line)
+    ]
+    assert not differences, "\n".join(
+        f"line {nr}:\n  got      {line!r}\n  expected {expected_line!r}"
+        for nr, line, expected_line in differences[:10]
+    )
+
+
+# floating point results differ in the last digits between platforms
+FLOAT_REL_TOL = 1e-8
+
+
+def _same_field(value, expected):
+    if value == expected:
+        return True
+    try:
+        return math.isclose(float(value), float(expected), rel_tol=FLOAT_REL_TOL)
+    except ValueError:
+        return False
+
+
+def _same_line(line, expected):
+    if line.startswith("!") or expected.startswith("!"):
+        return line == expected
+    fields, expected_fields = line.split("\t"), expected.split("\t")
+    return len(fields) == len(expected_fields) and all(
+        map(_same_field, fields, expected_fields)
+    )
 
 
 def test_search_places_database_proteins(search_output, database_ids):
@@ -207,3 +242,27 @@ def test_search_top_n_families(search_output):
         first.setdefault(row["qseqid"], row)
     for row in _rows(search_output("default")):
         assert first[row["qseqid"]] == row
+
+
+@pytest.mark.parametrize("name", ["default", "top3", "extant_genes"])
+def test_results_reader(name):
+    # needs no database, the golden files are search output
+    golden = GOLDEN / f"{name}.tsv"
+    lines = golden.read_text().splitlines()
+    df, metadata = results_reader(str(golden))
+
+    expected_metadata = {}
+    for line in lines:
+        if not line.startswith("!"):
+            break
+        key, value = line[1:].split(": ", 1)
+        expected_metadata[key] = value
+    assert metadata == expected_metadata
+
+    rows = _rows(lines)
+    assert list(df.columns) == list(rows[0])
+    assert list(df["qseqid"]) == [row["qseqid"] for row in rows]
+    # unplaced queries are "N/A", which pandas reads as missing
+    assert list(df["hogid"].isna()) == [row["hogid"] == "N/A" for row in rows]
+    for column in ("family_p", "family_count", "subfamily_score", "qseqlen"):
+        assert df[column].dtype.kind in "if", column

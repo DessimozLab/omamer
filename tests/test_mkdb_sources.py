@@ -302,15 +302,6 @@ def test_same_probabilities(databases):
 VARIANT_K = 5
 REDUCED_ALPHABET_N = 13
 
-# The k-mer table of --reduced_alphabet builds splits the suffixes of one
-# reduced k-mer into several runs, because the runs are found on the original
-# instead of the translated sequences. Such k-mers get duplicate and too
-# specific HOG entries, and searches place most queries in the wrong family.
-reduced_alphabet_bug = pytest.mark.xfail(
-    strict=True,
-    reason="--reduced_alphabet k-mer table splits runs of the same reduced k-mer",
-)
-
 
 def _subtrees(database):
     """Taxon offset -> offsets of the taxa in its subtree, including itself."""
@@ -426,7 +417,6 @@ def test_default_index_structure(databases):
         _check_index(database, k=6, alphabet_n=21)
 
 
-@reduced_alphabet_bug
 def test_variant_index_structure(variant, hidden_taxon):
     _check_index(variant, k=VARIANT_K, alphabet_n=REDUCED_ALPHABET_N)
     assert list(variant.root.Index._v_attrs["hidden_taxa"]) == [hidden_taxon[0]]
@@ -533,7 +523,6 @@ def test_fresh_search_same_for_both_builds(fresh_search):
     assert oma_rows == oxml_rows
 
 
-@reduced_alphabet_bug
 def test_hidden_taxon_search(variant_path, databases, queries, hidden_taxon, tmp_path_factory):
     query, protein_hogs, hidden_queries = queries
     rows = _search(variant_path, query, tmp_path_factory)

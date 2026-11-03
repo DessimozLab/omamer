@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -40,7 +40,7 @@ jobs:
           # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
       - name: Cache test omamer db file
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: test-db
           key: omamer-test-db-All.May2026-Homininae
@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python 
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -96,7 +96,7 @@ jobs:
           pip install pytest
           pip install ".[build]" "${{ matrix.numpy }}"
       - name: Cache test dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: test-data/${{ env.DATASET }}
           key: ${{ env.DATASET }}-zenodo-${{ env.ZENODO_RECORD }}

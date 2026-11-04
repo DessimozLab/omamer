@@ -13,9 +13,10 @@ Set ``OMAMER_MKDB_SOURCES_DIR`` to a directory containing
 species tree). Both databases are built once per module, together with a
 third one from the OMA browser input with non-default index parameters
 (reduced alphabet, shorter k, a hidden clade). All databases are also
-searched with proteins sampled from them. This takes ~12 minutes for a
-dataset of ~30 species. CI downloads such a dataset from Zenodo, see the
-``mkdb-sources`` job in ``.github/workflows/test_run.yml``.
+searched with proteins sampled from them, and the OrthoXML input is also
+built without the newick tree, from the OrthoXML <taxonomy>. This takes
+~17 minutes for a dataset of ~30 species. CI downloads such a dataset from
+Zenodo, see the ``mkdb-sources`` job in ``.github/workflows/test_run.yml``.
 
 The two databases store different protein IDs (OMA IDs vs. the FASTA IDs) and
 may number HOGs and families in a different order, so everything is compared
@@ -90,6 +91,26 @@ def databases(database_paths):
     oma_db, oxml_db = database_paths
     with tables.open_file(oma_db) as oma, tables.open_file(oxml_db) as oxml:
         yield oma, oxml
+
+
+@pytest.fixture(scope="module")
+def taxonomy_build_path(source_dir, tmp_path_factory):
+    """OrthoXML build without --species_tree, from the OrthoXML <taxonomy>."""
+    from omamer.species_tree import SpeciesTree, SpeciesTreeError
+
+    try:
+        SpeciesTree.from_orthoxml(source_dir / "FastOMA_HOGs.orthoxml")
+    except SpeciesTreeError:
+        pytest.skip("the OrthoXML file has no <taxonomy> (OrthoXML < 0.5)")
+    db_path = tmp_path_factory.mktemp("mkdb_taxonomy") / "orthoxml_taxonomy.h5"
+    _mkdb(
+        db_path,
+        "--orthoxml",
+        str(source_dir / "FastOMA_HOGs.orthoxml"),
+        "--sequences",
+        *sorted(map(str, (source_dir / "proteomes").glob("*.fa"))),
+    )
+    return db_path
 
 
 def _buffered_ids(database, table_name, buffer_name):
@@ -276,6 +297,40 @@ def test_same_kmer_table(databases):
             ]
         )
     )
+
+
+def _children_sets(database):
+    """Taxon offset -> set of child taxon offsets."""
+    taxonomy = database.root.Taxonomy[:]
+    children = database.root.ChildrenTax[:]
+    return {
+        i: frozenset(children[row["ChildrenOff"] : row["ChildrenOff"] + row["ChildrenNum"]])
+        for i, row in enumerate(taxonomy)
+        if row["ChildrenNum"] > 0
+    }
+
+
+def test_taxonomy_from_orthoxml_gives_same_database(database_paths, taxonomy_build_path):
+    # the <taxonomy> of the OrthoXML file is the species tree of the dataset,
+    # so the build without --species_tree must give the same database. Only
+    # the order of the children of a taxon may differ between the two files.
+    _, oxml_path = database_paths
+    with tables.open_file(oxml_path) as oxml, tables.open_file(taxonomy_build_path) as taxonomy:
+        nodes = {
+            node._v_pathname
+            for node in oxml.walk_nodes("/")
+            if isinstance(node, tables.Leaf)
+        }
+        assert nodes == {
+            node._v_pathname
+            for node in taxonomy.walk_nodes("/")
+            if isinstance(node, tables.Leaf)
+        }
+        for node in sorted(nodes - {"/ChildrenTax"}):
+            np.testing.assert_array_equal(
+                oxml.get_node(node)[:], taxonomy.get_node(node)[:], err_msg=node
+            )
+        assert _children_sets(oxml) == _children_sets(taxonomy)
 
 
 def test_same_probabilities(databases):

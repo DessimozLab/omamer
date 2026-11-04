@@ -159,7 +159,7 @@ def main():
     )
     mkdb_parser.add_argument(
         "--species_tree",
-        help="Path to newick file containing species tree. [OXMLBUILD]",
+        help="Path to newick file containing species tree. Optional if the OrthoXML file contains the taxonomy (OrthoXML >= 0.5). [OXMLBUILD]",
         type=FileType("r")
     )
     mkdb_parser.add_argument(

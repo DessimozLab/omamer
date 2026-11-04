@@ -18,10 +18,19 @@
   pyoma does for the OMA browser. A subHOG now starts at the level of the
   duplication that created it, and nested duplications get their intermediate
   HOG, so FastOMA output gives the same database as the OMA browser build
+- The species tree is read with Bio.Phylo instead of ete3, so ete3 (and
+  `six` and `legacy-cgi`, which it needed) is no longer a dependency. Numeric
+  internal node names (e.g. NCBI taxon ids) and quoted names are kept as they
+  are; the resulting databases are the same as before.
+- `mkdb --orthoxml` reads the species tree from the `<taxonomy>` of the
+  OrthoXML file (OrthoXML >= 0.5) if `--species_tree` is not given
 
 ### Fixed
 
-- Python 3.13+: install `legacy-cgi`, which ete3 still needs
+- `mkdb` stops with an error if taxon names below the root taxon are not
+  unique or a taxon has no name (#52). Duplicate names were merged into one
+  taxon, or made a taxon its own parent, so that `mkdb` looped forever.
+  Names may still repeat outside the root taxon, e.g. in an NCBI taxonomy.
 - `mkdb` no longer runs out of memory on HOGs with a duplication nested
   directly in another duplication (e.g. FastOMA output), where an intermediate
   HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made

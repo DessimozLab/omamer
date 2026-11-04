@@ -191,11 +191,10 @@ class Database(object):
         self._check_open_writeable()
 
         def _parse_stree(stree_path, roottax):
-            from ete3 import Tree
+            from .species_tree import load_species_tree
 
             LOG.debug("parsing species tree {}".format(stree_path))
-            stree = Tree(stree_path, format=1, quoted_node_names=True)
-            pruned_stree = [x for x in stree.traverse() if x.name == roottax][0]
+            stree = load_species_tree(stree_path).subtree(roottax)
 
             tax2parent = {}
             tax2children = {}
@@ -203,19 +202,15 @@ class Database(object):
             species = set()
             nspecies_below = {}
 
-            for tl in pruned_stree.traverse():
-                tax = tl.name.encode("ascii")
-                tax2parent[tax] = (
-                    tl.up.name.encode("ascii") if tl.up else "root".encode("ascii")
-                )
-                tax2children[tax] = [x.name.encode("ascii") for x in tl.children]
-                tax2level[tax] = tl.get_distance(stree)
-                if tl.is_leaf():
-                    sp_name = tl.name.encode("ascii")
-                    species.add(sp_name)
-                    nspecies_below[sp_name] = 1
-                else:
-                    nspecies_below[tl.name.encode("ascii")] = sum(1 for _ in tl.iter_leaves())
+            for name, parent, children, level, is_species, nspecies in stree.taxa():
+                tax = name.encode("ascii")
+                # the parent of the root taxon is not used, it gets ParentOff -1
+                tax2parent[tax] = (parent if parent is not None else "root").encode("ascii")
+                tax2children[tax] = [x.encode("ascii") for x in children]
+                tax2level[tax] = level
+                if is_species:
+                    species.add(tax)
+                nspecies_below[tax] = nspecies
 
             return (tax2parent, tax2children, tax2level, species, nspecies_below)
 
@@ -1072,10 +1067,11 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.hog_parser = OrthoxmlParser(oxml_path)
 
     def parse_oxml(self, nspecies_below, stree_path):
-        from ete3 import Tree
         from .orthoxml_parser import TaxonomyLevels, is_orthologGroup_node
+        from .species_tree import load_species_tree
 
-        taxonomy = TaxonomyLevels(Tree(stree_path, format=1, quoted_node_names=True))
+        # the whole tree, HOGs above the root taxon are only filtered later
+        taxonomy = TaxonomyLevels(load_species_tree(stree_path).parents())
 
         def gene_species(gene_id):
             return self.hog_parser.species.get_species(gene_id).name

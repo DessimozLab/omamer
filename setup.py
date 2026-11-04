@@ -34,9 +34,6 @@ with open("{:s}/__init__.py".format(name), "rt") as fp:
 requirements = [
     "alive_progress",
     "biopython",
-    "ete3",
-    "legacy-cgi; python_version>='3.13'",  # ete3 imports cgi, removed in 3.13
-    "six",  # needed by ete3, but not declared
     "lxml",
     "numba",
     "numpy>=1.26",

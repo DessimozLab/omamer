@@ -278,9 +278,10 @@ class Database(object):
         self._check_open_writeable()
 
         def _parse_stree(stree_path, roottax):
-            from .species_tree import load_species_tree
+            from .species_tree import SpeciesTree, load_species_tree
 
-            LOG.debug("parsing species tree {}".format(stree_path))
+            if not isinstance(stree_path, SpeciesTree):
+                LOG.debug("parsing species tree {}".format(stree_path))
             stree = load_species_tree(stree_path).subtree(roottax)
 
             tax2parent = {}
@@ -1728,12 +1729,19 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
             "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
         )
 
-        for prot in selected_proteins:
-            prot_tab.append(
-                [(len(prot_id_buff), len(prot.oma_id), prot.sp_off, 0, prot.seq_len)]
-            )
+        # in batches: one append per protein takes ~1 h for LUCA
+        id_off = 0
+        batch_size = 1000000
+        for start in range(0, len(selected_proteins), batch_size):
+            batch = selected_proteins[start : start + batch_size]
+            ids = [prot.oma_id.encode("ascii") for prot in batch]
+            rows = []
+            for prot, prot_id in zip(batch, ids):
+                rows.append((id_off, len(prot_id), prot.sp_off, 0, prot.seq_len))
+                id_off += len(prot_id)
+            prot_tab.append(rows)
             prot_id_buff.append(
-                np.frombuffer(prot.oma_id.encode("ascii"), dtype=tables.StringAtom(1))
+                np.frombuffer(b"".join(ids), dtype=tables.StringAtom(1))
             )
 
         # fill species and protein tables

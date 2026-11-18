@@ -326,3 +326,30 @@ def test_written_buffers_match_the_record_count(tmp_path):
             n_records=99,
             buffers={"seq": np.frombuffer(b"AAA AAC ", dtype="S1")},
         )
+
+
+def test_hidden_species_are_not_training_queries(tiny_build):
+    from property_manager import set_property
+
+    from omamer.bbinom_fit import exclude_hidden_records, sample_record_indices_by_n
+
+    db, _ = tiny_build
+    species = db.protein_table.col("SpeOff")
+    n_unique = np.arange(1, len(species) + 1, dtype=np.int64)
+
+    # nothing hidden: unchanged
+    np.testing.assert_array_equal(exclude_hidden_records(db, n_unique), n_unique)
+
+    set_property(db.ki, "sp_filter", np.asarray([False, True]))
+    masked = exclude_hidden_records(db, n_unique)
+    assert masked.dtype == n_unique.dtype
+    np.testing.assert_array_equal(masked[species == 0], n_unique[species == 0])
+    assert not masked[species == 1].any()
+    # the input, e.g. a cached scan, is not modified
+    assert n_unique.all()
+
+    sampled = sample_record_indices_by_n(
+        masked, np.unique(masked[masked > 0]), max_records_per_n=0, seed=1
+    )
+    sampled = np.concatenate(list(sampled.values()))
+    assert set(species[sampled]) == {0}

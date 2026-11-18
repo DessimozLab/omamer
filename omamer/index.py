@@ -395,7 +395,10 @@ class Index(object):
             self.alphabet.DIGITS_AA,
             self.alphabet.DIGITS_AA_LOOKUP,
         )
-        table_buff = table_buff[:n_postings]
+        del sa, sa_mask, sa_filter
+        # copy, as a slice would keep the whole allocation (one entry per
+        # indexed residue) alive while the other modality and the models are built
+        table_buff = table_buff[:n_postings].copy()
         hog_counts, max_df = self._apply_information_filter(
             table_idx,
             table_buff,

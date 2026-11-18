@@ -98,7 +98,7 @@ def dataset(tmp_path_factory):
     return path, seqs, structures
 
 
-def _mkdb(db_path, dataset, *options):
+def _mkdb(db_path, dataset, *options, models=("binomial",)):
     path = dataset[0]
     argv = [
         "omamer", "mkdb", "--db", str(db_path), "--log_level", "warning",
@@ -107,7 +107,7 @@ def _mkdb(db_path, dataset, *options):
         "--sequences", *[str(path / "{}.fa".format(sp)) for sp in SPECIES],
         "--min_fam_size", "1",
         "--k", "3",
-        "--models", "binomial",
+        "--models", *models,
         *options,
     ]
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -179,3 +179,18 @@ def test_structure_index_follows_protein_order(dataset, tmp_path):
         np.testing.assert_array_equal(idx.SSTableBuffer[:], idx.TableBuffer[:])
         np.testing.assert_allclose(idx.SSFamilyProbability[:], idx.FamilyProbability[:])
         np.testing.assert_allclose(idx.SSHOGProbability[:], idx.HOGProbability[:])
+
+
+def test_default_models_fall_back_to_binomial(dataset, tmp_path, caplog):
+    # far too few proteins to fit a beta-binomial model: mkdb used to fail
+    # after writing the whole index
+    db_path = tmp_path / "default-models.h5"
+    _mkdb(db_path, dataset, models=("binomial", "beta-binomial"))
+    assert "Not fitting a beta-binomial model for modality 'seq'" in caplog.text
+    with tables.open_file(str(db_path)) as h5:
+        assert h5.root.Index._v_attrs.models == "binomial"
+    db = Database(str(db_path))
+    try:
+        assert db.ki.models == ("binomial",)
+    finally:
+        db.close()

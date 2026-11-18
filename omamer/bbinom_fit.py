@@ -26,6 +26,10 @@ BBINOM_COEFFICIENT_BOUND = 50.0
 BBINOM_COEFFICIENT_BOUND_TOLERANCE = 1e-3
 
 
+class InsufficientTrainingData(RuntimeError):
+    """The database is too small to fit a beta-binomial model."""
+
+
 @numba.njit(nogil=True)
 def count_selected_family_hits(codes, table_idx, table_buff, hog_to_family, target_rank, counts, touched):
     n_touched = 0
@@ -253,7 +257,7 @@ def choose_sequence_n_values(n_unique, min_records_per_n=50, n_buckets=24, reque
     eligible = eligible[eligible > 0]
 
     if eligible.size == 0:
-        raise RuntimeError("No exact N value has enough records for fitting")
+        raise InsufficientTrainingData("No exact N value has enough records for fitting")
 
     chosen = []
     if requested_n_values:
@@ -277,7 +281,7 @@ def choose_sequence_n_values(n_unique, min_records_per_n=50, n_buckets=24, reque
 
     chosen = np.asarray(sorted(set(chosen)), dtype=np.uint32)
     if chosen.size < 2:
-        raise RuntimeError("Need at least two exact N values to fit a length-aware beta-binomial model")
+        raise InsufficientTrainingData("Need at least two exact N values to fit a length-aware beta-binomial model")
 
     summary = pd.DataFrame(
         {
@@ -288,6 +292,24 @@ def choose_sequence_n_values(n_unique, min_records_per_n=50, n_buckets=24, reque
         }
     )
     return summary, chosen
+
+
+def exclude_hidden_records(db, n_unique):
+    """
+    Set the exact N of the proteins of hidden taxa to 0, so that they are never
+    sampled as training queries: like their k-mers, which are not indexed, they
+    must not inform the null model.
+    """
+    sp_filter = np.asarray(db.ki.sp_filter, dtype=bool)
+    if not sp_filter.any():
+        return n_unique
+    hidden = sp_filter[db.protein_table.col("SpeOff")]
+    LOG.info(
+        "Excluding {} proteins of hidden taxa from the training queries".format(
+            int(np.count_nonzero(hidden))
+        )
+    )
+    return np.where(hidden, 0, n_unique).astype(n_unique.dtype, copy=False)
 
 
 def sample_record_indices_by_n(n_unique, selected_n, max_records_per_n, seed):
@@ -1278,7 +1300,7 @@ def fit_bbinom_coefficients_from_buffer(
         modality=modality,
     )
     if families.size == 0:
-        raise RuntimeError("No families selected for fitting")
+        raise InsufficientTrainingData("No families selected for fitting")
     LOG.info("Selected {} families for beta-binomial fitting".format(families.size))
     families = apply_family_shard(families, family_shard)
     if families.size == 0:
@@ -1301,6 +1323,7 @@ def fit_bbinom_coefficients_from_buffer(
         bounds=bounds,
         cache_path=n_counts_cache,
     )
+    n_unique = exclude_hidden_records(db, n_unique)
     _, selected_n = choose_sequence_n_values(
         n_unique,
         min_records_per_n=min_records_per_n,

@@ -272,7 +272,10 @@ def learn_index_models(
 
     if "beta-binomial" in models:
         from .bbinom_coefficients import store_bbinom_coefficients
-        from .bbinom_fit import fit_bbinom_coefficients_from_buffer
+        from .bbinom_fit import (
+            InsufficientTrainingData,
+            fit_bbinom_coefficients_from_buffer,
+        )
 
         unavailable_n_values = sorted(
             modality
@@ -285,26 +288,40 @@ def learn_index_models(
                 "modality: {}".format(", ".join(unavailable_n_values))
             )
 
+        fitted = []
         for modality, data in modality_data.items():
             LOG.info("Learning beta-binomial model for modality '%s'", modality)
             fit_options = dict(bbinom_options)
             modality_n_values = n_values_by_modality.get(modality)
             if modality_n_values is not None:
                 fit_options["n_values"] = modality_n_values
-            rows = fit_bbinom_coefficients_from_buffer(
-                db,
-                data.sequence_buffer,
-                modality=modality,
-                table_index=data.table_index,
-                table_buffer=data.table_buffer,
-                **fit_options,
-            )
+            try:
+                rows = fit_bbinom_coefficients_from_buffer(
+                    db,
+                    data.sequence_buffer,
+                    modality=modality,
+                    table_index=data.table_index,
+                    table_buffer=data.table_buffer,
+                    **fit_options,
+                )
+            except InsufficientTrainingData as e:
+                # e.g. a small database: search uses the binomial model
+                LOG.warning(
+                    "Not fitting a beta-binomial model for modality '%s': %s",
+                    modality,
+                    e,
+                )
+                continue
+            fitted.append(modality)
             store_bbinom_coefficients(
                 db,
                 rows,
                 modalities=(modality,),
                 kmer_percentage=db.ki.kmer_percentage,
             )
+
+        if not fitted:
+            models = tuple(m for m in models if m != "beta-binomial")
 
     index_group._f_setattr("models", ",".join(models))
 

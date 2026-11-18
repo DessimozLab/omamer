@@ -62,6 +62,13 @@
   protein table (they were stored in the order of the structure FASTA files, so
   3Di k-mers were assigned to the wrong proteins). A missing or duplicated 3Di
   sequence is now an error, as in the browser build.
+- `mkdb` with the beta-binomial model (the default) no longer fails on a
+  database too small to fit it: it warns and stores the binomial model only.
+- The beta-binomial null model is no longer trained on proteins of the hidden
+  taxa (`--hidden_taxa`), whose k-mers are not indexed either.
+- `mkdb` releases the unused part of each k-mer table buffer (one entry per
+  indexed residue) before building the next modality and the models, which
+  lowers the peak memory of builds with `--structures`.
 - The Bio.Phylo species tree reader handles double-quoted taxon names, as used
   in the OMA browser `speciestree.nwk`. Without this it failed on All.May2026
   and silently built a wrong tree from All.Jul2024.

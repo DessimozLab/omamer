@@ -5,6 +5,20 @@
 
 ### Added
 
+- Structure (3Di) as a second modality. `mkdb --structures` indexes 3Di
+  sequences next to the protein sequences: the OMA browser structure HDF5
+  (browser build) or 3Di FASTA files (OrthoXML build). `search --structure`
+  takes 3Di queries, alone or with `--query` (records paired by id, in the
+  same order); `--search_mode auto|seq|ss|sqs` selects the strategy, the
+  default places a query by its sequence and falls back to its structure.
+- Length-aware beta-binomial family models, fitted by `mkdb` for every indexed
+  modality (`--models`, default `binomial beta-binomial`; options
+  `--bbinom_*`). `search --family_model auto|binomial|beta-binomial`: `auto`
+  uses the beta-binomial model where coefficients are stored, so databases
+  without them (e.g. built with 2.1.x) are searched as before.
+- `mkdb --kmer_percentage`: information filter on k-mers by document frequency.
+- `search --family_sorting normcount|pvalue` and
+  `--family_correction bonferroni|none`.
 - `set-kmer-filter`, `refit-bbinom` and `import-bbinom`: re-derive family models
   on a built database instead of rebuilding it. Neither the PMI k-mer filter nor
   the beta-binomial design affects the k-mer tables, so one `mkdb` can serve a
@@ -21,6 +35,11 @@
 
 ### Changed
 
+- Search output: new `modality` column (7th, after `family_normcount`), and the
+  header lines `!family-model-requested`, `!family-model-resolved` and
+  `!family-sorting`. Readers that select columns by position need updating.
+- Databases built with the default models give different family p-values,
+  filtering and ranking than 2.1.x, as the beta-binomial model is used.
 - `import-bbinom` accepts several coefficient files and merges them, rejecting
   overlapping shards. Stored arrays cover every family, so a partial import
   would blank the rest.

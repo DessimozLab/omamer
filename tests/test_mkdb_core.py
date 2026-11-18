@@ -577,3 +577,34 @@ def test_insert_missing_hog_levels():
         TaxonomyLevels(SpeciesTree.from_string("(((A,B)AB,C)ABC,D)R;").parents()), species.get
     )
     assert etree.tostring(hog.struct) == before
+
+
+def test_reduced_alphabet_index_has_one_posting_per_family(tmp_path):
+    """
+    The suffix array is sorted on the reduced alphabet, where AS and AT are
+    the same k-mer. Comparing the k-mers on the original letters split them
+    into separate runs of the same code, so a family was listed once per run.
+    """
+    db = TinyIndexDatabase(tmp_path / "reduced.h5")
+    try:
+        index = Index(db, k=2, reduced_alphabet=True, hidden_taxa=())
+        # proteins 0 and 1 are in family 0, protein 2 in family 1
+        index.build_kmer_table(np.frombuffer(b"ASC ATA ASD ", dtype="S1"), None)
+
+        table_index = db.db.root.Index.TableIndex[:]
+        table_buffer = db.db.root.Index.TableBuffer[:]
+        hog_families = db.hog_table.col("FamOff")
+        alphabet = index.alphabet
+        for code in np.flatnonzero(np.diff(table_index)):
+            families = hog_families[table_buffer[table_index[code]:table_index[code + 1]]]
+            assert len(families) == len(set(families)), code
+
+        # AS == AT: one posting per family, families 0 and 1
+        code = alphabet.DIGITS_AA_LOOKUP[ord("A")] * alphabet.n + alphabet.DIGITS_AA_LOOKUP[ord("S")]
+        families = hog_families[table_buffer[table_index[code]:table_index[code + 1]]]
+        assert sorted(families) == [0, 1]
+        # family 0 has AA and AC, family 1 AA and AD: with each k-mer counted
+        # once per family, the two families are symmetric
+        np.testing.assert_allclose(db.db.root.Index.FamilyProbability[:], [0.75, 0.75])
+    finally:
+        db.close()

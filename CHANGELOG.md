@@ -72,6 +72,11 @@
 - `search --query --structure`: a structure file with fewer or more records
   than the query file is now a clear error (it raised StopIteration, or the
   extra records were silently ignored).
+- `mkdb --reduced_alphabet` stored a family several times for one k-mer:
+  the suffix array is sorted in the reduced alphabet, but k-mers were
+  compared in the original one, so e.g. AS and AT split a k-mer into several
+  runs. This inflated family hit counts in search, and made beta-binomial
+  fitting fail with an IndexError (present in 2.1.2 as well).
 - The Bio.Phylo species tree reader handles double-quoted taxon names, as used
   in the OMA browser `speciestree.nwk`. Without this it failed on All.May2026
   and silently built a wrong tree from All.Jul2024.

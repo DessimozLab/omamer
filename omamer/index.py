@@ -111,9 +111,11 @@ def _compute_mask_and_filter(
 
 
 @numba.njit
-def _same_kmer(seq_buff, sa, kmer, jj, k):
+def _same_kmer(seq_buff, sa, kmer, jj, k, DIGITS_AA_LOOKUP):
+    # compared in the (possibly reduced) alphabet that the suffix array is
+    # sorted in, otherwise e.g. AS and AT split one k-mer into several runs
     kmer_jj = seq_buff[sa[jj] : (sa[jj] + k)].view(np.uint8)
-    return np.all(np.equal(kmer, kmer_jj))
+    return np.all(np.equal(DIGITS_AA_LOOKUP[kmer], DIGITS_AA_LOOKUP[kmer_jj]))
 
 
 @numba.njit
@@ -174,7 +176,7 @@ def _compute_kmer_table(
         # first in windows of 50s
         # THIS MAY NEED TO BE INCREASED OVER TIME AND IS OPTIMISED FOR THE LUCA DB
         jj = min(ii + 50, len(sa))
-        while (jj < len(sa)) and _same_kmer(seq_buff, sa, kmer, jj, k):
+        while (jj < len(sa)) and _same_kmer(seq_buff, sa, kmer, jj, k, DIGITS_AA_LOOKUP):
             jj = min(jj + 50, len(sa))
 
         # then, refine with binary search
@@ -182,7 +184,7 @@ def _compute_kmer_table(
         hi = jj
         while lo < hi:
             m = int(np.floor((lo + hi) / 2))
-            if _same_kmer(seq_buff, sa, kmer, m, k):
+            if _same_kmer(seq_buff, sa, kmer, m, k, DIGITS_AA_LOOKUP):
                 lo = m + 1
             else:
                 hi = m

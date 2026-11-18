@@ -23,7 +23,7 @@ from omamer.index import Index
 from omamer.refit import drop_bbinom_coefficients, refit_modality, set_kmer_filter
 from omamer.training_buffers import TrainingBuffers, write_training_buffers
 
-from .test_mkdb_models import TinyIndexDatabase
+from .test_mkdb_core import TinyIndexDatabase
 
 N_FAMILIES = 6
 PROTEINS_PER_FAMILY = 8

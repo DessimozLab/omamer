@@ -40,8 +40,8 @@ def mkdb_oma(args):
     from .database import DatabaseFromOMABrowser, DatabaseFromOrthoXML
     from .index import Index, validate_kmer_percentage
     from .stat_models import validate_index_models
+    from .species_tree import SpeciesTree, SpeciesTreeError
 
-    from ete3 import Tree
     import os
 
     _ensure_db_build_dependencies_available()
@@ -85,8 +85,8 @@ def mkdb_oma(args):
             check_file_exists(structure_h5_fn)
 
     else:
-        if args.orthoxml is None or args.species_tree is None or len(args.sequences) == 0:
-            raise ValueError('Must pass either browser database (--oma_path) or all files for OrthoXML build (--orthoxml --species_tree --sequences)')
+        if args.orthoxml is None or not args.sequences:
+            raise ValueError('Must pass either browser database (--oma_path) or all files for OrthoXML build (--orthoxml --sequences, and --species_tree unless the OrthoXML file contains the taxonomy)')
 
         # orthoxml mode
         Database = DatabaseFromOrthoXML
@@ -96,29 +96,36 @@ def mkdb_oma(args):
         sequence_files = list(map(lambda x: x.name, args.sequences))
         structure_files = list(map(lambda x: x.name, args.structures)) \
             if args.structures else []
-        nwk = args.species_tree.name
+        nwk = args.species_tree.name if args.species_tree is not None else None
 
-    # check if root_taxon in tree
-    t = Tree(nwk, format=1, quoted_node_names=True)
-    if args.root_taxon is not None:
-        pruned_t = t.search_nodes(name=args.root_taxon)
-        if len(pruned_t) == 0:
-            raise ValueError("Unable to find {} as root taxon".format(args.root_taxon))
-        elif len(pruned_t) > 1:
-            raise ValueError("Ambiguous root taxon {} ({})".format(args.root_taxon, ", ".join(map(lambda x: x.name, pruned_t))))
-        t = pruned_t[0]
-    root_taxon = t.name
+    # read the species tree, from the OrthoXML file if none is given
+    if nwk is not None:
+        full_stree = SpeciesTree.read(nwk)
+    else:
+        try:
+            full_stree = SpeciesTree.from_orthoxml(oxml_fn)
+        except SpeciesTreeError:
+            raise SpeciesTreeError(
+                "{} contains no taxonomy (OrthoXML >= 0.5), pass the species "
+                "tree with --species_tree".format(oxml_fn)
+            )
+        LOG.info("Using the taxonomy of the OrthoXML file as species tree")
+
+    # check the root taxon, and that the taxa below it have unique names
+    stree = full_stree
+    root_taxon = args.root_taxon if args.root_taxon is not None else stree.root
+    if root_taxon is None:
+        raise SpeciesTreeError(
+            "The root of the species tree has no name, name it or set --root_taxon"
+        )
+    stree = stree.subtree(root_taxon)
 
     if args.hidden_taxa:
         # load and check for hidden taxa
         hidden_taxa = list(map(lambda x: x.rstrip(), args.hidden_taxa))
 
         for ht in hidden_taxa:
-            r = t.search_nodes(name=ht)
-            if len(r) == 0:
-                raise ValueError("Unable to find {} as hidden taxon".format(ht))
-            elif len(r) > 1:
-                raise ValueError("Ambiguous hidden taxon {} ({})".format(ht, ", ".join(map(lambda x: x.name, r))))
+            stree.check_taxon(ht, "hidden taxon")
     else:
         hidden_taxa = []
 
@@ -135,9 +142,9 @@ def mkdb_oma(args):
     # add sequences from database
     LOG.info("Loading sequences")
     if browser_db_mode:
-        seq_buff, ss_buff = db.build_database(oma_db_fn, nwk, structure_h5_fn)
+        seq_buff, ss_buff = db.build_database(oma_db_fn, full_stree, structure_h5_fn)
     else:
-        seq_buff, ss_buff = db.build_database(oxml_fn, sequence_files, structure_files, nwk)
+        seq_buff, ss_buff = db.build_database(oxml_fn, sequence_files, structure_files, full_stree)
 
     LOG.info("Building index")
     db.ki = Index(
@@ -403,6 +410,8 @@ def search(args):
             search_times.append((len(ids_q), t_search1 - t_search0))
 
     db.close()
+    if args.out is not sys.stdout:
+        args.out.close()
 
     search_rate = sum(map(lambda x: x[0], search_times)) / sum(
         map(lambda x: x[1], search_times)

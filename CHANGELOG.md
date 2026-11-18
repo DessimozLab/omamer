@@ -69,6 +69,9 @@
 - `mkdb` releases the unused part of each k-mer table buffer (one entry per
   indexed residue) before building the next modality and the models, which
   lowers the peak memory of builds with `--structures`.
+- `search --query --structure`: a structure file with fewer or more records
+  than the query file is now a clear error (it raised StopIteration, or the
+  extra records were silently ignored).
 - The Bio.Phylo species tree reader handles double-quoted taxon names, as used
   in the OMA browser `speciestree.nwk`. Without this it failed on All.May2026
   and silently built a wrong tree from All.Jul2024.

@@ -194,3 +194,90 @@ def test_default_models_fall_back_to_binomial(dataset, tmp_path, caplog):
         assert db.ki.models == ("binomial",)
     finally:
         db.close()
+
+
+@pytest.fixture(scope="module")
+def structure_db(dataset, tmp_path_factory):
+    path = dataset[0]
+    db_path = tmp_path_factory.mktemp("ss-db") / "ss.h5"
+    _mkdb(db_path, dataset, "--structures", str(path / "ss1.fa"), str(path / "ss2.fa"))
+    db = Database(str(db_path))
+    try:
+        # the HOG of each protein, the expected placement of its own sequence
+        hogs = {
+            db.get_prot_id(i): db.get_hog_id(int(h))
+            for i, h in enumerate(db._db_Protein.col("HOGoff"))
+        }
+    finally:
+        db.close()
+    return db_path, hogs
+
+
+def _write_fasta(path, records):
+    with open(path, "w") as fp:
+        for prot_id, seq in records:
+            fp.write(">{}\n{}\n".format(prot_id, seq))
+    return str(path)
+
+
+def _search(db_path, out, *options):
+    import pandas as pd
+
+    argv = ["omamer", "search", "--db", str(db_path), "--out", str(out), "--silent", *options]
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(sys, "argv", argv)
+        main()
+    return pd.read_csv(out, sep="\t", comment="!", keep_default_na=False)
+
+
+@pytest.mark.parametrize("inputs", ["seq", "ss", "both"])
+def test_search_structure_db(dataset, structure_db, tmp_path, inputs):
+    _, seqs, structures = dataset
+    db_path, hogs = structure_db
+    ids = sorted(seqs)
+    options = []
+    if inputs in ("seq", "both"):
+        options += ["--query", _write_fasta(tmp_path / "q.fa", [(x, seqs[x]) for x in ids])]
+    if inputs in ("ss", "both"):
+        options += [
+            "--structure",
+            _write_fasta(tmp_path / "s.fa", [(x, structures[x]) for x in ids]),
+        ]
+    df = _search(db_path, tmp_path / "out.tsv", *options)
+    assert sorted(df["qseqid"]) == ids
+    # every protein is placed into its family (its own HOG or an ancestor)
+    for qseqid, hogid in zip(df["qseqid"], df["hogid"]):
+        assert hogs[qseqid].startswith(hogid), (qseqid, hogid, hogs[qseqid])
+    # the sequence is used when given, the structure otherwise
+    assert set(df["modality"]) == {"ss" if inputs == "ss" else "seq"}
+
+
+@pytest.mark.parametrize(
+    "structure_ids, message",
+    [
+        ("fewer", "fewer records"),
+        ("more", "more records"),
+        ("other", "IDs must match"),
+    ],
+)
+def test_search_query_and_structure_must_pair_up(
+    dataset, structure_db, tmp_path, structure_ids, message
+):
+    _, seqs, structures = dataset
+    db_path, _ = structure_db
+    ids = sorted(seqs)
+    # in chunks of 3: a missing or extra chunk, or different ids in a chunk
+    ss_ids = {
+        "fewer": ids[:3],
+        "more": ids + ["extra"],
+        "other": ids[::-1],
+    }[structure_ids]
+    query = _write_fasta(tmp_path / "q.fa", [(x, seqs[x]) for x in ids])
+    structure = _write_fasta(
+        tmp_path / "s.fa", [(x, structures.get(x, structures[ids[0]])) for x in ss_ids]
+    )
+    with pytest.raises(RuntimeError, match=message):
+        _search(
+            db_path, tmp_path / "out.tsv",
+            "--query", query, "--structure", structure, "--chunksize", "3",
+        )

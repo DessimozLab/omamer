@@ -327,9 +327,16 @@ def search(args):
             # check sequence record IDs match in both
             # the sequence and structure file
             if has_sequence and has_structure:
-                ids_s, struct_seqs = next(struct_iter)
-                if ids_q != ids_s:
-                    raise RuntimeError("Query and structure IDs must match")
+                ids_s, struct_seqs = next(struct_iter, (None, None))
+                if ids_s is None:
+                    raise RuntimeError(
+                        "The structure file has fewer records than the query file"
+                    )
+                if not np.array_equal(ids_q, ids_s):
+                    raise RuntimeError(
+                        "Query and structure IDs must match, record by record "
+                        "(records shorter than k are skipped in both files)"
+                    )
 
             # if only structure, swap inputs as the main iterator is
             # not over sequence
@@ -408,6 +415,11 @@ def search(args):
                 print_header = False
 
             search_times.append((len(ids_q), t_search1 - t_search0))
+
+        if has_sequence and has_structure and next(struct_iter, None) is not None:
+            raise RuntimeError(
+                "The structure file has more records than the query file"
+            )
 
     db.close()
     if args.out is not sys.stdout:

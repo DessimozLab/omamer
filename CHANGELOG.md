@@ -57,6 +57,9 @@
   HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
   their own parent, so the k-mer table computation looped forever.
 - `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
+- The Bio.Phylo species tree reader handles double-quoted taxon names, as used
+  in the OMA browser `speciestree.nwk`. Without this it failed on All.May2026
+  and silently built a wrong tree from All.Jul2024.
 
 ## Version 2.1.2
 

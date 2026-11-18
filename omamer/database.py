@@ -1133,6 +1133,34 @@ class DatabaseFromOMA(Database):
 
         return fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness
 
+    @staticmethod
+    def _decode_structure_sequence(seq):
+        if isinstance(seq, np.ndarray):
+            if seq.dtype.kind in {"u", "i"}:
+                raw = bytes(seq.tolist()).decode("ascii", "ignore")
+            else:
+                raw = seq.tobytes().decode("ascii", "ignore")
+        elif isinstance(seq, bytes):
+            raw = seq.decode("ascii", "ignore")
+        else:
+            raw = str(seq)
+        return raw
+
+    @staticmethod
+    def _structure_sanitise_seq(seq):
+        return Alphabet(n=21).sanitise_seq(seq)
+
+    @classmethod
+    def _normalise_structure_sequence(cls, seq):
+        raw = cls._decode_structure_sequence(seq)
+        raw = raw.rstrip("\x00")
+        if raw.endswith(" "):
+            raw = cls._structure_sanitise_seq(raw[:-1]) + " "
+        else:
+            raw = cls._structure_sanitise_seq(raw) + " "
+
+        return np.frombuffer(raw.encode("ascii"), dtype="S1")
+
 
 class DatabaseFromOrthoXML(DatabaseFromOMA):
     """
@@ -1406,6 +1434,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         )
 
         sanitiser = Alphabet(n=21).sanitise_seq
+        # ids of the stored proteins, in the order of the protein table
+        selected_prot_ids = []
 
         # go over all fasta records
         for fasta_fn in sequence_files:
@@ -1443,6 +1473,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         seq_buffs.append(seq)
 
                         # store protein information
+                        selected_prot_ids.append(prot_id)
                         prot_id = prot_id.encode("ascii")
                         prot_tab.append(
                             [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
@@ -1479,51 +1510,57 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
 
         seq_buff = np.concatenate(seq_buffs)
 
-        ss_buffs = []
-        ss_off = 0
-        hog2ssoffs = defaultdict(set)
+        structure_buff = None
+        if structure_files:
+            structure_buff = self._load_selected_3di_fasta(
+                structure_files, selected_prot_ids
+            )
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff, structure_buff
 
-        # go over  structure files
+
+    @classmethod
+    def _load_selected_3di_fasta(cls, structure_files, selected_prot_ids):
+        """
+        3Di buffer of the selected proteins, in the order of the protein table
+        (as the index expects record i of both buffers to be protein i). As
+        in the browser build, every selected protein needs a 3Di sequence.
+        """
+        selected = set(selected_prot_ids)
+        structures = {}
         for fasta_fn in structure_files:
             with auto_open(fasta_fn, "rt") as fp:
                 for rec in tqdm(
                     SeqIO.parse(fp, "fasta"),
+                    disable=is_progress_disabled(),
                     desc="Parsing structures ({})".format(os.path.basename(fasta_fn)),
                 ):
-                    if rec.description in ent_tab:
-                        # this seems to be most common, full header is used in standalone orthoXML
+                    # same id matching as for the sequences
+                    if rec.description in selected:
                         prot_id = rec.description
-                    elif rec.id in ent_tab:
-                        # otherwise we might only see the first part of the id.
+                    elif rec.id in selected:
                         prot_id = rec.id
                     else:
-                        # otherwise we can't do anything...
                         continue
+                    if prot_id in structures:
+                        raise ValueError(
+                            "Found multiple 3Di sequences for protein {}".format(prot_id)
+                        )
+                    structures[prot_id] = str(rec.seq)
 
-                    # get hog id, skip if we have filtered it out
-                    r = ent_tab[prot_id]
-                    hog_id = r["hogid"]
-                    sp = r["species"]
-                    # (hog_id, sp) = entry_mapping[prot_id]
-                    if hog_id not in oma_hog2hog:
-                        continue
+        missing = [x for x in selected_prot_ids if not structures.get(x)]
+        if missing:
+            raise ValueError(
+                "Did not find 3Di sequences for {} of {} selected proteins, e.g. {}".format(
+                    len(missing), len(selected_prot_ids), ", ".join(missing[:5])
+                )
+            )
 
-                    # check if the species of the sequence should be loaded
-                    if sp in species:
-                        seq = sanitiser(str(rec.seq)) + " "  # add the padding
-                        seq = np.frombuffer(seq.encode("ascii"), dtype="S1")
-                        ss_buffs.append(seq)
-
-                        # track hog and family
-                        hog = oma_hog2hog[hog_id]
-                        hog2ssoffs[hog].add(ss_off)
-
-                        # update offset of protein row in table
-                        ss_off += 1
-
-        structure_buff = np.concatenate(ss_buffs)
-        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff, structure_buff
-
+        return np.concatenate(
+            [
+                cls._normalise_structure_sequence(structures[x])
+                for x in selected_prot_ids
+            ]
+        )
 
     def add_taxid_col(self):
         """
@@ -1913,33 +1950,6 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
         return ss_buffer[seq_off : seq_off + seq_len]
 
-    @staticmethod
-    def _decode_structure_sequence(seq):
-        if isinstance(seq, np.ndarray):
-            if seq.dtype.kind in {"u", "i"}:
-                raw = bytes(seq.tolist()).decode("ascii", "ignore")
-            else:
-                raw = seq.tobytes().decode("ascii", "ignore")
-        elif isinstance(seq, bytes):
-            raw = seq.decode("ascii", "ignore")
-        else:
-            raw = str(seq)
-        return raw
-
-    @staticmethod
-    def _structure_sanitise_seq(seq):
-        return Alphabet(n=21).sanitise_seq(seq)
-
-    @classmethod
-    def _normalise_structure_sequence(cls, seq):
-        raw = cls._decode_structure_sequence(seq)
-        raw = raw.rstrip("\x00")
-        if raw.endswith(" "):
-            raw = cls._structure_sanitise_seq(raw[:-1]) + " "
-        else:
-            raw = cls._structure_sanitise_seq(raw) + " "
-
-        return np.frombuffer(raw.encode("ascii"), dtype="S1")
 
     def add_taxid_col(self, h5file):
         """

@@ -57,6 +57,11 @@
   HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
   their own parent, so the k-mer table computation looped forever.
 - `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
+- `mkdb --orthoxml` without `--structures` no longer crashes on an empty 3Di
+  buffer, and with `--structures` stores the 3Di sequences in the order of the
+  protein table (they were stored in the order of the structure FASTA files, so
+  3Di k-mers were assigned to the wrong proteins). A missing or duplicated 3Di
+  sequence is now an error, as in the browser build.
 - The Bio.Phylo species tree reader handles double-quoted taxon names, as used
   in the OMA browser `speciestree.nwk`. Without this it failed on All.May2026
   and silently built a wrong tree from All.Jul2024.

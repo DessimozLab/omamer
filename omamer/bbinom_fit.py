@@ -886,6 +886,8 @@ def fit_family_bbinom_from_hist(
     min_nonzero_queries=20,
     modality="seq",
     kmer_percentage=100.0,
+    _trim_round=0,
+    _trimmed_before=0,
 ):
     n_query_counts = {
         int(n): int(count)
@@ -905,7 +907,11 @@ def fit_family_bbinom_from_hist(
     min_ll_gain = float(os.environ.get("OMAMER_BBINOM_MIN_LL_GAIN", "0") or 0)
     perfect_neglogp = float(os.environ.get("OMAMER_BBINOM_PERFECT_NEGLOGP", "0") or 0)
     trimmed_queries = 0
-    if trim_neglogp > 0 and records:
+    #   OMAMER_BBINOM_TRIM_MODE=bb  trim against the fitted beta-binomial instead of the binomial:
+    #                               fit, drop null observations with -ln P(X>=x) >= TRIM_NEGLOGP under
+    #                               the fit, refit (at most 3 rounds)
+    trim_mode = os.environ.get("OMAMER_BBINOM_TRIM_MODE", "binomial")
+    if trim_neglogp > 0 and records and trim_mode == "binomial":
         total_x = sum(int(x) * int(c) for n, x, c in records)
         total_n = sum(int(n) * int(c) for n, c in n_query_counts.items())
         q0 = min(max(total_x / max(total_n, 1), 1e-12), 1 - 1e-12)
@@ -1128,6 +1134,34 @@ def fit_family_bbinom_from_hist(
     }
     row.update({f"q_coef_{i}": float(v) for i, v in enumerate(q_coef)})
     row.update({f"kappa_coef_{i}": float(v) for i, v in enumerate(kappa_coef)})
+    row["trimmed_queries"] = trimmed_queries + int(_trimmed_before)
+    row["trim_rounds"] = int(_trim_round)
+    if trim_neglogp > 0 and trim_mode == "bb" and _trim_round < 3 and fit_valid:
+        from .stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
+
+        q_c = np.asarray(q_coef, dtype=np.float64)
+        k_c = np.asarray(kappa_coef, dtype=np.float64)
+        params = {}
+        kept, dropped = [], Counter()
+        for n, x, count in records:
+            if n not in params:
+                params[n] = beta_binomial_params_for_n(int(n), q_c, k_c, center, scale)[:2]
+            a_, b_ = params[n]
+            if beta_binomial_neglogccdf(int(x), int(n), a_, b_) >= trim_neglogp:
+                dropped[int(n)] += int(count)
+            else:
+                kept.append((n, x, count))
+        if dropped:
+            counts = dict(n_query_counts)
+            for n, c in dropped.items():
+                counts[n] -= c
+            refit = fit_family_bbinom_from_hist(
+                family_offset, kept, counts, q_degree, kappa_degree, min_nonzero_queries,
+                modality, kmer_percentage, _trim_round=_trim_round + 1,
+                _trimmed_before=int(_trimmed_before) + trimmed_queries + sum(dropped.values()),
+            )
+            if refit is not None:
+                return refit
     return row
 
 

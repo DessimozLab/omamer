@@ -20,9 +20,12 @@ def test_low_complexity_mask_counts_distinct_letters():
     assert int(mask.sum()) == 21 + 21 * 20 * 3
 
 
-def test_modality_kmer_mask_only_for_3di_when_enabled(monkeypatch):
+def test_modality_kmer_mask_per_modality(monkeypatch):
     monkeypatch.delenv("OMAMER_SS_MIN_DISTINCT", raising=False)
+    monkeypatch.delenv("OMAMER_SEQ_MIN_DISTINCT", raising=False)
     assert modality_kmer_mask("ss", 3, 21).size == 0
     monkeypatch.setenv("OMAMER_SS_MIN_DISTINCT", "3")
     assert modality_kmer_mask("seq", 3, 21).size == 0
     np.testing.assert_array_equal(modality_kmer_mask("ss", 3, 21), low_complexity_mask(3, 21, 3))
+    monkeypatch.setenv("OMAMER_SEQ_MIN_DISTINCT", "2")
+    assert int(modality_kmer_mask("seq", 3, 21).sum()) == 21

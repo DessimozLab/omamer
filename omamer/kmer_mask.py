@@ -45,14 +45,16 @@ def low_complexity_mask(k, alphabet_n, min_distinct):
 
 def modality_kmer_mask(modality, k, alphabet_n):
     """
-    Experimental (model audit): mask of low-complexity 3Di k-mers, enabled with
-    the environment variable OMAMER_SS_MIN_DISTINCT=<m> (k-mers with fewer than
-    m distinct letters are ignored at search and in the null training).
+    Experimental (model audit): mask of low-complexity k-mers, enabled per
+    modality with OMAMER_SS_MIN_DISTINCT=<m> (3Di) or OMAMER_SEQ_MIN_DISTINCT=<m>
+    (sequences): k-mers with fewer than m distinct letters are ignored at search
+    and in the null training.
     Returns an empty array when masking is off.
     """
-    if modality != "ss":
+    variable = {"ss": "OMAMER_SS_MIN_DISTINCT", "seq": "OMAMER_SEQ_MIN_DISTINCT"}.get(modality)
+    if variable is None:
         return _EMPTY_MASK
-    m = int(os.environ.get("OMAMER_SS_MIN_DISTINCT", "0") or 0)
+    m = int(os.environ.get(variable, "0") or 0)
     if m <= 1:
         return _EMPTY_MASK
     return low_complexity_mask(int(k), int(alphabet_n), m)

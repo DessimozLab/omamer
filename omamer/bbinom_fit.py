@@ -1081,7 +1081,8 @@ def fit_family_bbinom_from_hist(
 
         q_c = np.asarray(theta[: int(q_degree) + 1], dtype=np.float64)
         k_c = np.asarray(theta[int(q_degree) + 1 :], dtype=np.float64)
-        for n_check in (min(n_query_counts), max(n_query_counts)):
+        # at tiny n no match can be significant (e.g. 3 k-mers); check from n = 50
+        for n_check in (max(min(n_query_counts), 50), max(n_query_counts)):
             a_, b_, _ = beta_binomial_params_for_n(n_check, q_c, k_c, center, scale)
             if beta_binomial_neglogccdf(n_check, n_check, a_, b_) < perfect_neglogp:
                 invalid_reasons.append("perfect_match_not_significant")

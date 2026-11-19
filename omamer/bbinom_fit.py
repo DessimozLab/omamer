@@ -911,13 +911,19 @@ def fit_family_bbinom_from_hist(
         q0 = min(max(total_x / max(total_n, 1), 1e-12), 1 - 1e-12)
         from scipy.stats import binom as _binom
 
-        kept = []
-        for n, x, count in records:
-            if -_binom.logsf(int(x) - 1, int(n), q0) >= trim_neglogp:
-                n_query_counts[int(n)] -= int(count)
-                trimmed_queries += int(count)
-            else:
-                kept.append((n, x, count))
+        rec = np.asarray(records, dtype=np.int64).reshape(-1, 3)
+        # per n, the smallest x whose binomial tail reaches the trimming threshold
+        x_cut = {}
+        for n in np.unique(rec[:, 0]):
+            tail = -_binom.logsf(np.arange(int(n) + 1) - 1, int(n), q0)
+            above = np.flatnonzero(tail >= trim_neglogp)
+            x_cut[int(n)] = int(above[0]) if above.size else int(n) + 1
+        cut = np.asarray([x_cut[int(n)] for n in rec[:, 0]], dtype=np.int64)
+        drop = rec[:, 1] >= cut
+        for n, count in zip(rec[drop, 0], rec[drop, 2]):
+            n_query_counts[int(n)] -= int(count)
+        trimmed_queries = int(rec[drop, 2].sum())
+        kept = [tuple(int(v) for v in r) for r in rec[~drop]]
         records = kept
         n_query_counts = {n: c for n, c in n_query_counts.items() if c > 0}
         if len(n_query_counts) < 2:

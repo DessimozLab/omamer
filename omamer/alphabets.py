@@ -31,15 +31,17 @@ class Alphabet(object):
         self.setup()
 
     def setup(self):
-        self.sanitize_translate = None
+        # 256-byte sanitizer translation map: maps the 21 amino-acid letters into
+        # themselves, everything else into X. The same for every alphabet: a
+        # reduced alphabet merges letters through its lookup table, so its
+        # sanitiser must keep all 21 letters, as mkdb does.
+        standard = set("ACDEFGHIKLMNPQRSTVWXY")
+        self.sanitize_translate = bytes(
+            bytearray((b if chr(b) in standard else ord("X") for b in range(256)))
+        )
 
         if self.n == 21:
-            chars = set("ACDEFGHIKLMNPQRSTVWXY")
-            # 256-byte sanitizer translation map: maps allowed characters into
-            # themselves, everything else into X
-            self.sanitize_translate = bytes(
-                bytearray((b if chr(b) in chars else ord("X") for b in range(256)))
-            )
+            chars = standard
 
             digits = np.frombuffer(b"ACDEFGHIKLMNPQRSTVWXY", dtype=np.uint8)
             lookup = np.zeros(np.max(digits) + 1, dtype=np.uint8)

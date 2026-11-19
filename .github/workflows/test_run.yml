@@ -7,35 +7,118 @@ jobs:
 
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        include:
+          - python-version: "3.12"
+            numpy: "numpy>=2"
+          - python-version: "3.14"
+            numpy: "numpy>=2"
+          - python-version: "3.12"
+            numpy: "numpy<2"
+          # the oldest supported combination
+          - python-version: "3.10"
+            numpy: "numpy<2"
 
+    name: Python ${{ matrix.python-version }}, ${{ matrix.numpy }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flake8 pytest
-          pip install .
+          pip install ".[build]" "${{ matrix.numpy }}"
+          python -c "import numpy, sys; print(sys.version, numpy.__version__)"
       - name: Lint with flake8
         run: |
           # stop the build if there are Python syntax errors or undefined names
           flake8 . --exit-zero --count --select=E9,F63,F7,F82 --show-source --statistics
           # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - name: Cache test omamer db file
+        uses: actions/cache@v6
+        with:
+          path: test-db
+          key: omamer-test-db-All.May2026-Homininae
       - name: Download test omamer db file
         run: |
-          wget -O Homininae.h5 'https://omabrowser.org/All/Homininae.h5'
-      - name: Download sample fasta file
+          mkdir -p test-db
+          # a fixed release, as the golden search results in tests/data depend on it
+          [ -f test-db/Homininae.h5 ] || wget -O test-db/Homininae.h5 'https://omabrowser.org/All.May2026/Homininae.h5'
+      - name: Test
+        env:
+          OMAMER_SEARCH_DB: ${{ github.workspace }}/test-db/Homininae.h5
         run: |
-         wget -O human_sample.fa 'https://rest.uniprot.org/uniprotkb/search?format=fasta&query=%28%28proteome%3AUP000005640%29%29&size=200'
-         head -n 10 human_sample.fa
-      - name: Test 
+          pytest tests -rs
+
+  mkdb-sources:
+    # builds the same database from an OMA browser HDF5 file and from the
+    # FastOMA OrthoXML + proteomes it was converted from, see
+    # tests/test_mkdb_sources.py, plus a build with non-default index
+    # parameters, and searches all of them. Takes ~12 minutes and ~5 GB of
+    # memory.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            numpy: "numpy>=2"
+          - python-version: "3.14"
+            numpy: "numpy>=2"
+          - python-version: "3.12"
+            numpy: "numpy<2"
+          # the oldest supported combination
+          - python-version: "3.10"
+            numpy: "numpy<2"
+
+    timeout-minutes: 45
+    name: mkdb from OMA browser and OrthoXML - Python ${{ matrix.python-version }}, ${{ matrix.numpy }}
+
+    env:
+      # Zenodo record with omamer-mkdb-sources-fungi.tar.gz, which unpacks to
+      # omamer-mkdb-sources-fungi/{OmaServer.h5,speciestree.nwk,
+      # FastOMA_HOGs.orthoxml,proteomes/*.fa}
+      ZENODO_RECORD: "23910807"
+      DATASET: omamer-mkdb-sources-fungi
+      DATASET_SHA256: "e06f6b9b1cbb275db6598c99ac63d61848f651cc9e16b33cbec4a356b346d595"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python 
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
         run: |
-          ls -l
-          omamer search --db Homininae.h5 --query human_sample.fa --out human_sample.omamer
-          cat human_sample.omamer
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install ".[build]" "${{ matrix.numpy }}"
+      - name: Cache test dataset
+        uses: actions/cache@v6
+        with:
+          path: test-data/${{ env.DATASET }}
+          key: ${{ env.DATASET }}-zenodo-${{ env.ZENODO_RECORD }}
+      - name: Download test dataset
+        run: |
+          mkdir -p test-data
+          if [ ! -d "test-data/$DATASET" ]; then
+            wget --no-verbose -O "test-data/$DATASET.tar.gz" \
+              "https://zenodo.org/records/$ZENODO_RECORD/files/$DATASET.tar.gz?download=1"
+            if [ -n "$DATASET_SHA256" ]; then
+              echo "$DATASET_SHA256  test-data/$DATASET.tar.gz" | sha256sum -c -
+            else
+              echo "::warning::DATASET_SHA256 is not set, the download is not verified"
+            fi
+            tar -xzf "test-data/$DATASET.tar.gz" -C test-data
+            rm "test-data/$DATASET.tar.gz"
+          fi
+          ls -l "test-data/$DATASET"
+      - name: Test
+        env:
+          OMAMER_MKDB_SOURCES_DIR: ${{ github.workspace }}/test-data/${{ env.DATASET }}
+        run: |
+          pytest tests/test_mkdb_sources.py -rs

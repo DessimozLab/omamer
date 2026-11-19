@@ -398,7 +398,7 @@ class Database(object):
         for fam_id, hogs in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
             ### hogs
             # sort by level
-            hogs = sorted(hogs, key=lambda x: len(x.split(b".")))
+            hogs = sorted(hogs, key=lambda x: (len(x.split(b".")), x))
             hog_num = len(hogs)
 
             # parents
@@ -609,18 +609,20 @@ class Database(object):
 
     @staticmethod
     def find_parent_hog(hog_id, hogs):
-        if isinstance(hog_id, str):
-            split_hog = hog_id.split(".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, ".".join(split_hog[:-1]))
-            return parent_hog
-        elif isinstance(hog_id, bytes):
-            split_hog = hog_id.split(b".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, b".".join(split_hog[:-1]))
-            return parent_hog
+        """
+        Offset in the sorted array hogs of the closest ancestor of hog_id, or -1.
+
+        Intermediate HOGs can be missing, e.g. for a duplication nested directly
+        in another duplication HOG:1.1a.1a exists but HOG:1.1a does not.
+        """
+        sep = "." if isinstance(hog_id, str) else b"."
+        split_hog = hog_id.split(sep)
+        for i in range(len(split_hog) - 1, 0, -1):
+            parent_id = sep.join(split_hog[:i])
+            parent_hog = np.searchsorted(hogs, parent_id)
+            if parent_hog < len(hogs) and hogs[parent_hog] == parent_id:
+                return parent_hog
+        return -1
 
     def add_median_seqlen_col(self):
         """
@@ -1069,8 +1071,14 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.oxml_path = oxml_path
         self.hog_parser = OrthoxmlParser(oxml_path)
 
-    def parse_oxml(self, nspecies_below):
-        from .orthoxml_parser import is_orthologGroup_node
+    def parse_oxml(self, nspecies_below, stree_path):
+        from ete3 import Tree
+        from .orthoxml_parser import TaxonomyLevels, is_orthologGroup_node
+
+        taxonomy = TaxonomyLevels(Tree(stree_path, format=1, quoted_node_names=True))
+
+        def gene_species(gene_id):
+            return self.hog_parser.species.get_species(gene_id).name
 
         def generate_hog_tab(hog):
             # this is more memory intensive (we cache the results)
@@ -1143,6 +1151,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         entries = []
         LOG.debug("loading hog structure and membership from orthoxml")
         for hog in tqdm(self.hog_parser.iter_hogs(auto_clean=True), desc="Parsing HOGs"):
+            # same HOG levels as in the OMA browser
+            hog.insert_missing_levels(taxonomy, gene_species)
             hog_data = list(filter(lambda x: x is not None, generate_hog_tab(hog)))
             gene_data = list(generate_prot_tab(hog))
             hog_data += list(generate_hogs_for_prot(hog, gene_data))
@@ -1182,7 +1192,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.add_taxid_col()
 
         LOG.debug("build hog_table from orthoxml")
-        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below, stree_path)
 
         LOG.debug("select and strip OMA HOGs")
         (
@@ -1381,8 +1391,9 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         taxid_column = []
         i = -100
         for tax_name in self._db_Taxonomy.col("ID"):
-            sp = self.hog_parser.species[tax_name]
-            if sp is not None and hasattr(sp, "NCBITaxID"):
+            sp = self.hog_parser.species[tax_name.decode("ascii")]
+            # NCBITaxId="0" means unknown, e.g. in FastOMA output
+            if sp is not None and sp.NCBITaxID > 0:
                 taxid_column.append(sp.NCBITaxID)
             else:
                 taxid_column.append(i)

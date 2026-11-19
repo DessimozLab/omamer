@@ -256,6 +256,54 @@ class HOGLevelIDs(object):
         tab.colinstances["Level"].create_csindex()
 
 
+class TaxonomyLevels(object):
+    """
+    Taxonomic levels of a species tree, used to insert the levels that a
+    HOG spans implicitly.
+    """
+
+    def __init__(self, tree):
+        """
+        Initialise from an ete3 tree whose nodes are named by taxon.
+        """
+        self._parent = {}
+        for node in tree.traverse():
+            self._parent[node.name] = node.up.name if node.up is not None else None
+
+    def lineage(self, taxon):
+        """
+        Returns the taxon and its ancestors, up to the root.
+        """
+        lineage = []
+        while taxon is not None:
+            lineage.append(taxon)
+            taxon = self._parent[taxon]
+        return lineage
+
+    def mrca(self, taxa):
+        """
+        Returns the most recent common ancestor of the taxa.
+        """
+        taxa = iter(set(taxa))
+        lineage = self.lineage(next(taxa))
+        for taxon in taxa:
+            ancestors = set(self.lineage(taxon))
+            lineage = [t for t in lineage if t in ancestors]
+        return lineage[0]
+
+    def levels_between(self, taxon, ancestor):
+        """
+        Returns the levels strictly between taxon and its ancestor, from the
+        bottom up. Empty if ancestor is not an ancestor of taxon.
+        """
+        if taxon not in self._parent:
+            return []
+        lineage = self.lineage(taxon)[1:]
+        if ancestor not in lineage:
+            return []
+        return lineage[: lineage.index(ancestor)]
+
+
 # HOG Parsing classes
 class AllSpecies(object):
     def __init__(self, hog_parser, no_xrefs=False, is_oma=False):
@@ -739,6 +787,64 @@ class HOG(object):
                 self._loft_annotate_inner(
                     c, "{}{}".format(next_og, "".join(letters[::-1])), idx
                 )
+
+    def insert_missing_levels(self, taxonomy, gene_species):
+        """
+        Inserts an orthologGroup for every taxonomic level that a group spans
+        implicitly, as pyoma does for the HOGs of the OMA browser:
+
+        - between an orthologGroup and its parent orthologGroup,
+        - between a paralogGroup (at the MRCA of its genes) and its parent
+          orthologGroup, so that the subHOGs of a duplication start at the
+          level of the duplication,
+        - between a geneRef (at its species) and its parent orthologGroup.
+
+        taxonomy is a TaxonomyLevels instance, gene_species maps a geneRef id
+        to the name of its species. The LOFT ids are recomputed.
+        """
+
+        def taxon_of(node):
+            if is_orthologGroup_node(node):
+                return self.get_properties(node)["TaxRange"]
+            elif is_geneRef_node(node):
+                return gene_species(int(node.attrib["id"]))
+            return taxonomy.mrca(
+                gene_species(int(g.attrib["id"])) for g in self.geneRefs(node)
+            )
+
+        def insert_levels(node, parent_taxon):
+            taxon = taxon_of(node)
+            levels = taxonomy.levels_between(taxon, parent_taxon)
+            if is_geneRef_node(node) and parent_taxon in taxonomy.lineage(taxon)[1:]:
+                levels = [taxon] + levels
+            parent = node.getparent()
+            pos = parent.index(node)
+            top = node
+            for level in levels:
+                og = etree.Element(tag_name("orthologGroup"))
+                etree.SubElement(
+                    og, tag_name("property"), {"name": "TaxRange", "value": level}
+                )
+                og.append(top)
+                top = og
+            parent.insert(pos, top)
+            # the closest orthologGroup above the children of node
+            return taxon if is_orthologGroup_node(node) else (
+                levels[0] if levels else parent_taxon
+            )
+
+        def recurse(node, parent_taxon):
+            if not (is_evolutionary_node(node) or is_geneRef_node(node)):
+                return
+            if parent_taxon is not None:
+                parent_taxon = insert_levels(node, parent_taxon)
+            else:
+                parent_taxon = taxon_of(node)
+            for child in list(node):
+                recurse(child, parent_taxon)
+
+        recurse(self.struct, None)
+        self._loft_annotate()
 
     def geneRefs(self, node=None):
         """

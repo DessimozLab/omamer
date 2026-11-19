@@ -749,16 +749,18 @@ class MergeSearch(object):
         if self.include_extant_genes:
             # add extant gene list if necessary
             HEADER.append("subfamily_geneset")
+            # load the tables once, not for every result row
+            hog_tab = self.hog_tab
+            chog_buff = self.db._db_ChildrenHOG[:]
+            cprot_buff = self.db._db_ChildrenProt[:]
             df.loc[hog_f, "subfamily_geneset"] = df.loc[hog_f, "hog_offset"].apply(
                 lambda i: ",".join(
                     map(
                         self.db.get_prot_id,
-                        get_hog_member_prots(
-                            i-1,
-                            self.hog_tab,
-                                self.db._db_ChildrenHOG[:],
-                                self.db._db_ChildrenProt[:],
-                            ))))
+                        get_hog_member_prots(i - 1, hog_tab, chog_buff, cprot_buff),
+                    )
+                )
+            )
 
         # add the hog id
         df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(

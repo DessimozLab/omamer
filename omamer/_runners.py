@@ -254,6 +254,8 @@ def search(args):
             search_times.append((len(ids), t_search1 - t_search0))
 
     db.close()
+    if args.out is not sys.stdout:
+        args.out.close()
 
     search_rate = sum(map(lambda x: x[0], search_times)) / sum(
         map(lambda x: x[1], search_times)

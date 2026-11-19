@@ -1,6 +1,33 @@
 
 # Change log
 
+## Unreleased
+
+### Changed
+
+- Support numpy 2 (numpy >= 1.26 and pytables >= 3.10.1 are now required)
+- Python >= 3.10 is now required (support for Python 3.8 and 3.9 is dropped,
+  as pytables >= 3.10 no longer supports them)
+- `mkdb` stores the HOGs of a family level in a fixed order, so repeated builds
+  of the same input produce identical databases
+- `search --include_extant_genes` no longer reloads the database tables for
+  every result row, which made it very slow on large databases
+- CI runs the test suite with Python 3.12 and 3.14 and with numpy 1 and 2,
+  including search results checked against golden files
+- `mkdb --orthoxml` adds the taxonomic levels that a HOG spans implicitly, as
+  pyoma does for the OMA browser. A subHOG now starts at the level of the
+  duplication that created it, and nested duplications get their intermediate
+  HOG, so FastOMA output gives the same database as the OMA browser build
+
+### Fixed
+
+- Python 3.13+: install `legacy-cgi`, which ete3 still needs
+- `mkdb` no longer runs out of memory on HOGs with a duplication nested
+  directly in another duplication (e.g. FastOMA output), where an intermediate
+  HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
+  their own parent, so the k-mer table computation looped forever.
+- `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
+
 ## Version 2.1.2
 
 ### Fixed

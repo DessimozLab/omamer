@@ -139,6 +139,14 @@ def mkdb_oma(args):
         mode="w",
     )
 
+    if getattr(args, "exclude_families", None):
+        db.excluded_families = {
+            line.strip().encode("ascii")
+            for line in args.exclude_families
+            if line.strip()
+        }
+        LOG.info("Excluding {} families".format(len(db.excluded_families)))
+
     # add sequences from database
     LOG.info("Loading sequences")
     if browser_db_mode:

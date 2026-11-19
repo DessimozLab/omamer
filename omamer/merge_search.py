@@ -384,8 +384,10 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
         kmer = r1[m]
         loc = p1[m]
 
-        # to ignore k-mers with X
+        # to ignore k-mers with X (the unique codes contain the X flag at most once);
+        # they do not count towards n, as in the training of the family models
         if kmer == x_flag:
+            n_skipped += 1
             continue
 
         # get mapping to HOGs

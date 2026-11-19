@@ -47,6 +47,7 @@ from .hierarchy import (
     is_taxon_implied,
 )
 from .sequence_buffer import SequenceBuffer
+from .kmer_mask import modality_kmer_mask
 from .stat_models import (
     FamilyModelParameters,
     FamilyScoringParameters,
@@ -81,6 +82,7 @@ KmerIndex = namedtuple(
         "table_buff",
         "modality",
         "kmer_filter_max_df",
+        "kmer_mask",
     ),
 )
 
@@ -90,12 +92,14 @@ def make_kmer_index(
     table_buff,
     modality,
     kmer_filter_max_df,
+    kmer_mask=None,
 ):
     return KmerIndex(
         table_idx,
         table_buff,
         modality,
         np.int64(kmer_filter_max_df),
+        np.zeros(0, dtype=np.bool_) if kmer_mask is None else kmer_mask,
     )
 
 
@@ -387,6 +391,11 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
         # to ignore k-mers with X (the unique codes contain the X flag at most once);
         # they do not count towards n, as in the training of the family models
         if kmer == x_flag:
+            n_skipped += 1
+            continue
+
+        # masked k-mers (e.g. low-complexity 3Di) are ignored and do not count towards n
+        if index.kmer_mask.size > 0 and index.kmer_mask[kmer]:
             n_skipped += 1
             continue
 
@@ -916,7 +925,13 @@ class MergeSearch(object):
             )
         return SearchModality(
             SequenceBatch(buffer.buff, buffer.idx),
-            make_kmer_index(table["idx"], table["buff"], source, cutoff),
+            make_kmer_index(
+                table["idx"],
+                table["buff"],
+                source,
+                cutoff,
+                modality_kmer_mask(modality, self.ki.k, self.ki.alphabet.n),
+            ),
             self._family_model(modality, family_model_policy),
             HogModelParameters(hog_probability),
         )

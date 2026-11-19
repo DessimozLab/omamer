@@ -98,6 +98,7 @@ def _unique_valid_codes(
     x_flag,
     table_idx=None,
     kmer_filter_max_df=0,
+    kmer_mask=None,
 ):
     n_kmers = len(seq) - (k - 1)
     if n_kmers <= 0:
@@ -113,6 +114,8 @@ def _unique_valid_codes(
     if kmer_filter_max_df > 0:
         dfs = table_idx[codes + 1] - table_idx[codes]
         codes = codes[dfs <= kmer_filter_max_df]
+    if kmer_mask is not None and kmer_mask.size > 0:
+        codes = codes[~kmer_mask[codes]]
     return codes
 
 
@@ -159,6 +162,7 @@ def scan_buffer_unique_counts(
     table_index,
     kmer_filter_max_df=0,
     bounds=None,
+    kmer_mask=None,
 ):
     """Count exact unique k-mers directly from an mkdb sequence buffer."""
     starts, stops = _buffer_record_bounds(sequence_buffer, expected_records, bounds)
@@ -178,6 +182,7 @@ def scan_buffer_unique_counts(
             x_flag,
             table_index,
             kmer_filter_max_df,
+            kmer_mask,
         ).size
     return counts
 
@@ -447,6 +452,7 @@ def load_or_scan_unique_counts(
     kmer_filter_max_df,
     bounds=None,
     cache_path=None,
+    kmer_mask=None,
 ):
     """Return per-record exact unique-k-mer counts, caching the scan.
 
@@ -484,6 +490,7 @@ def load_or_scan_unique_counts(
         table_index,
         kmer_filter_max_df,
         bounds=bounds,
+        kmer_mask=kmer_mask,
     )
     if cache_path:
         # Write through a handle: np.savez would otherwise append ".npz" and
@@ -647,6 +654,7 @@ def collect_dense_family_hit_histograms(
     table_idx=None,
     table_buff=None,
     sampled_family_offsets=None,
+    kmer_mask=None,
 ):
     """Collect bounded-memory histograms without Python objects per bin.
 
@@ -725,6 +733,7 @@ def collect_dense_family_hit_histograms(
             x_flag,
             table_idx,
             kmer_filter_max_df,
+            kmer_mask,
         )
         if int(codes.size) != int(n):
             raise RuntimeError(
@@ -1314,6 +1323,7 @@ def _fit_sampled_bbinom_coefficients(
     sampled_family_offsets=None,
     checkpoint_output_path=None,
     kappa_const=False,
+    kmer_mask=None,
 ):
     """Fit selected families from an already materialized query sample."""
     n_query_counts = Counter(int(n) for n, _ in sampled_sequences)
@@ -1361,6 +1371,7 @@ def _fit_sampled_bbinom_coefficients(
             table_idx=table_index,
             table_buff=table_buffer,
             sampled_family_offsets=sampled_family_offsets,
+            kmer_mask=kmer_mask,
         )
         hist, batch_query_counts = collected[:2]
         batch_rows = fit_bbinom_rows(
@@ -1475,6 +1486,11 @@ def fit_bbinom_coefficients_from_buffer(
     if table_buffer is None:
         table_buffer = buffer_node[:]
     kmer_filter_max_df = _modality_kmer_max_df(db, modality)
+    from .kmer_mask import modality_kmer_mask
+
+    kmer_mask = modality_kmer_mask(modality, db.ki.k, db.ki.alphabet.n)
+    if kmer_mask.size:
+        LOG.info("Masking %d low-complexity %s k-mer codes", int(kmer_mask.sum()), modality)
     n_records = len(db.protein_table)
     n_unique = load_or_scan_unique_counts(
         sequence_buffer,
@@ -1485,6 +1501,7 @@ def fit_bbinom_coefficients_from_buffer(
         kmer_filter_max_df,
         bounds=bounds,
         cache_path=n_counts_cache,
+        kmer_mask=kmer_mask,
     )
     n_unique = exclude_hidden_records(db, n_unique)
     _, selected_n = choose_sequence_n_values(
@@ -1536,6 +1553,7 @@ def fit_bbinom_coefficients_from_buffer(
         table_buffer=table_buffer,
         sampled_family_offsets=sampled_family_offsets,
         kappa_const=(kappa == "pooled"),
+        kmer_mask=kmer_mask,
     )
     if kappa == "pooled":
         rows = pool_family_kappa(

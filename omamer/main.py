@@ -215,6 +215,14 @@ def main():
         help="Maximum sampled source proteins per exact-N fitting bucket; 0 uses all.",
     )
     mkdb_parser.add_argument(
+        "--bbinom_kappa",
+        default="family",
+        choices=("family", "pooled"),
+        help="Overdispersion of the beta-binomial family models: fitted per family "
+        "('family'), or one value for all families of a modality ('pooled': the "
+        "median of per-family fits with a kappa independent of the query length).",
+    )
+    mkdb_parser.add_argument(
         "--bbinom_min_nonzero_queries",
         default=20,
         type=int,
@@ -520,6 +528,13 @@ def main():
         default=500,
         type=int,
         help="Maximum sampled source proteins per exact-N point; 0 uses all.",
+    )
+    refit_parser.add_argument(
+        "--kappa",
+        default="family",
+        choices=("family", "pooled"),
+        help="Overdispersion of the family models: per family, or pooled over "
+        "all families of a modality (see mkdb --bbinom_kappa).",
     )
     refit_parser.add_argument(
         "--min_nonzero_queries",

@@ -177,6 +177,7 @@ def mkdb_oma(args):
             "min_nonzero_queries": getattr(
                 args, "bbinom_min_nonzero_queries", 20
             ),
+            "kappa": getattr(args, "bbinom_kappa", "family"),
             "max_families": getattr(args, "bbinom_max_families", 0),
             "min_family_prob": getattr(args, "bbinom_min_family_prob", 0.0),
             "workers": getattr(args, "bbinom_fit_workers", 1),
@@ -621,6 +622,7 @@ def refit_bbinom(args):
                 family_offsets_path=args.family_offsets,
                 family_shard=shard,
                 n_counts_cache=_shard_free_cache_path(args, modality),
+                kappa=getattr(args, "kappa", "family"),
                 # A shard fits only part of the family set, so it must not
                 # claim in the database that it trained the whole thing.
                 store_metadata=write_in_place and shard is None,

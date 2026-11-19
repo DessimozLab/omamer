@@ -353,3 +353,52 @@ def test_hidden_species_are_not_training_queries(tiny_build):
     )
     sampled = np.concatenate(list(sampled.values()))
     assert set(species[sampled]) == {0}
+
+
+def test_pooled_kappa_gives_every_family_one_model(tiny_build):
+    db, buffers_path = tiny_build
+    rows = _fit(db, buffers_path, kappa="pooled")
+    n_families = len(db.family_table)
+
+    # one row per family, all valid, one kappa independent of n
+    assert sorted(rows["family_offset"]) == list(range(n_families))
+    assert rows["fit_valid"].all()
+    assert rows["kappa_coef_0"].nunique() == 1
+    assert (rows["kappa_coef_1"] == 0).all()
+
+
+def test_pool_family_kappa_uses_the_median_and_the_binomial_mean():
+    from omamer.bbinom_fit import InsufficientTrainingData, pool_family_kappa
+
+    rows = pd.DataFrame(
+        {
+            "family_offset": [0, 1, 2],
+            "modality": "seq",
+            "log_n_center": [5.0, 5.0, 5.0],
+            "log_n_scale": [1.0, 1.0, 1.0],
+            "n_train_min": [10, 10, 10],
+            "n_train_max": [100, 100, 100],
+            "q_coef_0": [-5.0, -6.0, -7.0],
+            "q_coef_1": [0.1, 0.2, 0.3],
+            "q_coef_2": [0.0, 0.0, 0.0],
+            "kappa_coef_0": [np.log(10.0), np.log(1000.0), np.log(1e6)],
+            "kappa_coef_1": [0.0, 0.0, 0.0],
+            "fit_valid": [True, True, False],
+        }
+    )
+    family_probability = np.array([1e-3, 1e-4, 1e-5, 1e-6])
+    pooled = pool_family_kappa(rows, family_probability)
+
+    assert list(pooled["family_offset"]) == [0, 1, 2, 3]
+    # median of the valid fits only (10 and 1000)
+    np.testing.assert_allclose(np.exp(pooled["kappa_coef_0"]), np.sqrt(10 * 1000))
+    assert pooled["fit_valid"].all()
+    # valid fits keep their mean, the invalid and the unfitted family get the binomial one
+    np.testing.assert_allclose(pooled["q_coef_0"][:2], [-5.0, -6.0])
+    p = family_probability[2:]
+    np.testing.assert_allclose(pooled["q_coef_0"][2:], np.log(p / (1 - p)))
+    assert (pooled.loc[2:, ["q_coef_1", "q_coef_2"]] == 0).all().all()
+    assert (pooled.loc[2:, "n_train_max"] == 0).all()
+
+    with pytest.raises(InsufficientTrainingData):
+        pool_family_kappa(rows.assign(fit_valid=False), family_probability)

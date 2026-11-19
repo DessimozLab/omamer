@@ -888,6 +888,7 @@ def fit_family_bbinom_from_hist(
     kmer_percentage=100.0,
     _trim_round=0,
     _trimmed_before=0,
+    kappa_const=False,
 ):
     n_query_counts = {
         int(n): int(count)
@@ -903,7 +904,7 @@ def fit_family_bbinom_from_hist(
     #   OMAMER_BBINOM_MIN_LL_GAIN   minimum log-likelihood gain over the binomial for a valid fit
     #   OMAMER_BBINOM_PERFECT_NEGLOGP  a valid fit must give a perfect match -ln P >= this value
     trim_neglogp = float(os.environ.get("OMAMER_BBINOM_TRIM_NEGLOGP", "0") or 0)
-    kappa_const = os.environ.get("OMAMER_BBINOM_KAPPA_CONST", "") == "1"
+    kappa_const = kappa_const or os.environ.get("OMAMER_BBINOM_KAPPA_CONST", "") == "1"
     min_ll_gain = float(os.environ.get("OMAMER_BBINOM_MIN_LL_GAIN", "0") or 0)
     perfect_neglogp = float(os.environ.get("OMAMER_BBINOM_PERFECT_NEGLOGP", "0") or 0)
     trimmed_queries = 0
@@ -1158,6 +1159,7 @@ def fit_family_bbinom_from_hist(
             refit = fit_family_bbinom_from_hist(
                 family_offset, kept, counts, q_degree, kappa_degree, min_nonzero_queries,
                 modality, kmer_percentage, _trim_round=_trim_round + 1,
+                kappa_const=kappa_const,
                 _trimmed_before=int(_trimmed_before) + trimmed_queries + sum(dropped.values()),
             )
             if refit is not None:
@@ -1165,11 +1167,73 @@ def fit_family_bbinom_from_hist(
     return row
 
 
+def pool_family_kappa(rows, family_probability, modality="seq", kmer_percentage=100.0):
+    """
+    Give every family the same overdispersion: the median kappa of the valid
+    fits (which must have been fitted with a kappa that does not depend on n).
+
+    Per-family estimates of kappa scatter over orders of magnitude, mostly from
+    sampling noise and from homologous queries in the null; ranking queries
+    across families with them is worse than with the binomial. Pooling keeps
+    the overdispersion of the null and removes the scatter. Families without a
+    valid fit get the binomial family probability as their mean, so that every
+    family uses the same model.
+    """
+    n_families = int(len(family_probability))
+    rows = rows.copy() if rows is not None else pd.DataFrame()
+    valid = (
+        rows["fit_valid"].astype(bool).values
+        if len(rows) and "fit_valid" in rows
+        else np.zeros(len(rows), dtype=bool)
+    )
+    if not valid.any():
+        raise InsufficientTrainingData("No valid fit to pool the overdispersion from")
+    log_kappa = float(np.median(rows.loc[valid, "kappa_coef_0"]))
+
+    p = np.clip(np.asarray(family_probability, dtype=np.float64), 1e-12, 1 - 1e-12)
+    logit_p = np.log(p / (1 - p))
+    fallback = ~valid
+    rows.loc[fallback, ["q_coef_0", "q_coef_1", "q_coef_2"]] = 0.0
+    rows.loc[fallback, "q_coef_0"] = logit_p[rows.loc[fallback, "family_offset"].astype(int)]
+    rows.loc[fallback, ["log_n_center", "log_n_scale"]] = [0.0, 1.0]
+    rows.loc[fallback, ["n_train_min", "n_train_max"]] = 0
+
+    missing = np.setdiff1d(
+        np.arange(n_families),
+        rows["family_offset"].astype(int).values if len(rows) else [],
+    )
+    if missing.size:
+        extra = pd.DataFrame(
+            {
+                "family_offset": missing,
+                "modality": modality,
+                "kmer_percentage": float(kmer_percentage),
+                "model": "length_aware_beta_binomial",
+                "log_n_center": 0.0,
+                "log_n_scale": 1.0,
+                "n_train_min": 0,
+                "n_train_max": 0,
+                "q_coef_0": logit_p[missing],
+                "q_coef_1": 0.0,
+                "q_coef_2": 0.0,
+            }
+        )
+        rows = pd.concat([rows, extra], ignore_index=True)
+    rows["kappa_coef_0"] = log_kappa
+    rows["kappa_coef_1"] = 0.0
+    rows["fit_valid"] = True
+    rows["optimizer_success"] = True
+    rows["kappa_pooled"] = True
+    rows["fit_invalid_reason"] = ""
+    return rows.sort_values("family_offset", ignore_index=True)
+
+
 def _fit_family_worker(args):
-    return fit_family_bbinom_from_hist(*args)
+    *args, kappa_const = args
+    return fit_family_bbinom_from_hist(*args, kappa_const=kappa_const)
 
 
-def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_degree=1, min_nonzero_queries=20, workers=1, modality="seq", kmer_percentage=100.0):
+def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_degree=1, min_nonzero_queries=20, workers=1, modality="seq", kmer_percentage=100.0, kappa_const=False):
     if isinstance(hist, DenseFamilyHitHistogram):
         ranks = range(hist.n_families)
 
@@ -1183,6 +1247,7 @@ def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_d
                 int(min_nonzero_queries),
                 modality,
                 float(kmer_percentage),
+                bool(kappa_const),
             )
     else:
         by_rank = defaultdict(list)
@@ -1200,6 +1265,7 @@ def fit_bbinom_rows(hist, n_query_counts, selected_families, q_degree=2, kappa_d
                 int(min_nonzero_queries),
                 modality,
                 float(kmer_percentage),
+                bool(kappa_const),
             )
 
     rows = []
@@ -1247,6 +1313,7 @@ def _fit_sampled_bbinom_coefficients(
     table_buffer=None,
     sampled_family_offsets=None,
     checkpoint_output_path=None,
+    kappa_const=False,
 ):
     """Fit selected families from an already materialized query sample."""
     n_query_counts = Counter(int(n) for n, _ in sampled_sequences)
@@ -1306,6 +1373,7 @@ def _fit_sampled_bbinom_coefficients(
             workers=workers,
             modality=modality,
             kmer_percentage=db.ki.kmer_percentage,
+            kappa_const=kappa_const,
         )
         if checkpoint_output_path:
             batch_output_path = "{}.batch-{:04d}-of-{:04d}.tsv".format(
@@ -1370,8 +1438,17 @@ def fit_bbinom_coefficients_from_buffer(
     bounds=None,
     n_counts_cache=None,
     store_metadata=True,
+    kappa="family",
 ):
-    """Fit beta-binomial coefficients from buffers retained during mkdb."""
+    """Fit beta-binomial coefficients from buffers retained during mkdb.
+
+    kappa="family" fits the overdispersion of every family separately (as a
+    function of n); kappa="pooled" fits every family with a kappa that does not
+    depend on n and then gives all families the median of the valid fits, see
+    pool_family_kappa.
+    """
+    if kappa not in ("family", "pooled"):
+        raise ValueError("kappa must be 'family' or 'pooled', got {!r}".format(kappa))
     if modality not in ("seq", "ss"):
         raise ValueError("modality must be 'seq' or 'ss', got {!r}".format(modality))
     if modality == "ss" and not db.has_structure():
@@ -1458,7 +1535,21 @@ def fit_bbinom_coefficients_from_buffer(
         table_index=table_index,
         table_buffer=table_buffer,
         sampled_family_offsets=sampled_family_offsets,
+        kappa_const=(kappa == "pooled"),
     )
+    if kappa == "pooled":
+        rows = pool_family_kappa(
+            rows,
+            _modality_family_probability(db, modality),
+            modality=modality,
+            kmer_percentage=db.ki.kmer_percentage,
+        )
+        if store_metadata:
+            attrs = db.db.root.Index._v_attrs
+            attrs["{}_bbinom_kappa".format(modality)] = "pooled"
+            attrs["{}_bbinom_pooled_kappa".format(modality)] = float(
+                np.exp(rows["kappa_coef_0"].iloc[0])
+            ) if len(rows) else float("nan")
     valid_count = int(rows["fit_valid"].sum()) if "fit_valid" in rows else 0
     LOG.info(
         "Fitted {} coefficient rows for '{}' ({} valid, {} invalid)".format(

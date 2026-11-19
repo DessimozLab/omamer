@@ -262,13 +262,12 @@ class TaxonomyLevels(object):
     HOG spans implicitly.
     """
 
-    def __init__(self, tree):
+    def __init__(self, parents):
         """
-        Initialise from an ete3 tree whose nodes are named by taxon.
+        Initialise from a mapping of taxon name -> parent taxon name (None
+        for the root), e.g. SpeciesTree.parents().
         """
-        self._parent = {}
-        for node in tree.traverse():
-            self._parent[node.name] = node.up.name if node.up is not None else None
+        self._parent = dict(parents)
 
     def lineage(self, taxon):
         """

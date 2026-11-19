@@ -7,6 +7,7 @@ import tables
 from omamer.database import Database, DatabaseFromOMA
 from omamer.hierarchy import get_root_leaf_offsets
 from omamer.index import Index
+from omamer.species_tree import SpeciesTree
 
 HOG_LEVEL_DTYPE = np.dtype(
     [
@@ -360,7 +361,6 @@ def test_tiny_sequence_index(tmp_path):
 
 def test_insert_missing_hog_levels():
     """OrthoXML HOGs get the implied levels that pyoma adds for the OMA browser."""
-    from ete3 import Tree
     from lxml import etree
 
     from omamer.orthoxml_parser import (
@@ -395,7 +395,7 @@ def test_insert_missing_hog_levels():
     species = {1: "A", 2: "B", 3: "A", 4: "A", 5: "C", 6: "D"}
     hog = HOG(etree.fromstring(xml))
     hog.insert_missing_levels(
-        TaxonomyLevels(Tree("(((A,B)AB,C)ABC,D)R;", format=1)), species.get
+        TaxonomyLevels(SpeciesTree.from_string("(((A,B)AB,C)ABC,D)R;").parents()), species.get
     )
 
     levels = sorted(
@@ -431,6 +431,6 @@ def test_insert_missing_hog_levels():
     # inserting again changes nothing
     before = etree.tostring(hog.struct)
     hog.insert_missing_levels(
-        TaxonomyLevels(Tree("(((A,B)AB,C)ABC,D)R;", format=1)), species.get
+        TaxonomyLevels(SpeciesTree.from_string("(((A,B)AB,C)ABC,D)R;").parents()), species.get
     )
     assert etree.tostring(hog.struct) == before

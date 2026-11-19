@@ -99,14 +99,21 @@ The taxon from the predicted HOG that is closest from the reference taxon (given
 
 
 # omamer mkdb - Building a Database
-This is currently reliant on the OMA browser's database file and the species phylogeny of HOGs. Building using OrthoXML files available shortly. 
- - https://omabrowser.org/All/OmaServer.h5
- - https://omabrowser.org/All/speciestree.nwk
+A database can be built from one of:
+
+ - the OMA browser's database file and species tree (``--oma_path``), e.g.
+   - https://omabrowser.org/All/OmaServer.h5
+   - https://omabrowser.org/All/speciestree.nwk
+ - HOGs in an OrthoXML file (e.g. from FastOMA) and the proteomes as FASTA files (``--orthoxml``, ``--sequences``). The species tree is read from the ``<taxonomy>`` of the OrthoXML file (OrthoXML >= 0.5), or given as newick file with ``--species_tree``.
+
+The taxon names in the species tree below the root taxon must be unique.
+
 ## Usage
-Required arguments: ``--db``, ``--oma_path``
+Required arguments: ``--db``, and ``--oma_path`` or ``--orthoxml`` and ``--sequences``
 
     usage: omamer mkdb [-h] --db DB [--nthreads NTHREADS] [--min_fam_size MIN_FAM_SIZE] [--min_fam_completeness MIN_FAM_COMPLETENESS] [--logic {AND,OR}]
-                       [--root_taxon ROOT_TAXON] [--hidden_taxa HIDDEN_TAXA] [--species SPECIES] [--reduced_alphabet] [--k K] --oma_path OMA_PATH
+                       [--root_taxon ROOT_TAXON] [--hidden_taxa HIDDEN_TAXA] [--reduced_alphabet] [--k K] [--oma_path OMA_PATH]
+                       [--orthoxml ORTHOXML] [--species_tree SPECIES_TREE] [--sequences [SEQUENCES ...]]
                        [--log_level {debug,info,warning}]
                    
 ## Arguments
@@ -123,6 +130,9 @@ Required arguments: ``--db``, ``--oma_path``
 | [``--reduced_alphabet``](#markdown-header--reduced_alphabet)||Use reduced alphabet from Linclust paper
 | [``--k``](#markdown-header--k)|6|_k_-mer length
 | [``--oma_path``](#markdown-header--oma_path)||Path to a directory with both OmaServer.h5 and speciestree.nwk
+| [``--orthoxml``](#markdown-header--orthoxml)||Path to an OrthoXML file with the HOGs
+| [``--species_tree``](#markdown-header--species_tree)|``<taxonomy>`` of the OrthoXML file|Path to a newick species tree for ``--orthoxml``. Required if the OrthoXML file has no taxonomy (OrthoXML < 0.5).
+| [``--sequences``](#markdown-header--sequences)||FASTA files with the proteins of the species in the OrthoXML file
 | [``--log_level``](#markdown-header--log_level)|info|Logging level
 
 

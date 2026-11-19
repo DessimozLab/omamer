@@ -76,6 +76,12 @@
   HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
   their own parent, so the k-mer table computation looped forever.
 - `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
+- `mkdb --reduced_alphabet` built a wrong k-mer table: k-mers that are equal
+  in the reduced alphabet, but not in the original sequences (e.g. `AS` and
+  `AT`), were stored as several runs, with duplicate and too specific HOG
+  entries. Searches with such databases placed many queries in the wrong
+  family. Databases built with `--reduced_alphabet` must be rebuilt. With the
+  beta-binomial models, such builds also failed with an IndexError.
 - `mkdb --orthoxml` without `--structures` no longer crashes on an empty 3Di
   buffer, and with `--structures` stores the 3Di sequences in the order of the
   protein table (they were stored in the order of the structure FASTA files, so
@@ -91,11 +97,6 @@
 - `search --query --structure`: a structure file with fewer or more records
   than the query file is now a clear error (it raised StopIteration, or the
   extra records were silently ignored).
-- `mkdb --reduced_alphabet` stored a family several times for one k-mer:
-  the suffix array is sorted in the reduced alphabet, but k-mers were
-  compared in the original one, so e.g. AS and AT split a k-mer into several
-  runs. This inflated family hit counts in search, and made beta-binomial
-  fitting fail with an IndexError (present in 2.1.2 as well).
 - The Bio.Phylo species tree reader handles double-quoted taxon names, as used
   in the OMA browser `speciestree.nwk`. Without this it failed on All.May2026
   and silently built a wrong tree from All.Jul2024.

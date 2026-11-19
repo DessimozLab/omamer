@@ -894,6 +894,35 @@ def fit_family_bbinom_from_hist(
     }
     if len(n_query_counts) < 2:
         return None
+    # Experimental options of the model audit (environment variables, off by default):
+    #   OMAMER_BBINOM_TRIM_NEGLOGP  drop null observations whose binomial -ln P(X>=x) under the
+    #                               family's mean hit rate reaches this value (homologous hits)
+    #   OMAMER_BBINOM_KAPPA_CONST   1: kappa does not depend on n (slope fixed at 0)
+    #   OMAMER_BBINOM_MIN_LL_GAIN   minimum log-likelihood gain over the binomial for a valid fit
+    #   OMAMER_BBINOM_PERFECT_NEGLOGP  a valid fit must give a perfect match -ln P >= this value
+    trim_neglogp = float(os.environ.get("OMAMER_BBINOM_TRIM_NEGLOGP", "0") or 0)
+    kappa_const = os.environ.get("OMAMER_BBINOM_KAPPA_CONST", "") == "1"
+    min_ll_gain = float(os.environ.get("OMAMER_BBINOM_MIN_LL_GAIN", "0") or 0)
+    perfect_neglogp = float(os.environ.get("OMAMER_BBINOM_PERFECT_NEGLOGP", "0") or 0)
+    trimmed_queries = 0
+    if trim_neglogp > 0 and records:
+        total_x = sum(int(x) * int(c) for n, x, c in records)
+        total_n = sum(int(n) * int(c) for n, c in n_query_counts.items())
+        q0 = min(max(total_x / max(total_n, 1), 1e-12), 1 - 1e-12)
+        from scipy.stats import binom as _binom
+
+        kept = []
+        for n, x, count in records:
+            if -_binom.logsf(int(x) - 1, int(n), q0) >= trim_neglogp:
+                n_query_counts[int(n)] -= int(count)
+                trimmed_queries += int(count)
+            else:
+                kept.append((n, x, count))
+        records = kept
+        n_query_counts = {n: c for n, c in n_query_counts.items() if c > 0}
+        if len(n_query_counts) < 2:
+            return None
+
     nonzero_queries = int(sum(count for _, _, count in records))
     if nonzero_queries < int(min_nonzero_queries):
         return None
@@ -951,6 +980,9 @@ def fit_family_bbinom_from_hist(
     bounds = [
         (-BBINOM_COEFFICIENT_BOUND, BBINOM_COEFFICIENT_BOUND)
     ] * theta0.size
+    if kappa_const:
+        for i in range(int(q_degree) + 2, theta0.size):
+            bounds[i] = (0.0, 0.0)
 
     def optimise_retry(start):
         divisor = float(weights.sum())
@@ -1042,6 +1074,18 @@ def fit_family_bbinom_from_hist(
     binomial_loglik = float(np.sum(weights * binomial_logpmf))
     if loglik + 1e-5 < binomial_loglik:
         invalid_reasons.append("worse_than_binomial")
+    elif min_ll_gain > 0 and loglik - binomial_loglik < min_ll_gain:
+        invalid_reasons.append("small_gain")
+    if perfect_neglogp > 0:
+        from .stat_models import beta_binomial_neglogccdf, beta_binomial_params_for_n
+
+        q_c = np.asarray(theta[: int(q_degree) + 1], dtype=np.float64)
+        k_c = np.asarray(theta[int(q_degree) + 1 :], dtype=np.float64)
+        for n_check in (min(n_query_counts), max(n_query_counts)):
+            a_, b_, _ = beta_binomial_params_for_n(n_check, q_c, k_c, center, scale)
+            if beta_binomial_neglogccdf(n_check, n_check, a_, b_) < perfect_neglogp:
+                invalid_reasons.append("perfect_match_not_significant")
+                break
     fit_valid = not invalid_reasons
     q_coef = theta[: int(q_degree) + 1]
     kappa_coef = theta[int(q_degree) + 1 :]
@@ -1059,6 +1103,7 @@ def fit_family_bbinom_from_hist(
         "n_train_max": int(max(n_query_counts)),
         "queries": int(sum(n_query_counts.values())),
         "nonzero_queries": nonzero_queries,
+        "trimmed_queries": trimmed_queries,
         "overall_hit_probability": overall_q,
         "loglik": float(loglik),
         "binomial_mle_loglik": binomial_loglik,

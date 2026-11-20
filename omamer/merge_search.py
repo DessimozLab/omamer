@@ -908,7 +908,7 @@ def candidate_scoring_parameters(family_scoring):
     score is kept), so that a family weakly supported by both modalities is
     not lost.
     """
-    return FamilyScoringParameters(0.0, family_scoring.log_correction)
+    return FamilyScoringParameters(0.0, family_scoring.log_correction, -1.0)
 
 
 @numba.njit(nogil=True)
@@ -949,7 +949,10 @@ def place_summed(
 
     # the significance filter of score_family_candidates, on the sum (all
     # summed scores are positive, as each modality keeps positive ones only)
-    qres = qres[qres["pvalue"] >= family_scoring.neglog_alpha]
+    threshold = family_scoring.summed_neglog_alpha
+    if threshold < 0.0:
+        threshold = family_scoring.neglog_alpha
+    qres = qres[qres["pvalue"] >= threshold]
     if len(qres) == 0:
         return False
 
@@ -1391,8 +1394,11 @@ class MergeSearch(object):
         search_mode="auto",
         family_model="auto",
         family_sorting="auto",
+        summed_alpha=None,
     ):
         """
+        summed_alpha: threshold on the summed sequence + 3Di scores (sum mode,
+        and the 3Di stage of the hybrid mode); None uses alpha.
         family_sorting 'auto' ranks families by normcount, except the summed
         scores (sum mode, and the fallback of the hybrid mode), ranked by
         the summed score ('pvalue').
@@ -1427,6 +1433,7 @@ class MergeSearch(object):
         family_scoring = FamilyScoringParameters(
             -math.log(alpha),
             family_log_correction(family_correction, self.fam_tab.size),
+            -math.log(summed_alpha) if summed_alpha is not None else -1.0,
         )
 
         results = make_search_results(max(len(seqs), len(struct_seqs)), top_n_fams)

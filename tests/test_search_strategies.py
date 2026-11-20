@@ -463,3 +463,20 @@ def test_sum_mode_adds_scores_and_places_with_scoring_modality(
         search, results, (sequence_search,), placement, strict, SEARCH_SEQUENCE
     )
     assert results.families["id"][0, 0] == 0
+
+    # a separate threshold for summed scores (--summed_alpha): above the sum,
+    # nothing is placed; at the single-modality threshold the sum passes
+    summed_strict = FamilyScoringParameters(0.0, 0.0, 2.5 * single)
+    results = make_search_results(len(sequences), 20)
+    MergeSearch._lookup(
+        search, results, (sequence_search, sequence_search), placement,
+        summed_strict, SEARCH_SUM,
+    )
+    assert results.families["id"][0, 0] == 0
+    summed_loose = FamilyScoringParameters(10 * single, 0.0, 1.5 * single)
+    results = make_search_results(len(sequences), 20)
+    MergeSearch._lookup(
+        search, results, (sequence_search, sequence_search), placement,
+        summed_loose, SEARCH_SUM,
+    )
+    assert results.families["id"][0, 0] == 1

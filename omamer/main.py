@@ -383,6 +383,16 @@ def main():
         help="Significance threshold used when filtering families.",
     )
     search_parser.add_argument(
+        "--summed_alpha",
+        type=float,
+        default=None,
+        help="Significance threshold for the summed sequence + 3Di scores of "
+        "--search_mode sum and of the 3Di stage of --search_mode hybrid (same "
+        "units and correction as --family_alpha). Default: --family_alpha. "
+        "The summed score is not a calibrated p-value, so a stricter value is "
+        "usually needed.",
+    )
+    search_parser.add_argument(
         "--family_correction",
         choices=("bonferroni", "none"),
         default="bonferroni",

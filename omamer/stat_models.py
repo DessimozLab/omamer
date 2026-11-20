@@ -69,9 +69,12 @@ PACKED_N_MIN = 3
 PACKED_N_MAX = 4
 PACKED_Q_COEF = 5
 
+# summed_neglog_alpha: threshold on summed sequence + 3Di scores (sum and hybrid
+# modes); -1 means the same as neglog_alpha
 FamilyScoringParameters = namedtuple(
     "FamilyScoringParameters",
-    ("neglog_alpha", "log_correction"),
+    ("neglog_alpha", "log_correction", "summed_neglog_alpha"),
+    defaults=(-1.0,),
 )
 
 HogModelParameters = namedtuple(

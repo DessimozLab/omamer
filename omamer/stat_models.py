@@ -62,12 +62,19 @@ FamilyModelParameters = namedtuple(
 )
 
 # Columns of a packed row; the q then the kappa coefficients follow.
-PACKED_BBINOM = 0
-PACKED_CENTER = 1
-PACKED_SCALE = 2
-PACKED_N_MIN = 3
-PACKED_N_MAX = 4
+PACKED_CENTER = 0
+# > 0 if and only if the family has a beta-binomial fit (as
+# `has_family_bbinom`); the row is all 0 otherwise
+PACKED_SCALE = 1
+PACKED_N_MIN = 2
+PACKED_N_MAX = 3
+# kappa when it does not depend on n (kappa coefficients of degree >= 1 are 0,
+# as with a pooled kappa), else NaN; see `packed_bbinom_kappa`
+PACKED_KAPPA = 4
 PACKED_Q_COEF = 5
+# |z| up to which the kappa of PACKED_KAPPA is the one computed from the
+# coefficients (beyond, a power of z may overflow, and 0 * inf is NaN)
+PACKED_KAPPA_MAX_Z = 1e30
 
 # summed_neglog_alpha: threshold on summed sequence + 3Di scores (sum and hybrid
 # modes); -1 means the same as neglog_alpha. ss_weight: weight of the 3Di score
@@ -429,11 +436,20 @@ def make_family_model(
 
 def pack_family_bbinom(model):
     """
-    One row per family: [has a beta-binomial fit (as `has_family_bbinom`),
-    center, scale, n_min, n_max (0: no clamp, as `bbinom_eval_n`),
-    q coefficients, kappa coefficients], in float64 (exact for the uint32
-    n range). Rows are padded to 8 or 16 columns, so that the q part of a
-    row lies in one cache line.
+    One row per family: [center, scale (0: no beta-binomial fit, as
+    `has_family_bbinom`), n_min, n_max (0: no clamp, as `bbinom_eval_n`),
+    kappa if constant (NaN: depends on n), q coefficients, kappa
+    coefficients], in float64 (exact for the uint32 n range). Rows are
+    padded to 8 or 16 columns, so that the part of a row read with a
+    constant kappa and up to 3 q coefficients lies in one cache line.
+
+    When every kappa is constant (as with a pooled kappa), the kappa
+    coefficients are left out and rows of up to 3 q coefficients take 8
+    columns: one cache line per family, and half the memory. The search
+    reads the row of every candidate family of a query, in no order, so
+    that it mostly waits for memory; on Metazoa (215,667 families) the
+    16-column rows (28 MB) do not fit a 16 MB L3 cache, the 8-column ones
+    do, which halves the time of the count filter.
     """
     n_families = model.family_probability.size
     n_q = model.q_coef.shape[1]
@@ -455,9 +471,6 @@ def pack_family_bbinom(model):
         model.center.size,
         model.scale.size,
     )
-    packed[:m, PACKED_BBINOM] = (
-        model.valid[:m] & (model.scale[:m] > 0.0)
-    ).astype(np.float64)
     packed[:m, PACKED_CENTER] = model.center[:m]
     packed[:m, PACKED_SCALE] = model.scale[:m]
     packed[:m, PACKED_Q_COEF : PACKED_Q_COEF + n_q] = model.q_coef[:m]
@@ -468,6 +481,26 @@ def pack_family_bbinom(model):
     packed[:k, PACKED_N_MAX] = n_max
     k, n_min = present(model.n_min)
     packed[:k, PACKED_N_MIN] = n_min
+    _fill_constant_kappa(packed, n_q, n_kappa)
+
+    has_fit = np.zeros(n_families, dtype=np.bool_)
+    has_fit[:m] = model.valid[:m] & (model.scale[:m] > 0.0)
+    packed[~has_fit] = 0.0
+
+    # Without the kappa coefficients, `packed_bbinom_params_q` must never
+    # compute kappa from them: every kappa constant, and |z| within
+    # PACKED_KAPPA_MAX_Z at any n (log n_eval is in [0, 45) for the int64 n).
+    fit_rows = packed[has_fit]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        max_z = (np.abs(fit_rows[:, PACKED_CENTER]) + 45.0) / fit_rows[
+            :, PACKED_SCALE
+        ]
+    if (
+        PACKED_Q_COEF + n_q <= 8
+        and not np.isnan(fit_rows[:, PACKED_KAPPA]).any()
+        and np.all(max_z <= PACKED_KAPPA_MAX_Z)
+    ):
+        packed = np.ascontiguousarray(packed[:, :8])
     return packed
 
 
@@ -601,18 +634,49 @@ def packed_bbinom_q(row, z, n_q):
 
 
 @numba.njit(nogil=True)
-def packed_bbinom_params(row, n, log_n, n_q, n_kappa):
-    """(alpha, beta) of `beta_binomial_params_for_n`, from a packed row."""
-    z = packed_bbinom_z(row, n, log_n)
-    q = packed_bbinom_q(row, z, n_q)
-
+def packed_bbinom_kappa(row, z, n_q, n_kappa):
+    """kappa of `beta_binomial_params_for_n`, with the same operations."""
     log_kappa = 0.0
     z_power = 1.0
     for i in range(n_kappa):
         log_kappa += row[PACKED_Q_COEF + n_q + i] * z_power
         z_power *= z
     log_kappa = min(max(log_kappa, math.log(1e-4)), math.log(1e8))
-    kappa = math.exp(log_kappa)
+    return math.exp(log_kappa)
+
+
+@numba.njit(nogil=True)
+def _fill_constant_kappa(packed, n_q, n_kappa):
+    """
+    PACKED_KAPPA: kappa at z = 0 when the kappa coefficients of degree >= 1
+    are 0. Then the terms of these degrees are +-0 at any |z| <=
+    PACKED_KAPPA_MAX_Z, and kappa is bit-identical at every n.
+    """
+    for f in range(packed.shape[0]):
+        row = packed[f]
+        constant = True
+        for i in range(1, n_kappa):
+            if row[PACKED_Q_COEF + n_q + i] != 0.0:
+                constant = False
+        row[PACKED_KAPPA] = (
+            packed_bbinom_kappa(row, 0.0, n_q, n_kappa) if constant else np.nan
+        )
+
+
+@numba.njit(nogil=True)
+def packed_bbinom_params(row, n, log_n, n_q, n_kappa):
+    """(alpha, beta) of `beta_binomial_params_for_n`, from a packed row."""
+    z = packed_bbinom_z(row, n, log_n)
+    q = packed_bbinom_q(row, z, n_q)
+    return packed_bbinom_params_q(row, z, q, n_q, n_kappa)
+
+
+@numba.njit(nogil=True)
+def packed_bbinom_params_q(row, z, q, n_q, n_kappa):
+    """`packed_bbinom_params` given z and q (`packed_bbinom_z`, `_q`)."""
+    kappa = row[PACKED_KAPPA]
+    if not (kappa == kappa and abs(z) <= PACKED_KAPPA_MAX_Z):
+        kappa = packed_bbinom_kappa(row, z, n_q, n_kappa)
 
     alpha = q * kappa
     beta = (1.0 - q) * kappa
@@ -639,7 +703,7 @@ def compute_expected_counts(qres, n, model):
         for i in range(len(qres)):
             family_id = qres["id"][i]
             row = model.packed[family_id]
-            if row[PACKED_BBINOM] != 0.0:
+            if row[PACKED_SCALE] > 0.0:
                 z = packed_bbinom_z(row, n, log_n)
                 expected_count[i] = packed_bbinom_q(row, z, n_q) * n
             else:
@@ -759,7 +823,7 @@ def _filter_by_significance_bound(qres, n, model, scoring):
         family_id = qres["id"][i]
         if packed:
             row = model.packed[family_id]
-            is_bbinom = row[PACKED_BBINOM] != 0.0
+            is_bbinom = row[PACKED_SCALE] > 0.0
         else:
             is_bbinom = has_family_bbinom(family_id, model)
         if is_bbinom:
@@ -827,7 +891,7 @@ def score_family_candidates(
         family_id = qres["id"][i]
         if packed:
             row = model.packed[family_id]
-            if row[PACKED_BBINOM] != 0.0:
+            if row[PACKED_SCALE] > 0.0:
                 (alpha, beta) = packed_bbinom_params(row, n, log_n, n_q, n_kappa)
                 neglog_tail = beta_binomial_neglogccdf(
                     qres["count"][i], n, alpha, beta

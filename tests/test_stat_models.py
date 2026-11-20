@@ -164,9 +164,13 @@ def test_family_candidate_operations_dispatch_and_fallback():
     assert score_family_candidates.targetoptions["nogil"]
 
 
-@pytest.mark.parametrize("n_q, n_kappa", [(3, 2), (1, 1), (6, 5)])
-def test_packed_beta_binomial_model_is_bit_identical(n_q, n_kappa):
-    """The packed coefficient rows give the same floats as the arrays."""
+@pytest.mark.parametrize(
+    "n_q, n_kappa, pooled, width",
+    [(3, 2, False, 16), (3, 2, True, 8), (1, 1, False, 8), (6, 5, False, 16)],
+)
+def test_packed_beta_binomial_model_is_bit_identical(n_q, n_kappa, pooled, width):
+    """The packed coefficient rows give the same floats as the arrays;
+    rows of a pooled kappa (constant in n) take 8 columns."""
     rng = np.random.default_rng(5)
     n_families = 300
     valid = rng.random(n_families) < 0.8
@@ -175,18 +179,24 @@ def test_packed_beta_binomial_model_is_bit_identical(n_q, n_kappa):
     n_min = rng.integers(5, 60, n_families).astype(np.uint32)
     n_max = (n_min + rng.integers(0, 400, n_families)).astype(np.uint32)
     n_max[5:20] = 0  # no clamp
+    kappa_coef = rng.normal(3.0, 0.3, (n_families, n_kappa)) / np.arange(
+        1, n_kappa + 1
+    )
+    if pooled:
+        kappa_coef[:, 0] = 7.36
+        kappa_coef[:, 1:] = 0.0
     model = make_family_model(
         "beta-binomial",
         rng.uniform(1e-4, 0.05, n_families),
         rng.normal(-3.0, 0.3, (n_families, n_q)) / np.arange(1, n_q + 1),
-        rng.normal(3.0, 0.3, (n_families, n_kappa)) / np.arange(1, n_kappa + 1),
+        kappa_coef,
         rng.uniform(3.0, 6.0, n_families),
         scale,
         valid,
         n_min,
         n_max,
     )
-    assert model.packed.shape[0] == n_families
+    assert model.packed.shape == (n_families, width)
     unpacked = model._replace(packed=np.empty((0, 0), dtype=np.float64))
     qres = np.zeros(n_families, dtype=QUERY_RESULT_DTYPE)
     qres["id"] = rng.permutation(n_families)

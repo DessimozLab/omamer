@@ -550,22 +550,6 @@ def bbinom_expected_count(family_id, n, model):
 
 
 @numba.njit(nogil=True)
-def family_bbinom_neglogpmf(family_id, x, n, model):
-    """
-    Computes the single-term (-log P(X = x)) for a Beta-Binomial family.
-    """
-    n_eval = bbinom_eval_n(family_id, n, model.n_min, model.n_max)
-    alpha, beta, _ = beta_binomial_params_for_n(
-        n_eval,
-        model.q_coef[family_id],
-        model.kappa_coef[family_id],
-        model.center[family_id],
-        model.scale[family_id],
-    )
-    return -beta_binomial_logpmf(float(x), float(n), alpha, beta)
-
-
-@numba.njit(nogil=True)
 def family_expected_count(family_id, n, model):
     if has_family_bbinom(family_id, model):
         return bbinom_expected_count(family_id, n, model)
@@ -677,6 +661,83 @@ def filter_family_candidates(qres, n, model):
     return qres[qres["count"] >= expected_count]
 
 
+# Largest observed count for which `beta_binomial_neglogpmf_bounds` is used:
+# it costs one multiplication-division step per unit of the count.
+PMF_BOUNDS_MAX_COUNT = 64
+
+
+@numba.njit(nogil=True)
+def beta_binomial_neglogpmf_bounds(x, n, alpha, beta):
+    """
+    Lower and upper bounds of -log P(X = x) for X ~ BetaBinomial(n, alpha,
+    beta), with 0 < x <= n, without lgamma: two logarithms and x steps.
+
+    With a = n - x and kappa = alpha + beta, `beta_binomial_logpmf` is
+
+        -log P(X = x) = sum_{j<x} log[(j + 1) (a + beta + j)
+                                       / ((j + alpha) (a + 1 + j))]
+                        + E1 - E2,
+        E1 = lgamma(n + beta + alpha) - lgamma(n + beta),
+        E2 = lgamma(beta + alpha) - lgamma(beta),
+
+    (the integer-step lgamma differences written as products). lgamma is
+    convex, so an increment lgamma(y + alpha) - lgamma(y) lies between
+    alpha psi(y) and alpha psi(y + alpha), and the digamma function psi
+    satisfies log(y) - 1/y < psi(y) < log(y) - 1/(2y) for y > 0. Hence
+
+        alpha [psi(n + beta) - psi(kappa)] <= E1 - E2
+                                           <= alpha [psi(n + kappa) - psi(beta)].
+
+    The interval is about alpha (alpha + 1) / beta wide: narrow for the
+    family models, where alpha = q kappa is small relative to beta.
+    """
+    a = n - x
+    acc = 0.0
+    prod = 1.0
+    for j in range(x):
+        prod *= ((j + 1.0) / (j + alpha)) * ((a + beta + j) / (a + 1.0 + j))
+        if prod > 1e150 or prod < 1e-150:
+            acc += math.log(prod)
+            prod = 1.0
+    acc += math.log(prod)
+
+    kappa = alpha + beta
+    upper = acc + alpha * (
+        math.log((n + kappa) / beta) - 0.5 / (n + kappa) + 1.0 / beta
+    )
+    lower = acc + alpha * (
+        math.log((n + beta) / kappa) - 1.0 / (n + beta) + 0.5 / kappa
+    )
+    return lower, upper
+
+
+@numba.njit(nogil=True)
+def beta_binomial_pmf_test(x, n, alpha, beta, scoring):
+    """
+    The significance bound of the beta-binomial (see
+    `_filter_by_significance_bound`): -log P(X = x), corrected, reaches
+    -log(alpha). Decided by `beta_binomial_neglogpmf_bounds` unless the
+    exact value is within a rounding margin of the threshold, so that the
+    outcome is that of the exact `beta_binomial_logpmf`.
+    """
+    if 0 < x <= n and x <= PMF_BOUNDS_MAX_COUNT:
+        threshold = scoring.neglog_alpha + scoring.log_correction
+        lower, upper = beta_binomial_neglogpmf_bounds(
+            x, float(n), alpha, beta
+        )
+        # The exact value is a sum of lgamma of magnitude up to about
+        # (n + kappa) log(n + kappa), each within a few ulp; the margin
+        # exceeds that rounding error by orders of magnitude.
+        size = n + alpha + beta + 2.0
+        margin = 1e-6 + 1e-12 * size * math.log(size)
+        if upper < threshold - margin:
+            return False
+        if lower > threshold + margin:
+            return True
+    neglogpmf = -beta_binomial_logpmf(float(x), float(n), alpha, beta)
+    return neglogpmf - scoring.log_correction >= scoring.neglog_alpha
+
+
 @numba.njit(nogil=True)
 def _filter_by_significance_bound(qres, n, model, scoring):
     """
@@ -712,19 +773,17 @@ def _filter_by_significance_bound(qres, n, model, scoring):
                 (alpha, beta) = packed_bbinom_params(
                     model.packed[family_id], n, log_n, n_q, n_kappa
                 )
-                neglogpmf = -beta_binomial_logpmf(
-                    float(qres["count"][i]), float(n), alpha, beta
-                )
             else:
-                neglogpmf = family_bbinom_neglogpmf(
-                    family_id,
-                    qres["count"][i],
-                    n,
-                    model,
+                n_eval = bbinom_eval_n(family_id, n, model.n_min, model.n_max)
+                alpha, beta, _ = beta_binomial_params_for_n(
+                    n_eval,
+                    model.q_coef[family_id],
+                    model.kappa_coef[family_id],
+                    model.center[family_id],
+                    model.scale[family_id],
                 )
-            keep[i] = (
-                neglogpmf - scoring.log_correction
-                >= scoring.neglog_alpha
+            keep[i] = beta_binomial_pmf_test(
+                qres["count"][i], n, alpha, beta, scoring
             )
         else:
             # For the binomial model, perform the Chernoff KL-div test.

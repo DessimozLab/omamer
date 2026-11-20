@@ -5,9 +5,13 @@ import numpy as np
 import pytest
 
 from omamer.stat_models import (
+    PMF_BOUNDS_MAX_COUNT,
     FamilyModel,
     FamilyModelParameters,
     FamilyScoringParameters,
+    beta_binomial_logpmf,
+    beta_binomial_neglogpmf_bounds,
+    beta_binomial_pmf_test,
     filter_family_candidates,
     get_family_model,
     learn_index_models,
@@ -201,3 +205,78 @@ def test_packed_beta_binomial_model_is_bit_identical(n_q, n_kappa):
                     expected = (filtered, scored)
             assert filtered.tobytes() == expected[0].tobytes()
             assert scored.tobytes() == expected[1].tobytes()
+
+
+@numba.njit
+def _pmf_bounds_and_exact(xs, ns, alphas, betas, out):
+    for i in range(xs.size):
+        lower, upper = beta_binomial_neglogpmf_bounds(
+            xs[i], float(ns[i]), alphas[i], betas[i]
+        )
+        out[i, 0] = lower
+        out[i, 1] = upper
+        out[i, 2] = -beta_binomial_logpmf(
+            float(xs[i]), float(ns[i]), alphas[i], betas[i]
+        )
+
+
+def _random_bbinom_cases(rng, size, max_count=PMF_BOUNDS_MAX_COUNT):
+    ns = rng.integers(1, 5000, size)
+    xs = np.minimum(ns, rng.integers(1, max_count + 1, size))
+    kappa = np.exp(rng.uniform(np.log(1e-4), np.log(1e8), size))
+    q = np.minimum(np.exp(rng.uniform(np.log(1e-8), 0.0, size)), 1.0 - 1e-8)
+    return xs, ns, q * kappa, (1.0 - q) * kappa
+
+
+def test_beta_binomial_neglogpmf_bounds_bracket_the_exact_value():
+    rng = np.random.default_rng(11)
+    xs, ns, alphas, betas = _random_bbinom_cases(rng, 200_000)
+    out = np.empty((xs.size, 3))
+    _pmf_bounds_and_exact(xs, ns, alphas, betas, out)
+    lower, upper, exact = out.T
+    assert np.all(np.isfinite(out))
+    # up to the rounding of the lgamma sums, far below the margin of
+    # `beta_binomial_pmf_test`
+    size = ns + alphas + betas + 2.0
+    tolerance = 1e-9 + 1e-15 * size * np.log(size)
+    assert np.all(lower <= exact + tolerance)
+    assert np.all(exact <= upper + tolerance)
+    # narrow for family-like models (kappa ~ 1e3, q ~ 1e-3)
+    alphas = np.full(1000, 1.5)
+    betas = np.full(1000, 1500.0)
+    out = np.empty((1000, 3))
+    _pmf_bounds_and_exact(xs[:1000], ns[:1000], alphas, betas, out)
+    assert np.all(out[:, 1] - out[:, 0] < 0.01)
+
+
+@numba.njit
+def _pmf_tests(xs, ns, alphas, betas, neglog_alphas, out):
+    for i in range(xs.size):
+        scoring = FamilyScoringParameters(neglog_alphas[i], 3.0)
+        out[i] = beta_binomial_pmf_test(
+            xs[i], ns[i], alphas[i], betas[i], scoring
+        )
+
+
+def test_beta_binomial_pmf_test_matches_the_exact_test():
+    """The bounds never change the outcome of the exact pmf test, also
+    with the threshold at or next to the exact value."""
+    rng = np.random.default_rng(12)
+    xs, ns, alphas, betas = _random_bbinom_cases(
+        rng, 100_000, max_count=2 * PMF_BOUNDS_MAX_COUNT
+    )
+    out = np.empty((xs.size, 3))
+    _pmf_bounds_and_exact(xs, ns, alphas, betas, out)
+    exact = out[:, 2]
+    for neglog_alpha in (
+        np.full(xs.size, 0.0),
+        np.full(xs.size, -np.log(1e-6)),
+        exact - 3.0,
+        np.nextafter(exact - 3.0, -np.inf),
+        np.nextafter(exact - 3.0, np.inf),
+        exact - 3.0 + rng.normal(0.0, 0.01, xs.size),
+    ):
+        expected = exact - 3.0 >= neglog_alpha
+        result = np.empty(xs.size, dtype=np.bool_)
+        _pmf_tests(xs, ns, alphas, betas, neglog_alpha, result)
+        np.testing.assert_array_equal(result, expected)

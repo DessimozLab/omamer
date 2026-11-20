@@ -37,6 +37,7 @@ from omamer.merge_search import (
     SEARCH_SEQUENCE,
     SearchScratch,
     make_kmer_index,
+    count_family_hogs,
     search_seq_kmers,
 )
 
@@ -92,14 +93,12 @@ def test_kmer_percentage_rejects_out_of_range_values(value):
 def test_search_uses_build_time_document_frequency_cutoff():
     table_idx = np.asarray([0, 1, 3, 3, 4], dtype=np.uint32)
     table_buff = np.asarray([0, 1, 2, 2], dtype=np.uint32)
-    hog_tab = np.asarray([(0,), (1,), (1,)], dtype=[("FamOff", np.uint32)])
+    hog2fam = np.asarray([0, 1, 1], dtype=np.uint32)
 
-    hog_counts = np.zeros(3, dtype=np.uint16)
     fam_counts = np.zeros(2, dtype=np.uint16)
     fam_lowloc = np.full(2, -1, dtype=np.int32)
     fam_highloc = np.full(2, -1, dtype=np.int32)
     hit_fams = np.zeros(2, dtype=np.int32)
-    hit_hogs = np.zeros(3, dtype=np.int32)
 
     index = make_kmer_index(
         table_idx,
@@ -109,31 +108,53 @@ def test_search_uses_build_time_document_frequency_cutoff():
     )
     scratch = SearchScratch(
         hit_fams[np.newaxis, :],
-        hit_hogs[np.newaxis, :],
-        hog_counts[np.newaxis, :],
         fam_counts[np.newaxis, :],
         fam_lowloc[np.newaxis, :],
         fam_highloc[np.newaxis, :],
         np.zeros(1, dtype=np.uint32),
-        np.zeros(1, dtype=np.uint32),
     )
-    n_skipped = search_seq_kmers(
+    (n_skipped, kmers) = search_seq_kmers(
         np.asarray([0, 1, 2, 3], dtype=np.uint32),
         np.asarray([0, 1, 2, 3], dtype=np.uint32),
-        hog_tab,
+        hog2fam,
         np.uint32(4),
         index,
         scratch,
         0,
     )
     n_fams = scratch.num_hit_families[0]
-    n_hogs = scratch.num_hit_hogs[0]
 
     # Code 1 has df=2 and is filtered. The absent code 2 remains a trial but
     # has no postings, matching the beta-binomial fitting convention.
-    assert (n_fams, n_hogs, n_skipped) == (2, 2, 1)
-    np.testing.assert_array_equal(hog_counts, [1, 0, 1])
+    assert (n_fams, n_skipped) == (2, 1)
+    np.testing.assert_array_equal(kmers, [0, 3])
     np.testing.assert_array_equal(fam_counts, [1, 1])
+    np.testing.assert_array_equal(fam_lowloc, [0, 3])
+    np.testing.assert_array_equal(fam_highloc, [0, 3])
+    np.testing.assert_array_equal(
+        count_family_hogs(kmers, index, 1, 3), [0, 1]
+    )
+    np.testing.assert_array_equal(count_family_hogs(kmers, index, 0, 1), [1])
+
+
+def test_count_family_hogs_matches_posting_scan():
+    rng = np.random.default_rng(1)
+    n_hogs, n_kmers = 40, 30
+    lists = [
+        np.sort(rng.choice(n_hogs, size=rng.integers(0, 12), replace=False))
+        for _ in range(n_kmers)
+    ]
+    table_idx = np.zeros(n_kmers + 1, dtype=np.uint32)
+    table_idx[1:] = np.cumsum([len(x) for x in lists])
+    table_buff = np.concatenate(lists).astype(np.uint32)
+    index = make_kmer_index(table_idx, table_buff, SEARCH_SEQUENCE, 0)
+    kmers = np.arange(n_kmers, dtype=np.uint32)
+    expected = np.zeros(n_hogs, dtype=np.uint16)
+    np.add.at(expected, table_buff, 1)
+    for (hog_s, hog_e) in [(0, 40), (0, 1), (5, 17), (39, 40), (12, 12)]:
+        np.testing.assert_array_equal(
+            count_family_hogs(kmers, index, hog_s, hog_e), expected[hog_s:hog_e]
+        )
 
 
 def test_bbinom_fitting_uses_build_time_document_frequency_cutoff():

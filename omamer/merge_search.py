@@ -108,8 +108,23 @@ def make_kmer_index(
 
 SearchDatabase = namedtuple(
     "SearchDatabase",
-    ("trans", "k", "digits_lookup", "families", "hogs", "levels"),
+    ("trans", "k", "digits_lookup", "families", "hogs", "levels", "hog2fam"),
 )
+
+
+def make_search_database(trans, k, digits_lookup, families, hogs, levels):
+    # The family of each HOG, as a contiguous array: the search looks it up
+    # once per posting, and a strided read of the HOG table costs a cache
+    # line per lookup.
+    return SearchDatabase(
+        trans,
+        k,
+        digits_lookup,
+        families,
+        hogs,
+        levels,
+        np.ascontiguousarray(hogs["FamOff"]),
+    )
 
 
 LookupConfig = namedtuple("LookupConfig", ("mode", "num_threads"))
@@ -125,17 +140,16 @@ PlacementConfig = namedtuple(
     ),
 )
 
+# Per-thread family counters of the k-mer search. Only the entries of the
+# families hit by the previous query are reset.
 SearchScratch = namedtuple(
     "SearchScratch",
     (
         "hit_families",
-        "hit_hogs",
-        "hog_counts",
         "family_counts",
         "family_low_location",
         "family_high_location",
         "num_hit_families",
-        "num_hit_hogs",
     ),
 )
 
@@ -373,22 +387,24 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
 
 
 @numba.njit(nogil=True)
-def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
+def search_seq_kmers(r1, p1, hog2fam, x_flag, index, scratch, thread_id):
     """
-    Perform the kmer search, using the index.
+    Perform the k-mer search, using the index: count the k-mer hits of each
+    family and record the first and last query locations of these hits.
+
+    Returns the number of skipped k-mers and the searched k-mers that have
+    postings (in query order), from which `count_family_hogs` recovers the
+    per-HOG counts of a family.
     """
     table_idx = index.table_idx
     table_buff = index.table_buff
     kmer_filter_max_df = index.kmer_filter_max_df
 
-    thread_hog_counts = scratch.hog_counts[thread_id]
     thread_fam_counts = scratch.family_counts[thread_id]
     thread_fam_lowloc = scratch.family_low_location[thread_id]
     thread_fam_highloc = scratch.family_high_location[thread_id]
     thread_hit_fams = scratch.hit_families[thread_id]
-    thread_hit_hogs = scratch.hit_hogs[thread_id]
     thread_num_hit_fams = scratch.num_hit_families[thread_id]
-    thread_num_hit_hogs = scratch.num_hit_hogs[thread_id]
 
     # Reinitialize counters modified by the previous call
     for i in range(thread_num_hit_fams):
@@ -397,15 +413,10 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
         thread_fam_lowloc[family] = -1
         thread_fam_highloc[family] = -1
 
-    for i in range(thread_num_hit_hogs):
-        hog = thread_hit_hogs[i]
-        thread_hog_counts[hog] = 0
-
     thread_num_hit_fams = 0
-    thread_num_hit_hogs = 0
     n_skipped = 0
-
-    hog2fam = hog_tab["FamOff"]
+    kmers = np.empty(r1.shape[0], dtype=r1.dtype)
+    n_searched = 0
 
     # iterate unique k-mers
     for m in range(r1.shape[0]):
@@ -432,35 +443,60 @@ def search_seq_kmers(r1, p1, hog_tab, x_flag, index, scratch, thread_id):
             n_skipped += 1
             continue
 
+        if df > 0:
+            kmers[n_searched] = kmer
+            n_searched += 1
+
+        # The locations p1 of the unique k-mers increase with m, so the low
+        # location of a family is that of its first hit and the high one
+        # that of its last hit.
         for j in range(lo, hi):
-            hog = table_buff[j]
-
-            if not thread_hog_counts[hog]:
-                thread_hit_hogs[thread_num_hit_hogs] = hog
-                thread_num_hit_hogs += 1
-            thread_hog_counts[hog] += 1
-
-            fam_off = hog2fam[hog]
-
-            if not thread_fam_counts[fam_off]:
+            fam_off = hog2fam[table_buff[j]]
+            count = thread_fam_counts[fam_off]
+            if not count:
                 thread_hit_fams[thread_num_hit_fams] = fam_off
                 thread_num_hit_fams += 1
-            thread_fam_counts[fam_off] += 1
-
-            # initiate first location
-            if thread_fam_lowloc[fam_off] == -1:
                 thread_fam_lowloc[fam_off] = loc
-                thread_fam_highloc[fam_off] = loc
-
-            # update either lower or higher boundary
-            elif loc < thread_fam_lowloc[fam_off]:
-                thread_fam_lowloc[fam_off] = loc
-            elif loc > thread_fam_highloc[fam_off]:
-                thread_fam_highloc[fam_off] = loc
+            thread_fam_counts[fam_off] = count + 1
+            thread_fam_highloc[fam_off] = loc
 
     scratch.num_hit_families[thread_id] = thread_num_hit_fams
-    scratch.num_hit_hogs[thread_id] = thread_num_hit_hogs
-    return n_skipped
+    return n_skipped, kmers[:n_searched]
+
+
+@numba.njit(nogil=True)
+def count_family_hogs(kmers, index, hog_s, hog_e):
+    """
+    Per-HOG k-mer counts of the query in the family with HOGs [hog_s, hog_e).
+
+    A posting list is sorted by HOG offset and the HOGs of a family are
+    contiguous, so the postings of the family in the list of each k-mer are
+    found by binary search.
+    """
+    table_idx = index.table_idx
+    table_buff = index.table_buff
+    hog_s = np.int64(hog_s)
+    hog_e = np.int64(hog_e)
+    counts = np.zeros(hog_e - hog_s, dtype=np.uint16)
+    for m in range(kmers.shape[0]):
+        kmer = kmers[m]
+        a = np.int64(table_idx[kmer])
+        hi = np.int64(table_idx[kmer + 1])
+        b = hi
+        # first posting with HOG >= hog_s
+        while a < b:
+            mid = (a + b) >> 1
+            if np.int64(table_buff[mid]) < hog_s:
+                a = mid + 1
+            else:
+                b = mid
+        while a < hi:
+            hog = np.int64(table_buff[a])
+            if hog >= hog_e:
+                break
+            counts[hog - hog_s] += 1
+            a += 1
+    return counts
 
 
 ## generic score functions
@@ -588,25 +624,17 @@ def filter_by_overlap(qres, query_len, fam_highloc, fam_lowloc, k):
 
 
 @numba.njit(nogil=True)
-def search_families(
-    sequence,
-    database,
-    index,
-    family_model,
-    family_scoring,
-    scratch,
-):
+def find_family_candidates(sequence, database, index, family_model, scratch):
     """
-    Search the k-mers of one query and score its family candidates.
+    Search the k-mers of one query and keep the family candidates that pass
+    the cheap count filter and the query coverage filter, before scoring.
 
-    Returns the significant candidates (unsorted) and the number n of k-mers
-    used for scoring. The per-HOG k-mer counts of the query stay in the
-    calling thread's row of `scratch` until its next search.
+    Returns the candidates (unsorted), the number n of k-mers used for
+    scoring and the searched k-mers (see `search_seq_kmers`).
     """
     trans = database.trans
     k = database.k
     digits_lookup = database.digits_lookup
-    hog_tab = database.hogs
 
     table_idx = index.table_idx
 
@@ -614,20 +642,21 @@ def search_families(
     n_kmers = query_len - (k - 1)
     x_flag = table_idx.size - 1
 
+    no_kmers = np.empty(0, dtype=np.uint32)
     if n_kmers <= 0:
-        return init_query_family_results(0), np.int64(0)
+        return init_query_family_results(0), np.int64(0), no_kmers
 
     # get sequence k-mers
     (r1, p1, _) = parse_seq(sequence, digits_lookup, n_kmers, k, trans, x_flag)
 
     if len(r1) == 1 and r1[0] == x_flag:
-        return init_query_family_results(0), np.int64(0)
+        return init_query_family_results(0), np.int64(0), no_kmers
 
     thread_id = numba.get_thread_id()
-    n_skipped = search_seq_kmers(
+    (n_skipped, kmers) = search_seq_kmers(
         r1,
         p1,
-        hog_tab,
+        database.hog2fam,
         x_flag,
         index,
         scratch,
@@ -651,7 +680,7 @@ def search_families(
     # cheap filter: is # of k-mers at the expected number?
     qres = filter_family_candidates(qres, n, family_model)
     if len(qres) == 0:
-        return qres, n
+        return qres, n, kmers
 
     # filter out by demanding at least 0.25x query coverage
     qres = filter_by_overlap(
@@ -661,11 +690,31 @@ def search_families(
         thread_fam_lowloc,
         k,
     )
-    if len(qres) == 0:
-        return qres, n
+    return qres, n, kmers
 
-    qres = score_family_candidates(qres, n, family_model, family_scoring)
-    return qres, n
+
+@numba.njit(nogil=True)
+def search_families(
+    sequence,
+    database,
+    index,
+    family_model,
+    family_scoring,
+    scratch,
+):
+    """
+    Search the k-mers of one query and score its family candidates.
+
+    Returns the significant candidates (unsorted), the number n of k-mers
+    used for scoring and the searched k-mers, from which the per-HOG counts
+    of a family are computed on demand (`count_family_hogs`).
+    """
+    (qres, n, kmers) = find_family_candidates(
+        sequence, database, index, family_model, scratch
+    )
+    if len(qres) > 0:
+        qres = score_family_candidates(qres, n, family_model, family_scoring)
+    return qres, n, kmers
 
 
 @numba.njit(nogil=True)
@@ -685,29 +734,32 @@ def place_in_family(
     rank,
     family_id,
     n,
-    hog_counts,
+    kmers,
+    index,
     database,
     hog_model,
     placement,
 ):
     """
-    Place a query on the HOG path of one family, from the per-HOG k-mer counts
-    `hog_counts` of the search that scored it (n k-mers).
+    Place a query on the HOG path of one family, from the per-HOG counts of
+    the searched k-mers `kmers` (n k-mers used for scoring) in `index`.
     """
     entry = database.families[family_id]
     hog_s = entry["HOGoff"]
     hog_e = hog_s + entry["HOGnum"]
 
     if placement.family_only:
-        # early exit
+        # early exit: the HOG counts are not needed
         subfam_results["id"][sequence_id, rank] = hog_s + 1
         return
 
     fam_hog2parent = get_fam_hog2parent(entry, database.hogs)
     fam_level_offsets = get_fam_level_offsets(entry, database.levels)
 
+    fam_hog_counts = count_family_hogs(kmers, index, hog_s, hog_e)
+
     # cumulation of counts
-    c = hog_counts[hog_s:hog_e].copy()
+    c = fam_hog_counts.copy()
 
     cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
 
@@ -717,7 +769,7 @@ def place_in_family(
         n,
         fam_level_offsets,
         fam_hog2parent,
-        hog_counts[hog_s:hog_e],
+        fam_hog_counts,
         hog_model.hog_probability[hog_s:hog_e],
     )
 
@@ -752,7 +804,7 @@ def place_sequence(
     family_scoring,
     scratch,
 ) -> bool:
-    (qres, n) = search_families(
+    (qres, n, kmers) = search_families(
         sequence, database, index, family_model, family_scoring, scratch
     )
     if len(qres) == 0:
@@ -768,7 +820,6 @@ def place_sequence(
     store_family_results(family_results, sequence_id, qres, n_store, index.modality)
 
     # Place within families
-    thread_hog_counts = scratch.hog_counts[numba.get_thread_id()]
     for i in range(n_store):
         place_in_family(
             subfam_results,
@@ -776,7 +827,8 @@ def place_sequence(
             i,
             qres["id"][i],
             n,
-            thread_hog_counts,
+            kmers,
+            index,
             database,
             hog_model,
             placement,
@@ -830,8 +882,7 @@ def place_sequence_sum(
     structure_hog_model,
     placement,
     family_scoring,
-    sequence_scratch,
-    structure_scratch,
+    scratch,
 ) -> bool:
     """
     Search both modalities and rank families by the sum of their scores.
@@ -844,21 +895,21 @@ def place_sequence_sum(
     the family is a sequence candidate, else with the 3Di ones.
     """
     candidate_scoring = FamilyScoringParameters(0.0, family_scoring.log_correction)
-    (seq_res, seq_n) = search_families(
+    (seq_res, seq_n, seq_kmers) = search_families(
         sequence,
         database,
         sequence_index,
         sequence_family_model,
         candidate_scoring,
-        sequence_scratch,
+        scratch,
     )
-    (ss_res, ss_n) = search_families(
+    (ss_res, ss_n, ss_kmers) = search_families(
         structure,
         database,
         structure_index,
         structure_family_model,
         candidate_scoring,
-        structure_scratch,
+        scratch,
     )
     qres = sum_family_scores(seq_res, ss_res)
 
@@ -875,7 +926,6 @@ def place_sequence_sum(
 
     # placement modality: the sequence when it has the family as a candidate
     seq_ids = np.sort(seq_res["id"])
-    thread_id = numba.get_thread_id()
     for i in range(n_store):
         family_id = qres["id"][i]
         j = np.searchsorted(seq_ids, family_id)
@@ -886,7 +936,8 @@ def place_sequence_sum(
                 i,
                 family_id,
                 seq_n,
-                sequence_scratch.hog_counts[thread_id],
+                seq_kmers,
+                sequence_index,
                 database,
                 sequence_hog_model,
                 placement,
@@ -898,7 +949,8 @@ def place_sequence_sum(
                 i,
                 family_id,
                 ss_n,
-                structure_scratch.hog_counts[thread_id],
+                ss_kmers,
+                structure_index,
                 database,
                 structure_hog_model,
                 placement,
@@ -1100,7 +1152,7 @@ class MergeSearch(object):
 
     @cached_property
     def _search_database(self):
-        return SearchDatabase(
+        return make_search_database(
             self.trans,
             self.ki.k,
             self.ki.alphabet.DIGITS_AA_LOOKUP,
@@ -1448,14 +1500,6 @@ def make_search_scratch(num_threads, database):
             dtype=np.int32,
         ),
         np.zeros(
-            (num_threads, database.hogs.size),
-            dtype=np.int32,
-        ),
-        np.zeros(
-            (num_threads, database.hogs.size),
-            dtype=np.uint16,
-        ),
-        np.zeros(
             (num_threads, database.families.size),
             dtype=np.uint16,
         ),
@@ -1469,7 +1513,6 @@ def make_search_scratch(num_threads, database):
             -1,
             dtype=np.int32,
         ),
-        np.zeros(num_threads, dtype=np.uint32),
         np.zeros(num_threads, dtype=np.uint32),
     )
 
@@ -1492,11 +1535,6 @@ def lookup_queries(
     family_scoring,
 ):
     scratch = make_search_scratch(lookup_config.num_threads, database)
-    # the sum mode keeps the HOG counts of both searches of a query
-    structure_scratch = make_search_scratch(
-        lookup_config.num_threads if lookup_config.mode == SEARCH_SUM else 0,
-        database,
-    )
 
     n_iter = (
         structures.offsets.size - 1
@@ -1525,7 +1563,6 @@ def lookup_queries(
                 placement,
                 family_scoring,
                 scratch,
-                structure_scratch,
             )
 
         # search sequence

@@ -13,13 +13,13 @@ from omamer.merge_search import (
     SEARCH_SUM,
     MergeSearch,
     PlacementConfig,
-    SearchDatabase,
     SearchModality,
     SequenceBatch,
     default_family_sorting,
     init_query_family_results,
     lookup_queries,
     make_kmer_index,
+    make_search_database,
     make_search_results,
     place_sequence,
     resolve_search_mode,
@@ -103,7 +103,7 @@ def test_auto_model_reports_all_invalid_beta_binomial_fallback(caplog):
 @pytest.fixture
 def search_data():
     alphabet = Alphabet(21)
-    database = SearchDatabase(
+    database = make_search_database(
         get_transform(2, alphabet.DIGITS_AA),
         2,
         alphabet.DIGITS_AA_LOOKUP,

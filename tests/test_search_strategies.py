@@ -7,6 +7,7 @@ import pytest
 from omamer.alphabets import Alphabet, get_transform
 from omamer.family_sort import FAMILY_SORT_NORMCOUNT, FAMILY_SORT_PVALUE
 from omamer.merge_search import (
+    SEARCH_HYBRID,
     SEARCH_SEQUENCE,
     SEARCH_SEQUENCE_THEN_STRUCTURE,
     SEARCH_STRUCTURE,
@@ -44,6 +45,7 @@ from omamer.stat_models import (
         ("ss", True, True, SEARCH_STRUCTURE),
         ("sqs", True, True, SEARCH_SEQUENCE_THEN_STRUCTURE),
         ("sum", True, True, SEARCH_SUM),
+        ("hybrid", True, True, SEARCH_HYBRID),
     ],
 )
 def test_resolve_search_mode(
@@ -60,6 +62,8 @@ def test_resolve_search_mode_rejects_unavailable_input():
         resolve_search_mode("ss", True, False)
     with pytest.raises(ValueError, match="requires matching"):
         resolve_search_mode("sum", True, False)
+    with pytest.raises(ValueError, match="requires matching"):
+        resolve_search_mode("hybrid", False, True)
 
 
 def test_default_family_sorting():
@@ -423,6 +427,19 @@ def test_sum_mode_adds_scores_and_places_with_scoring_modality(
     assert fam["id"][2, 0] == 1 and sub["id"][2, 0] == seq_hog
     assert not np.any(fam["id"][1:, 1:])
     assert fam["id"][3, 0] == 0 and fam["modality"][3, 0] == 0
+
+    # hybrid: the sequence results for the queries with a significant
+    # sequence family (0, 2), the summed ones for the others (1, 3)
+    hybrid = run((sequence_search, structure_search), SEARCH_HYBRID)
+    for query, expected in ((0, seq_only), (1, summed), (2, seq_only), (3, summed)):
+        np.testing.assert_array_equal(
+            hybrid.families[query], expected.families[query]
+        )
+        np.testing.assert_array_equal(
+            hybrid.subfamilies[query], expected.subfamilies[query]
+        )
+    assert hybrid.families["modality"][0, 0] == SEARCH_SEQUENCE
+    assert hybrid.families["modality"][1, 0] == SEARCH_SUM
 
     # the same family in both modalities: the scores add up
     both = run((sequence_search, sequence_search), SEARCH_SUM)

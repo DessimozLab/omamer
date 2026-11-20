@@ -65,6 +65,9 @@ SEARCH_SEQUENCE_THEN_STRUCTURE = 3
 # Both modalities are searched and the family scores are summed. Also the
 # value of the `modality` result field for families scored this way.
 SEARCH_SUM = 4
+# The sequence, with a fallback to the sum of the sequence and 3Di scores for
+# the queries without a significant sequence family.
+SEARCH_HYBRID = 5
 
 
 # Array carriers passed to Numba.
@@ -130,6 +133,8 @@ def make_search_database(trans, k, digits_lookup, families, hogs, levels):
 LookupConfig = namedtuple("LookupConfig", ("mode", "num_threads"))
 
 
+# `summed_family_sorting` ranks the families scored by the sum of the two
+# modalities (0: as `family_sorting`); the two differ in the hybrid mode.
 PlacementConfig = namedtuple(
     "PlacementConfig",
     (
@@ -137,7 +142,9 @@ PlacementConfig = namedtuple(
         "subfamily_score_threshold",
         "family_only",
         "family_sorting",
+        "summed_family_sorting",
     ),
+    defaults=(0,),
 )
 
 # Per-thread family counters of the k-mer search. Only the entries of the
@@ -172,12 +179,13 @@ def resolve_search_mode(mode, has_sequence, has_structure):
             has_sequence and has_structure,
         ),
         "sum": (SEARCH_SUM, has_sequence and has_structure),
+        "hybrid": (SEARCH_HYBRID, has_sequence and has_structure),
     }
     try:
         selected, available = modes[mode]
     except KeyError:
         raise ValueError(
-            "search_mode must be 'auto', 'seq', 'ss', 'sqs', or 'sum'"
+            "search_mode must be 'auto', 'seq', 'ss', 'sqs', 'sum' or 'hybrid'"
         ) from None
     if not available:
         raise ValueError(
@@ -791,26 +799,19 @@ def place_in_family(
 
 
 @numba.njit(nogil=True)
-def place_sequence(
+def place_family_results(
     family_results,
     subfam_results,
-    sequence,
     sequence_id,
+    qres,
+    n,
+    kmers,
     database,
     index,
-    family_model,
     hog_model,
     placement,
-    family_scoring,
-    scratch,
-) -> bool:
-    (qres, n, kmers) = search_families(
-        sequence, database, index, family_model, family_scoring, scratch
-    )
-    if len(qres) == 0:
-        return False
-
-    # Store results
+):
+    """Rank, store and place the significant candidates of one modality."""
     # - a. rank the significant family candidates using the requested policy
     top_n_fams = placement.top_n_families
     qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
@@ -834,6 +835,39 @@ def place_sequence(
             placement,
         )
 
+
+@numba.njit(nogil=True)
+def place_sequence(
+    family_results,
+    subfam_results,
+    sequence,
+    sequence_id,
+    database,
+    index,
+    family_model,
+    hog_model,
+    placement,
+    family_scoring,
+    scratch,
+) -> bool:
+    (qres, n, kmers) = search_families(
+        sequence, database, index, family_model, family_scoring, scratch
+    )
+    if len(qres) == 0:
+        return False
+
+    place_family_results(
+        family_results,
+        subfam_results,
+        sequence_id,
+        qres,
+        n,
+        kmers,
+        database,
+        index,
+        hog_model,
+        placement,
+    )
     return True
 
 
@@ -867,15 +901,27 @@ def sum_family_scores(seq_res, ss_res):
 
 
 @numba.njit(nogil=True)
-def place_sequence_sum(
+def candidate_scoring_parameters(family_scoring):
+    """
+    Scoring of the candidates of one modality in a sum: no significance
+    threshold (as with alpha = 1, every family with a positive corrected
+    score is kept), so that a family weakly supported by both modalities is
+    not lost.
+    """
+    return FamilyScoringParameters(0.0, family_scoring.log_correction)
+
+
+@numba.njit(nogil=True)
+def place_summed(
     family_results,
     subfam_results,
-    sequence,
-    structure,
     sequence_id,
+    seq_res,
+    seq_n,
+    seq_kmers,
+    structure,
     database,
     sequence_index,
-    sequence_family_model,
     sequence_hog_model,
     structure_index,
     structure_family_model,
@@ -885,30 +931,18 @@ def place_sequence_sum(
     scratch,
 ) -> bool:
     """
-    Search both modalities and rank families by the sum of their scores.
-
-    Each modality scores its candidates without a significance threshold
-    (as with alpha = 1: every family with a positive corrected score is
-    kept), so that a family weakly supported by both is not lost; the
-    threshold `family_scoring.neglog_alpha` applies to the summed score.
+    Search the 3Di of a query, given its sequence candidates `seq_res`
+    (scored without threshold), and rank families by the sum of their two
+    scores; the threshold `family_scoring.neglog_alpha` applies to the sum.
     Within a family, the query is placed with the sequence HOG counts when
     the family is a sequence candidate, else with the 3Di ones.
     """
-    candidate_scoring = FamilyScoringParameters(0.0, family_scoring.log_correction)
-    (seq_res, seq_n, seq_kmers) = search_families(
-        sequence,
-        database,
-        sequence_index,
-        sequence_family_model,
-        candidate_scoring,
-        scratch,
-    )
     (ss_res, ss_n, ss_kmers) = search_families(
         structure,
         database,
         structure_index,
         structure_family_model,
-        candidate_scoring,
+        candidate_scoring_parameters(family_scoring),
         scratch,
     )
     qres = sum_family_scores(seq_res, ss_res)
@@ -919,8 +953,11 @@ def place_sequence_sum(
     if len(qres) == 0:
         return False
 
+    sorting = placement.summed_family_sorting
+    if sorting == 0:
+        sorting = placement.family_sorting
     top_n_fams = placement.top_n_families
-    qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
+    qres = family_result_sort(qres, top_n_fams, sorting)
     n_store = min(len(qres), top_n_fams)
     store_family_results(family_results, sequence_id, qres, n_store, SEARCH_SUM)
 
@@ -957,6 +994,135 @@ def place_sequence_sum(
             )
 
     return True
+
+
+@numba.njit(nogil=True)
+def place_sequence_sum(
+    family_results,
+    subfam_results,
+    sequence,
+    structure,
+    sequence_id,
+    database,
+    sequence_index,
+    sequence_family_model,
+    sequence_hog_model,
+    structure_index,
+    structure_family_model,
+    structure_hog_model,
+    placement,
+    family_scoring,
+    scratch,
+) -> bool:
+    """
+    Search both modalities and rank families by the sum of their scores
+    (see `candidate_scoring_parameters` and `place_summed`).
+    """
+    (seq_res, seq_n, seq_kmers) = search_families(
+        sequence,
+        database,
+        sequence_index,
+        sequence_family_model,
+        candidate_scoring_parameters(family_scoring),
+        scratch,
+    )
+    return place_summed(
+        family_results,
+        subfam_results,
+        sequence_id,
+        seq_res,
+        seq_n,
+        seq_kmers,
+        structure,
+        database,
+        sequence_index,
+        sequence_hog_model,
+        structure_index,
+        structure_family_model,
+        structure_hog_model,
+        placement,
+        family_scoring,
+        scratch,
+    )
+
+
+@numba.njit(nogil=True)
+def place_sequence_hybrid(
+    family_results,
+    subfam_results,
+    sequence,
+    structure,
+    sequence_id,
+    database,
+    sequence_index,
+    sequence_family_model,
+    sequence_hog_model,
+    structure_index,
+    structure_family_model,
+    structure_hog_model,
+    placement,
+    family_scoring,
+    scratch,
+) -> bool:
+    """
+    Place a query by its sequence when it has a significant sequence family
+    (as `place_sequence`); otherwise search its 3Di and rank families by the
+    sum of the sequence and 3Di scores (as `place_sequence_sum`). The
+    sequence search is shared: its candidates are scored twice, with the
+    threshold and, for the sum, without. The 3Di is searched only for the
+    queries without a significant sequence family; these are the queries
+    not placed with `modality` = SEARCH_SEQUENCE.
+    """
+    (candidates, seq_n, seq_kmers) = find_family_candidates(
+        sequence,
+        database,
+        sequence_index,
+        sequence_family_model,
+        scratch,
+    )
+    if len(candidates) > 0:
+        qres = score_family_candidates(
+            candidates, seq_n, sequence_family_model, family_scoring
+        )
+        if len(qres) > 0:
+            place_family_results(
+                family_results,
+                subfam_results,
+                sequence_id,
+                qres,
+                seq_n,
+                seq_kmers,
+                database,
+                sequence_index,
+                sequence_hog_model,
+                placement,
+            )
+            return True
+
+        candidates = score_family_candidates(
+            candidates,
+            seq_n,
+            sequence_family_model,
+            candidate_scoring_parameters(family_scoring),
+        )
+    return place_summed(
+        family_results,
+        subfam_results,
+        sequence_id,
+        candidates,
+        seq_n,
+        seq_kmers,
+        structure,
+        database,
+        sequence_index,
+        sequence_hog_model,
+        structure_index,
+        structure_family_model,
+        structure_hog_model,
+        placement,
+        family_scoring,
+        scratch,
+    )
 
 
 class MergeSearch(object):
@@ -1204,7 +1370,7 @@ class MergeSearch(object):
                 raise ValueError(
                     "Sequence and structure queries must have matching counts"
                 )
-            # sequence-then-structure fallback or sum: sequence first
+            # sequence-then-structure fallback, sum or hybrid: sequence first
             selected = (("seq", sbuff), ("ss", ssbuff))
         return tuple(
             self._search_modality(modality, buffer, family_model_policy)
@@ -1227,8 +1393,9 @@ class MergeSearch(object):
         family_sorting="auto",
     ):
         """
-        family_sorting 'auto' ranks families by normcount, except in the sum
-        mode where it ranks them by the summed score ('pvalue').
+        family_sorting 'auto' ranks families by normcount, except the summed
+        scores (sum mode, and the fallback of the hybrid mode), ranked by
+        the summed score ('pvalue').
         """
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
@@ -1242,12 +1409,20 @@ class MergeSearch(object):
         if not 0.0 < alpha <= 1.0:
             raise ValueError("alpha must be in the interval (0, 1]")
         modalities = self._search_plan(mode, sbuff, ssbuff, family_model)
-        self.resolved_family_sorting = default_family_sorting(family_sorting, mode)
+        sorting = default_family_sorting(family_sorting, mode)
+        # the hybrid mode ranks the summed scores as the sum mode does
+        summed_sorting = default_family_sorting(family_sorting, SEARCH_SUM)
+        self.resolved_family_sorting = (
+            "seq:{},seq+ss:{}".format(sorting, summed_sorting)
+            if mode == SEARCH_HYBRID and sorting != summed_sorting
+            else sorting
+        )
         placement = PlacementConfig(
             top_n_fams,
             sst,
             family_only,
-            resolve_family_sorting(self.resolved_family_sorting),
+            resolve_family_sorting(sorting),
+            resolve_family_sorting(summed_sorting),
         )
         family_scoring = FamilyScoringParameters(
             -math.log(alpha),
@@ -1545,8 +1720,28 @@ def lookup_queries(
     for sequence_id in numba.prange(n_iter):
         placed = False
 
+        # the sequence, else the sum of both
+        if lookup_config.mode == SEARCH_HYBRID:
+            place_sequence_hybrid(
+                family_results,
+                subfam_results,
+                select_from_batch(sequences, sequence_id),
+                select_from_batch(structures, sequence_id),
+                sequence_id,
+                database,
+                sequence_index,
+                sequence_family_model,
+                sequence_hog_model,
+                structure_index,
+                structure_family_model,
+                structure_hog_model,
+                placement,
+                family_scoring,
+                scratch,
+            )
+
         # search both and sum the family scores
-        if lookup_config.mode == SEARCH_SUM:
+        elif lookup_config.mode == SEARCH_SUM:
             place_sequence_sum(
                 family_results,
                 subfam_results,

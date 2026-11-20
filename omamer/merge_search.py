@@ -911,6 +911,30 @@ def candidate_scoring_parameters(family_scoring):
     return FamilyScoringParameters(0.0, family_scoring.log_correction, -1.0)
 
 
+# Default threshold (-ln) on the summed score of the hybrid mode's 3Di stage.
+# The sum of two -ln p is not a p-value, and the 3Di scores place proteins
+# without sequence homology: on the strict Metazoa benchmark (sequence pooled
+# kappa x0.3, 3Di k-mers in <= 1000 families) the sequence threshold (13.8) on
+# the sum places 36% of the negatives, 80 places 7% (sequence stage alone: 5%)
+# and keeps most of the gain of the 3Di stage.
+HYBRID_SUMMED_NEGLOG_ALPHA = 80.0
+
+
+def summed_neglog_alpha(summed_alpha, mode):
+    """
+    -ln of the threshold on summed scores: from `summed_alpha` when given,
+    else HYBRID_SUMMED_NEGLOG_ALPHA in the hybrid mode, else -1 (the family
+    threshold is used, see `place_summed`).
+    """
+    if summed_alpha is not None:
+        if not 0.0 < summed_alpha <= 1.0:
+            raise ValueError("summed_alpha must be in the interval (0, 1]")
+        return -math.log(summed_alpha)
+    if mode == SEARCH_HYBRID:
+        return HYBRID_SUMMED_NEGLOG_ALPHA
+    return -1.0
+
+
 @numba.njit(nogil=True)
 def place_summed(
     family_results,
@@ -1398,7 +1422,8 @@ class MergeSearch(object):
     ):
         """
         summed_alpha: threshold on the summed sequence + 3Di scores (sum mode,
-        and the 3Di stage of the hybrid mode); None uses alpha.
+        and the 3Di stage of the hybrid mode); None uses alpha in the sum mode
+        and HYBRID_SUMMED_NEGLOG_ALPHA in the hybrid mode.
         family_sorting 'auto' ranks families by normcount, except the summed
         scores (sum mode, and the fallback of the hybrid mode), ranked by
         the summed score ('pvalue').
@@ -1433,7 +1458,7 @@ class MergeSearch(object):
         family_scoring = FamilyScoringParameters(
             -math.log(alpha),
             family_log_correction(family_correction, self.fam_tab.size),
-            -math.log(summed_alpha) if summed_alpha is not None else -1.0,
+            summed_neglog_alpha(summed_alpha, mode),
         )
 
         results = make_search_results(max(len(seqs), len(struct_seqs)), top_n_fams)

@@ -333,7 +333,9 @@ def test_search_hybrid_mode(dataset, structure_db, tmp_path, options):
         out = tmp_path / "{}.tsv".format(mode)
         _search(
             db_path, out, "--query", query, "--structure", structure,
-            "--search_mode", mode, "--chunksize", "5", *options,
+            "--search_mode", mode, "--chunksize", "5",
+            # the same summed threshold in both modes (the hybrid default is stricter)
+            "--summed_alpha", "1e-6", *options,
         )
         outputs[mode] = _rows_by_query(out)
         if mode == "hybrid":

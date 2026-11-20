@@ -388,9 +388,10 @@ def main():
         default=None,
         help="Significance threshold for the summed sequence + 3Di scores of "
         "--search_mode sum and of the 3Di stage of --search_mode hybrid (same "
-        "units and correction as --family_alpha). Default: --family_alpha. "
-        "The summed score is not a calibrated p-value, so a stricter value is "
-        "usually needed.",
+        "units and correction as --family_alpha). Default: e^-80 in the hybrid "
+        "mode, --family_alpha in the sum mode. The summed score is not a "
+        "calibrated p-value: 3Di also places proteins without sequence "
+        "homology, so the threshold must be much stricter than --family_alpha.",
     )
     search_parser.add_argument(
         "--family_correction",

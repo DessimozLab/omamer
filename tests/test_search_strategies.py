@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import numba
@@ -480,3 +481,17 @@ def test_sum_mode_adds_scores_and_places_with_scoring_modality(
         summed_loose, SEARCH_SUM,
     )
     assert results.families["id"][0, 0] == 1
+
+
+def test_summed_neglog_alpha_defaults():
+    from omamer.merge_search import (
+        HYBRID_SUMMED_NEGLOG_ALPHA, summed_neglog_alpha,
+    )
+    # explicit value wins in both modes
+    assert summed_neglog_alpha(math.exp(-50), SEARCH_HYBRID) == pytest.approx(50.0)
+    assert summed_neglog_alpha(math.exp(-50), SEARCH_SUM) == pytest.approx(50.0)
+    # default: strict in the hybrid mode, the family threshold in the sum mode
+    assert summed_neglog_alpha(None, SEARCH_HYBRID) == HYBRID_SUMMED_NEGLOG_ALPHA
+    assert summed_neglog_alpha(None, SEARCH_SUM) == -1.0
+    with pytest.raises(ValueError):
+        summed_neglog_alpha(0.0, SEARCH_HYBRID)

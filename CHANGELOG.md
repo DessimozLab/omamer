@@ -3,7 +3,26 @@
 
 ## Unreleased
 
+### Changed (defaults, from the 2026-11 model audit)
+
+- `mkdb --bbinom_kappa` and `refit-bbinom --kappa` default to `pooled` (one
+  beta-binomial overdispersion per modality); per-family kappa ranked families
+  inconsistently. The sequence kappa is 0.3 times the pooled median by default
+  (`--bbinom_seq_kappa_scale`, `refit-bbinom --seq_kappa_scale`).
+- `mkdb` masks low-complexity 3Di k-mers (`--ss_min_distinct 3`) and caps 3Di
+  k-mers at 1000 families (new `--ss_max_df`, `--seq_max_df`; applied before
+  the family models are fitted). The mask is now stored for binomial-only
+  builds too.
+- `search --search_mode auto` is `hybrid` when both sequence and 3Di queries are
+  given (was `sqs`): the sequence first, then `E_seq * E_3Di^w <= alpha` with
+  `--ss_weight` (default 0.2) for the queries without a sequence family.
+
 ### Added
+
+- `search --seq_kappa_scale` / `--ss_kappa_scale`: beta-binomial kappa as a
+  multiple of the database's pooled kappa, without rebuilding.
+- `search --ss_weight` and `--summed_alpha` for the combined scores of the
+  `sum` and `hybrid` modes.
 
 - Structure (3Di) as a second modality. `mkdb --structures` indexes 3Di
   sequences next to the protein sequences: the OMA browser structure HDF5

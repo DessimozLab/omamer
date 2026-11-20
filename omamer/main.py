@@ -216,28 +216,43 @@ def main():
     )
     mkdb_parser.add_argument(
         "--bbinom_kappa",
-        default="family",
+        default="pooled",
         choices=("family", "pooled"),
-        help="Overdispersion of the beta-binomial family models: fitted per family "
-        "('family'), or one value for all families of a modality ('pooled': the "
-        "median of per-family fits with a kappa independent of the query length).",
+        help="Overdispersion of the beta-binomial family models: one value for all "
+        "families of a modality ('pooled', default: the median of per-family fits, "
+        "times --bbinom_*_kappa_scale), or fitted per family ('family'; ranks "
+        "families inconsistently, kept for comparison).",
     )
-    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+    for modality, name, default in (("seq", "amino-acid", None), ("ss", "3Di", 3)):
         mkdb_parser.add_argument(
             "--{}_min_distinct".format(modality),
-            default=None,
+            default=default,
             type=int,
             help="Ignore {} k-mers with fewer than this many distinct letters "
             "(low complexity) in the beta-binomial training and at search; stored "
-            "in the database. 3 helped 3Di in the model audit.".format(name),
+            "in the database. Default: {}.".format(
+                name, "none" if default is None else default
+            ),
         )
-    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+    for modality, name, default in (("seq", "amino-acid", 0), ("ss", "3Di", 1000)):
+        mkdb_parser.add_argument(
+            "--{}_max_df".format(modality),
+            default=default,
+            type=int,
+            help="Ignore {} k-mers that occur in more than this many families, at "
+            "search and when fitting the family models; 0: no cap. Replaces "
+            "--kmer_percentage for this modality. Default: {}.".format(
+                name, default if default else "no cap"
+            ),
+        )
+    for modality, name, default in (("seq", "amino-acid", 0.3), ("ss", "3Di", 1.0)):
         mkdb_parser.add_argument(
             "--bbinom_{}_kappa_scale".format(modality),
-            default=1.0,
+            default=default,
             type=float,
             help="With --bbinom_kappa pooled: multiply the pooled {} kappa by this "
-            "factor.".format(name),
+            "factor (smaller: fewer weak placements, fewer distant hits). Can be "
+            "changed at search time. Default: {}.".format(name, default),
         )
     mkdb_parser.add_argument(
         "--bbinom_min_nonzero_queries",
@@ -341,9 +356,10 @@ def main():
         "--search_mode",
         choices=("auto", "seq", "ss", "sqs", "sum", "hybrid"),
         default="auto",
-        help="Query strategy: 'seq' sequence, 'ss' structure (3Di), 'sqs' "
-        "sequence with structure fallback when no family is significant "
-        "(the 'auto' choice when both are given), 'sum' both, with family "
+        help="Query strategy ('auto': 'hybrid' when both a sequence and a 3Di "
+        "file are given, else the one given): 'seq' sequence, 'ss' structure "
+        "(3Di), 'sqs' sequence with structure fallback when no family is "
+        "significant, 'sum' both, with family "
         "scores summed over the two modalities (each modality scores its "
         "candidates as with --family_alpha 1, --family_alpha then applies "
         "to the sum; subfamilies are placed with the sequence when it has "
@@ -390,6 +406,16 @@ def main():
         "scores of --search_mode sum and of the second stage of --search_mode "
         "hybrid. Default: --family_alpha.",
     )
+    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+        search_parser.add_argument(
+            "--{}_kappa_scale".format(modality),
+            type=float,
+            default=None,
+            help="Beta-binomial {} model: use kappa = this factor times the pooled "
+            "kappa of the database, instead of the factor chosen at mkdb (for "
+            "sequences 0.3 by default). Smaller values give fatter null tails: "
+            "fewer weak placements, fewer distant hits.".format(name),
+        )
     search_parser.add_argument(
         "--ss_weight",
         type=float,
@@ -588,7 +614,7 @@ def main():
     )
     refit_parser.add_argument(
         "--kappa",
-        default="family",
+        default="pooled",
         choices=("family", "pooled"),
         help="Overdispersion of the family models: per family, or pooled over "
         "all families of a modality (see mkdb --bbinom_kappa).",
@@ -602,13 +628,13 @@ def main():
             "(low complexity) in the beta-binomial training and at search; stored "
             "in the database. 3 helped 3Di in the model audit.".format(name),
         )
-    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+    for modality, name, default in (("seq", "amino-acid", 0.3), ("ss", "3Di", 1.0)):
         refit_parser.add_argument(
             "--{}_kappa_scale".format(modality),
-            default=1.0,
+            default=default,
             type=float,
             help="With --kappa pooled: multiply the pooled {} kappa by this "
-            "factor.".format(name),
+            "factor. Default: {} (as mkdb).".format(name, default),
         )
     refit_parser.add_argument(
         "--null_exclusions",

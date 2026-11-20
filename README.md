@@ -41,6 +41,36 @@ automatically, including removing filtered query k-mers from the effective
 query length. A filtered search therefore requires a database built with the
 desired filter rather than a search-time override.
 
+### Family significance, E-values and 3Di
+
+A family is reported when its score passes `--family_alpha` (default `1e-6`).
+The score is `-ln p - ln N`, where `p` is the probability of the observed
+number of shared k-mers under the family's null model and `N` the number of
+families in the database (Bonferroni). `exp(-score)` is therefore an E-value:
+the number of families expected to score this well by chance for the query,
+and `--family_alpha` is an E-value threshold.
+
+The default family model is a beta-binomial with one overdispersion `kappa` per
+modality (`mkdb --bbinom_kappa pooled`), set to 0.3 times the median fitted
+value for sequences (`--bbinom_seq_kappa_scale`). A smaller value fattens the
+null tail: fewer weak, often wrong placements, but fewer distant hits.
+`search --seq_kappa_scale` changes it without rebuilding the database.
+
+With both `--query` and `--structure`, the default search mode is `hybrid`: a
+query is placed by its sequence when a family passes `--family_alpha`;
+otherwise its 3Di is searched and a family is placed when
+`E_seq * E_3Di^w <= alpha`, with the 3Di weight `w = --ss_weight` (default
+0.2). 3Di E-values are honest for random sequences but far too optimistic for
+proteins that share a structure without sequence homology, so 3Di evidence is
+discounted: with `w = 0.2`, a 3Di E-value of `1e-30` counts as much as a
+sequence E-value of `1e-6`. The weight was chosen on a Metazoa benchmark with
+sequence-based ground truth.
+
+`mkdb` ignores 3Di k-mers with fewer than three distinct letters
+(`--ss_min_distinct 3`) and 3Di k-mers that occur in more than 1000 families
+(`--ss_max_df 1000`). Both make 3Di placement more accurate, and the cap makes
+3Di search about eight times faster.
+
 ## Usage
 Required arguments: ``--db``, ``--query``
 

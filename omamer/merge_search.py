@@ -160,10 +160,28 @@ SearchScratch = namedtuple(
 )
 
 
+def rescale_kappa_coefficients(coefficients, scale, stored_scale=1.0):
+    """
+    Beta-binomial coefficients with every kappa multiplied by
+    scale / stored_scale, i.e. kappa = scale * (pooled kappa) for a database
+    built with a pooled kappa times `stored_scale` (the build records it).
+    kappa is exp(linear in the standardized log n), so only the intercept
+    changes. Smaller kappa: fatter null tail, fewer weak placements.
+    """
+    if not scale > 0.0:
+        raise ValueError("kappa scale must be positive, got {!r}".format(scale))
+    kappa_coef = np.array(coefficients["kappa_coef"], dtype=np.float64, copy=True)
+    if kappa_coef.size:
+        kappa_coef[:, 0] += math.log(scale / stored_scale)
+    out = dict(coefficients)
+    out["kappa_coef"] = kappa_coef
+    return out
+
+
 def resolve_search_mode(mode, has_sequence, has_structure):
     if mode in (None, "auto"):
         if has_sequence and has_structure:
-            return SEARCH_SEQUENCE_THEN_STRUCTURE
+            return SEARCH_HYBRID
         if has_sequence:
             return SEARCH_SEQUENCE
         if has_structure:
@@ -1317,6 +1335,14 @@ class MergeSearch(object):
                 self.ref_fam_bbinom if modality == "seq" else self.ss_ref_fam_bbinom
             )
             valid = coefficients["valid"]
+            scale = getattr(self, "_kappa_scale", {}).get(modality)
+            if scale is not None:
+                attrs = self.db.db.root.Index._v_attrs
+                coefficients = rescale_kappa_coefficients(
+                    coefficients,
+                    scale,
+                    float(getattr(attrs, modality + "_bbinom_kappa_scale", 1.0)),
+                )
             model = make_family_model(policy, probability, **coefficients)
 
         resolved = "beta-binomial" if model.valid.size else "binomial"
@@ -1425,8 +1451,13 @@ class MergeSearch(object):
         family_sorting="auto",
         summed_alpha=None,
         ss_weight=None,
+        seq_kappa_scale=None,
+        ss_kappa_scale=None,
     ):
         """
+        seq_kappa_scale, ss_kappa_scale: beta-binomial overdispersion as a
+        multiple of the pooled kappa of the modality (see
+        `rescale_kappa_coefficients`); None keeps the stored models.
         summed_alpha: threshold on the summed sequence + 3Di scores (sum mode,
         and the 3Di stage of the hybrid mode); None uses alpha.
         ss_weight: weight of the 3Di score in these sums; None uses
@@ -1436,6 +1467,7 @@ class MergeSearch(object):
         the summed score ('pvalue').
         """
         t0 = time()
+        self._kappa_scale = {"seq": seq_kappa_scale, "ss": ss_kappa_scale}
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
 

@@ -359,6 +359,12 @@ def load_sampled_sequences(paths, sampled_by_n, k, chunksize, sanitiser):
     return sampled
 
 
+def read_null_exclusions(path):
+    """TSV (no header) of protein record index and family offset -> {record: array of families}."""
+    pairs = pd.read_csv(path, sep="\t", header=None, names=["record", "family"], dtype=np.int64)
+    return {int(r): g.family.values for r, g in pairs.groupby("record")}
+
+
 def read_family_offsets(path):
     values = []
     with open(path, "r") as handle:
@@ -655,8 +661,14 @@ def collect_dense_family_hit_histograms(
     table_buff=None,
     sampled_family_offsets=None,
     kmer_mask=None,
+    sampled_exclusions=None,
 ):
     """Collect bounded-memory histograms without Python objects per bin.
+
+    ``sampled_exclusions``, if given, holds for each sampled sequence an array of
+    further family offsets (homologous families, e.g. from an alignment search)
+    whose null distribution must not contain this query; they are removed like
+    the query's own family.
 
     When ``sampled_family_offsets`` is supplied, it must contain one database
     family offset per sampled sequence (or -1 when unknown). The returned
@@ -760,6 +772,12 @@ def collect_dense_family_hit_histograms(
                 if own_rank >= 0:
                     own_hit_count = int(counts[own_rank])
                     own_family_hits[sample_i] = own_hit_count
+        exclusion_counts = {}
+        if sampled_exclusions is not None and len(sampled_exclusions[sample_i]):
+            for other in sampled_exclusions[sample_i]:
+                if 0 <= other < target_rank.size and target_rank[other] >= 0:
+                    rank = int(target_rank[other])
+                    exclusion_counts[rank] = int(counts[rank])
         update_dense_family_histogram(
             counts,
             touched,
@@ -774,6 +792,17 @@ def collect_dense_family_hit_histograms(
                     own_rank,
                     offset_lookup[int(n)] + own_hit_count,
                 ] -= 1
+        if sampled_exclusions is not None and len(sampled_exclusions[sample_i]):
+            for other in sampled_exclusions[sample_i]:
+                if not 0 <= other < target_rank.size:
+                    continue
+                rank = target_rank[other]
+                if rank < 0 or rank == own_rank:
+                    continue
+                excluded_query_counts[rank, n_rank_lookup[int(n)]] += 1
+                x = int(exclusion_counts.get(int(rank), 0))
+                if x > 0:
+                    histogram[rank, offset_lookup[int(n)] + x] -= 1
 
     result = (
         DenseFamilyHitHistogram(
@@ -1330,6 +1359,7 @@ def _fit_sampled_bbinom_coefficients(
     checkpoint_output_path=None,
     kappa_const=False,
     kmer_mask=None,
+    sampled_exclusions=None,
 ):
     """Fit selected families from an already materialized query sample."""
     n_query_counts = Counter(int(n) for n, _ in sampled_sequences)
@@ -1378,6 +1408,7 @@ def _fit_sampled_bbinom_coefficients(
             table_buff=table_buffer,
             sampled_family_offsets=sampled_family_offsets,
             kmer_mask=kmer_mask,
+            sampled_exclusions=sampled_exclusions,
         )
         hist, batch_query_counts = collected[:2]
         batch_rows = fit_bbinom_rows(
@@ -1458,6 +1489,7 @@ def fit_bbinom_coefficients_from_buffer(
     kappa="family",
     kappa_scale=1.0,
     min_distinct=None,
+    null_exclusions=None,
 ):
     """Fit beta-binomial coefficients from buffers retained during mkdb.
 
@@ -1557,6 +1589,16 @@ def fit_bbinom_coefficients_from_buffer(
     protein_hogs = db.protein_table.col("HOGoff")
     hog_families = db.hog_table.col("FamOff")
     sampled_family_offsets = hog_families[protein_hogs[sampled_indices]]
+    sampled_exclusions = None
+    if null_exclusions is not None:
+        # protein record -> families homologous to it (e.g. from an alignment search)
+        sampled_exclusions = [
+            np.asarray(null_exclusions.get(int(r), ()), dtype=np.int64) for r in sampled_indices
+        ]
+        LOG.info(
+            "Excluding %d (query, homologous family) pairs from the null",
+            int(sum(len(e) for e in sampled_exclusions)),
+        )
 
     rows = _fit_sampled_bbinom_coefficients(
         db,
@@ -1572,6 +1614,7 @@ def fit_bbinom_coefficients_from_buffer(
         sampled_family_offsets=sampled_family_offsets,
         kappa_const=(kappa == "pooled"),
         kmer_mask=kmer_mask,
+        sampled_exclusions=sampled_exclusions,
     )
     if kappa == "pooled":
         rows = pool_family_kappa(

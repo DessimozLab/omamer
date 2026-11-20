@@ -198,6 +198,7 @@ def refit_modality(
     kappa="family",
     kappa_scale=1.0,
     min_distinct=None,
+    null_exclusions=None,
 ):
     """Fit one modality from a training-buffer sidecar and return the rows."""
     from .bbinom_fit import fit_bbinom_coefficients_from_buffer
@@ -226,4 +227,5 @@ def refit_modality(
         kappa=kappa,
         kappa_scale=kappa_scale,
         min_distinct=min_distinct,
+        null_exclusions=null_exclusions,
     )

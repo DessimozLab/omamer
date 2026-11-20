@@ -571,6 +571,12 @@ def main():
             "factor.".format(name),
         )
     refit_parser.add_argument(
+        "--null_exclusions",
+        help="TSV of protein record index and family offset (no header): pairs of a "
+        "training query and a family it is homologous to (e.g. from an alignment "
+        "search). These queries are left out of that family's null distribution.",
+    )
+    refit_parser.add_argument(
         "--min_nonzero_queries",
         default=20,
         type=int,

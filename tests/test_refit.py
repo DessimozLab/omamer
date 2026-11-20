@@ -417,3 +417,19 @@ def test_min_distinct_is_stored_and_masks_the_training(tiny_build, monkeypatch):
     # k=2 here: 2 masks the 2-mers with one letter (e.g. AA)
     assert stored_min_distinct(db.db.root.Index._v_attrs, "seq") == 2
     assert len(rows)
+
+
+def test_null_exclusions_remove_homologous_queries(tiny_build):
+    db, buffers_path = tiny_build
+    whole = _fit(db, buffers_path)
+    n_families = len(db.family_table)
+    # declare every protein homologous to every family: no null data remains
+    everything = {r: np.arange(n_families) for r in range(len(db.protein_table))}
+    with TrainingBuffers(buffers_path) as buffers:
+        none = refit_modality(db, buffers, "seq", store_metadata=False, null_exclusions=everything, **FIT_OPTIONS)
+    assert not whole.empty
+    assert none.empty or int(none["nonzero_queries"].sum()) == 0
+    # excluding nothing changes nothing
+    with TrainingBuffers(buffers_path) as buffers:
+        same = refit_modality(db, buffers, "seq", store_metadata=False, null_exclusions={}, **FIT_OPTIONS)
+    pd.testing.assert_frame_equal(_comparable(whole), _comparable(same))

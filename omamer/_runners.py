@@ -611,6 +611,11 @@ def refit_bbinom(args):
             )
 
         n_values = {"seq": args.seq_n_values, "ss": args.ss_n_values}
+        null_exclusions = None
+        if getattr(args, "null_exclusions", None):
+            from .bbinom_fit import read_null_exclusions
+
+            null_exclusions = read_null_exclusions(args.null_exclusions)
         collected = []
         for modality in modalities:
             rows = refit_modality(
@@ -639,6 +644,7 @@ def refit_bbinom(args):
                     "seq": getattr(args, "seq_min_distinct", None),
                     "ss": getattr(args, "ss_min_distinct", None),
                 }[modality],
+                null_exclusions=null_exclusions,
                 # A shard fits only part of the family set, so it must not
                 # claim in the database that it trained the whole thing.
                 store_metadata=write_in_place and shard is None,

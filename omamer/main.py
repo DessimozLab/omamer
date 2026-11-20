@@ -467,11 +467,19 @@ def main():
     )
     filter_parser.add_argument(
         "--kmer_percentage",
-        required=True,
         type=float,
         help="Percentage of indexed k-mer types to retain, ranked by "
-        "pointwise mutual information; 100 disables filtering.",
+        "pointwise mutual information; 100 disables filtering. Applies to every "
+        "modality.",
     )
+    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+        filter_parser.add_argument(
+            "--{}_max_df".format(modality),
+            type=int,
+            help="Instead of --kmer_percentage: ignore {} k-mers that occur in more "
+            "than this many families (0 removes the cap); other modalities are not "
+            "changed. Refit the beta-binomial of this modality afterwards.".format(name),
+        )
     filter_parser.add_argument(
         "--keep_bbinom",
         action="store_true",

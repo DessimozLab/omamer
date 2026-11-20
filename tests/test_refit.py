@@ -433,3 +433,23 @@ def test_null_exclusions_remove_homologous_queries(tiny_build):
     with TrainingBuffers(buffers_path) as buffers:
         same = refit_modality(db, buffers, "seq", store_metadata=False, null_exclusions={}, **FIT_OPTIONS)
     pd.testing.assert_frame_equal(_comparable(whole), _comparable(same))
+
+
+def test_modality_max_df_caps_one_modality(tiny_build):
+    from omamer.refit import set_modality_max_df
+
+    db, buffers_path = tiny_build
+    seq_p = db.db.root.Index.FamilyProbability[:].copy()
+    ss_p = db.db.root.Index.SSFamilyProbability[:].copy()
+    df = np.diff(db.db.root.Index.SSTableIndex[:])
+    cap = int(df.max()) - 1  # drop the most frequent 3Di k-mers only
+    assert cap >= int(df[df > 0].min())
+    set_modality_max_df(db, "ss", cap)
+    attrs = db.db.root.Index._v_attrs
+    assert int(attrs["ss_kmer_max_df"]) == cap
+    assert int(getattr(attrs, "kmer_max_df", 0)) == 0
+    np.testing.assert_array_equal(db.db.root.Index.FamilyProbability[:], seq_p)
+    assert not np.allclose(db.db.root.Index.SSFamilyProbability[:], ss_p)
+    # removing the cap restores the unfiltered probabilities
+    set_modality_max_df(db, "ss", 0)
+    np.testing.assert_allclose(db.db.root.Index.SSFamilyProbability[:], ss_p)

@@ -143,6 +143,48 @@ def set_kmer_filter(db, kmer_percentage, modalities=None):
     return kmer_percentage
 
 
+def set_modality_max_df(db, modality, max_df):
+    """Cap the document frequency of one modality's k-mers (k-mers in more than max_df
+    families are ignored at search and in training) and rewrite its binomial
+    probabilities. Unlike set_kmer_filter, the cap is given directly and only
+    this modality changes; its beta-binomial coefficients are dropped (refit them).
+    max_df = 0 removes the cap."""
+    from .index import filtered_hog_kmer_counts
+    from .stat_models import estimate_family_probability, estimate_hog_probability
+
+    max_df = int(max_df)
+    if max_df < 0:
+        raise ValueError("max_df must be >= 0")
+    prefix = MODALITY_PREFIX[modality]
+    index_group = db.db.root.Index
+    table_index_node, table_buffer_node = _modality_table_nodes(db, modality)
+    table_index = table_index_node[:]
+    table_buffer = table_buffer_node[:]
+    hog_to_family = db.hog_table.col("FamOff")
+    hog_kmer_counts = filtered_hog_kmer_counts(table_index, table_buffer, max_df, len(db.hog_table))
+    family_probability = estimate_family_probability(
+        table_index, table_buffer, hog_to_family, max_df, len(db.family_table)
+    )
+    hog_probability = estimate_hog_probability(
+        hog_kmer_counts,
+        db.family_table.col("LevelOff"),
+        db.family_table.col("LevelNum"),
+        db.level_offset_carray[:],
+        db.hog_table.col("ParentOff"),
+    )
+    index_group._f_setattr("kmer_max_df" if modality == "seq" else "ss_kmer_max_df", max_df)
+    _remove_nodes(db, (prefix + "FamilyProbability", prefix + "HOGProbability"))
+    db.db.create_carray(index_group, prefix + "FamilyProbability", obj=family_probability, filters=db.compression_filters)
+    db.db.create_carray(index_group, prefix + "HOGProbability", obj=hog_probability, filters=db.compression_filters)
+    drop_bbinom_coefficients(db, modalities=(modality,))
+    df = np.diff(table_index)
+    kept = df[(df > 0) & ((max_df == 0) | (df <= max_df))]
+    LOG.info(
+        "%s k-mers capped at df <= %d: %d of %d indexed k-mer types, %.1f%% of the postings kept",
+        modality, max_df, kept.size, int((df > 0).sum()), 100.0 * kept.sum() / max(df.sum(), 1),
+    )
+
+
 def mark_models(db, with_bbinom):
     """Keep the stored ``models`` attribute honest about what is present.
 

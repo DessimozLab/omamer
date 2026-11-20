@@ -572,6 +572,23 @@ def set_kmer_filter(args):
     from .database import Database
     from .refit import drop_bbinom_coefficients, set_kmer_filter as apply_filter
 
+    caps = {
+        m: getattr(args, m + "_max_df", None)
+        for m in ("seq", "ss")
+        if getattr(args, m + "_max_df", None) is not None
+    }
+    if caps:
+        if args.kmer_percentage is not None:
+            raise ValueError("Give either --kmer_percentage or per-modality --*_max_df caps, not both")
+        from .refit import set_modality_max_df
+
+        with Database(args.db, mode="a") as db:
+            for modality, max_df in caps.items():
+                set_modality_max_df(db, modality, max_df)
+            db.db.flush()
+        return
+    if args.kmer_percentage is None:
+        raise ValueError("Give --kmer_percentage or a per-modality --seq_max_df / --ss_max_df")
     with Database(args.db, mode="a") as db:
         # Every indexed modality, always: kmer_percentage is a single attribute
         # and Index rejects a database that records a filtered percentage while

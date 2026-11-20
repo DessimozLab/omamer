@@ -40,6 +40,10 @@ class FamilyModel(IntEnum):
 
 # These immutable carriers are built once at the Python/Numba boundary and
 # passed unchanged to the compiled functions that consume them.
+# `packed` holds the beta-binomial coefficients of each family in one row
+# (see `pack_family_bbinom`), so that evaluating the model for a family reads
+# one or two cache lines instead of one per array; the search evaluates it
+# for every family hit by a query. Empty: the separate arrays are used.
 FamilyModelParameters = namedtuple(
     "FamilyModelParameters",
     (
@@ -52,8 +56,18 @@ FamilyModelParameters = namedtuple(
         "valid",
         "n_min",
         "n_max",
+        "packed",
     ),
+    defaults=(np.empty((0, 0), dtype=np.float64),),
 )
+
+# Columns of a packed row; the q then the kappa coefficients follow.
+PACKED_BBINOM = 0
+PACKED_CENTER = 1
+PACKED_SCALE = 2
+PACKED_N_MIN = 3
+PACKED_N_MAX = 4
+PACKED_Q_COEF = 5
 
 FamilyScoringParameters = namedtuple(
     "FamilyScoringParameters",
@@ -395,7 +409,7 @@ def make_family_model(
             _EMPTY_U32,
             _EMPTY_U32,
         )
-    return FamilyModelParameters(
+    model = FamilyModelParameters(
         kind,
         probability,
         q_coef,
@@ -406,6 +420,51 @@ def make_family_model(
         n_min,
         n_max,
     )
+    return model._replace(packed=pack_family_bbinom(model))
+
+
+def pack_family_bbinom(model):
+    """
+    One row per family: [has a beta-binomial fit (as `has_family_bbinom`),
+    center, scale, n_min, n_max (0: no clamp, as `bbinom_eval_n`),
+    q coefficients, kappa coefficients], in float64 (exact for the uint32
+    n range). Rows are padded to 8 or 16 columns, so that the q part of a
+    row lies in one cache line.
+    """
+    n_families = model.family_probability.size
+    n_q = model.q_coef.shape[1]
+    n_kappa = model.kappa_coef.shape[1]
+    width = PACKED_Q_COEF + n_q + n_kappa
+    width = 8 if width <= 8 else 16 * ((width + 15) // 16)
+    packed = np.zeros((n_families, width), dtype=np.float64)
+
+    def present(values):
+        values = _EMPTY_F64 if values is None else np.asarray(values)
+        m = min(n_families, values.shape[0])
+        return m, values[:m]
+
+    m = min(
+        n_families,
+        model.valid.size,
+        model.q_coef.shape[0],
+        model.kappa_coef.shape[0],
+        model.center.size,
+        model.scale.size,
+    )
+    packed[:m, PACKED_BBINOM] = (
+        model.valid[:m] & (model.scale[:m] > 0.0)
+    ).astype(np.float64)
+    packed[:m, PACKED_CENTER] = model.center[:m]
+    packed[:m, PACKED_SCALE] = model.scale[:m]
+    packed[:m, PACKED_Q_COEF : PACKED_Q_COEF + n_q] = model.q_coef[:m]
+    packed[:m, PACKED_Q_COEF + n_q : PACKED_Q_COEF + n_q + n_kappa] = (
+        model.kappa_coef[:m]
+    )
+    k, n_max = present(model.n_max)
+    packed[:k, PACKED_N_MAX] = n_max
+    k, n_min = present(model.n_min)
+    packed[:k, PACKED_N_MIN] = n_min
+    return packed
 
 
 @numba.njit(nogil=True)
@@ -525,9 +584,78 @@ def family_neglogccdf(family_id, x, n, model):
 
 
 @numba.njit(nogil=True)
+def packed_bbinom_z(row, n, log_n):
+    """
+    The z of `beta_binomial_params_for_n` at the clamped n (`bbinom_eval_n`)
+    of a packed row; log_n = log(n), reused when n is not clamped.
+    """
+    n_eval = n
+    if row[PACKED_N_MAX] > 0.0:
+        lo = np.int64(row[PACKED_N_MIN])
+        hi = np.int64(row[PACKED_N_MAX])
+        if n_eval < lo:
+            n_eval = lo
+        elif n_eval > hi:
+            n_eval = hi
+    log_n_eval = log_n if n_eval == n else math.log(float(n_eval))
+    return (log_n_eval - row[PACKED_CENTER]) / row[PACKED_SCALE]
+
+
+@numba.njit(nogil=True)
+def packed_bbinom_q(row, z, n_q):
+    """q of `beta_binomial_params_for_n`, with the same operations."""
+    q_linear = 0.0
+    z_power = 1.0
+    for i in range(n_q):
+        q_linear += row[PACKED_Q_COEF + i] * z_power
+        z_power *= z
+    return min(max(sigmoid(q_linear), 1e-8), 1.0 - 1e-8)
+
+
+@numba.njit(nogil=True)
+def packed_bbinom_params(row, n, log_n, n_q, n_kappa):
+    """(alpha, beta) of `beta_binomial_params_for_n`, from a packed row."""
+    z = packed_bbinom_z(row, n, log_n)
+    q = packed_bbinom_q(row, z, n_q)
+
+    log_kappa = 0.0
+    z_power = 1.0
+    for i in range(n_kappa):
+        log_kappa += row[PACKED_Q_COEF + n_q + i] * z_power
+        z_power *= z
+    log_kappa = min(max(log_kappa, math.log(1e-4)), math.log(1e8))
+    kappa = math.exp(log_kappa)
+
+    alpha = q * kappa
+    beta = (1.0 - q) * kappa
+    return alpha, beta
+
+
+@numba.njit(nogil=True)
+def has_packed_bbinom(model):
+    return (
+        model.kind == FamilyModel.BETA_BINOMIAL
+        and model.packed.shape[0] == model.family_probability.size
+        and model.packed.shape[0] > 0
+    )
+
+
+@numba.njit(nogil=True)
 def compute_expected_counts(qres, n, model):
     if model.kind == FamilyModel.BINOMIAL:
         expected_count = model.family_probability[qres["id"]] * n
+    elif has_packed_bbinom(model):
+        expected_count = np.empty(len(qres), dtype=np.float64)
+        log_n = math.log(float(n)) if n > 0 else 0.0
+        n_q = model.q_coef.shape[1]
+        for i in range(len(qres)):
+            family_id = qres["id"][i]
+            row = model.packed[family_id]
+            if row[PACKED_BBINOM] != 0.0:
+                z = packed_bbinom_z(row, n, log_n)
+                expected_count[i] = packed_bbinom_q(row, z, n_q) * n
+            else:
+                expected_count[i] = model.family_probability[family_id] * n
     else:
         expected_count = np.empty(len(qres), dtype=np.float64)
         for i in range(len(qres)):
@@ -557,22 +685,39 @@ def _filter_by_significance_bound(qres, n, model, scoring):
     epsilon = 1e-10
     observed_probability = np.clip(qres["count"] / n, epsilon, 1.0 - epsilon)
     keep = np.full(len(qres), True)
+    packed = has_packed_bbinom(model)
+    log_n = math.log(float(n)) if n > 0 else 0.0
+    n_q = model.q_coef.shape[1]
+    n_kappa = model.kappa_coef.shape[1]
 
     for i in range(len(qres)):
         family_id = qres["id"][i]
-        if has_family_bbinom(family_id, model):
+        if packed:
+            row = model.packed[family_id]
+            is_bbinom = row[PACKED_BBINOM] != 0.0
+        else:
+            is_bbinom = has_family_bbinom(family_id, model)
+        if is_bbinom:
             # For the beta-binomial, compute the first member of the tail as
             # a bound to test significance.
             #    P(X = k) <= P(X >= k) <= alpha
             # we therefore test
             #    P(X = k) <= alpha
             #    -log P(X = k) >= -log(alpha)
-            neglogpmf = family_bbinom_neglogpmf(
-                family_id,
-                qres["count"][i],
-                n,
-                model,
-            )
+            if packed:
+                (alpha, beta) = packed_bbinom_params(
+                    model.packed[family_id], n, log_n, n_q, n_kappa
+                )
+                neglogpmf = -beta_binomial_logpmf(
+                    float(qres["count"][i]), float(n), alpha, beta
+                )
+            else:
+                neglogpmf = family_bbinom_neglogpmf(
+                    family_id,
+                    qres["count"][i],
+                    n,
+                    model,
+                )
             keep[i] = (
                 neglogpmf - scoring.log_correction
                 >= scoring.neglog_alpha
@@ -611,14 +756,30 @@ def score_family_candidates(
     if len(qres) == 0:
         return qres
 
+    packed = has_packed_bbinom(model)
+    log_n = math.log(float(n)) if n > 0 else 0.0
+    n_q = model.q_coef.shape[1]
+    n_kappa = model.kappa_coef.shape[1]
     for i in range(len(qres)):
         family_id = qres["id"][i]
-        neglog_tail = family_neglogccdf(
-            family_id,
-            qres["count"][i],
-            n,
-            model,
-        )
+        if packed:
+            row = model.packed[family_id]
+            if row[PACKED_BBINOM] != 0.0:
+                (alpha, beta) = packed_bbinom_params(row, n, log_n, n_q, n_kappa)
+                neglog_tail = beta_binomial_neglogccdf(
+                    qres["count"][i], n, alpha, beta
+                )
+            else:
+                neglog_tail = binom_neglogccdf(
+                    qres["count"][i], n, model.family_probability[family_id]
+                )
+        else:
+            neglog_tail = family_neglogccdf(
+                family_id,
+                qres["count"][i],
+                n,
+                model,
+            )
         qres["pvalue"][i] = min(
             MAX_FAMILY_NEGLOGP,
             max(0.0, neglog_tail - scoring.log_correction),

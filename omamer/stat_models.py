@@ -293,6 +293,13 @@ def learn_index_models(
     for modality, data in modality_data.items():
         LOG.info("Learning binomial model for modality '%s'", modality)
         _write_binomial_model(db, index_group, modality, data)
+        # search applies the low-complexity mask whatever the model (the
+        # beta-binomial fit records it too, as it trains with the same mask)
+        min_distinct = min_distinct_by_modality.get(modality)
+        if min_distinct is not None:
+            index_group._f_setattr(
+                "{}_kmer_min_distinct".format(modality), int(min_distinct)
+            )
 
     if "beta-binomial" in models:
         from .bbinom_coefficients import store_bbinom_coefficients

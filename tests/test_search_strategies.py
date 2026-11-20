@@ -41,7 +41,7 @@ from omamer.stat_models import (
     [
         ("auto", True, False, SEARCH_SEQUENCE),
         ("auto", False, True, SEARCH_STRUCTURE),
-        ("auto", True, True, SEARCH_SEQUENCE_THEN_STRUCTURE),
+        ("auto", True, True, SEARCH_HYBRID),
         ("seq", True, True, SEARCH_SEQUENCE),
         ("ss", True, True, SEARCH_STRUCTURE),
         ("sqs", True, True, SEARCH_SEQUENCE_THEN_STRUCTURE),
@@ -507,3 +507,17 @@ def test_sum_family_scores_weights_3di():
     assert by_id[1]["pvalue"] == pytest.approx(3.0)
     assert by_id[5]["pvalue"] == pytest.approx(0.3)
     assert by_id[5]["count"] == 3
+
+
+def test_rescale_kappa_coefficients():
+    from omamer.merge_search import rescale_kappa_coefficients
+
+    coefficients = {"kappa_coef": np.array([[math.log(100.0), 0.0], [math.log(50.0), 0.1]]), "valid": np.ones(2, bool)}
+    out = rescale_kappa_coefficients(coefficients, 0.03, stored_scale=0.3)
+    # kappa = 0.03 x pooled for a database built with 0.3 x pooled: one tenth
+    np.testing.assert_allclose(np.exp(out["kappa_coef"][:, 0]), [10.0, 5.0])
+    np.testing.assert_array_equal(out["kappa_coef"][:, 1], [0.0, 0.1])
+    # the input is not modified
+    assert coefficients["kappa_coef"][0, 0] == pytest.approx(math.log(100.0))
+    with pytest.raises(ValueError):
+        rescale_kappa_coefficients(coefficients, 0.0)

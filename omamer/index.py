@@ -255,6 +255,7 @@ class Index(object):
                 )
             self.models = validate_index_models(stored_models)
             self.bbinom_options = {}
+            self.max_df_by_modality = {}
             if self.kmer_percentage < 100.0 and self.kmer_max_df <= 0:
                 raise ValueError(
                     "Database records a filtered kmer_percentage but has no "
@@ -278,6 +279,15 @@ class Index(object):
             self.ss_kmer_max_df = 0
             self.models = validate_index_models(models)
             self.bbinom_options = dict(bbinom_options or {})
+            # per-modality document-frequency caps (k-mers in more families are
+            # ignored), applied before the family models are fitted
+            self.max_df_by_modality = {
+                m: int(v)
+                for m, v in (self.bbinom_options.pop("max_df_by_modality", {}) or {}).items()
+                if v
+            }
+            if any(v < 0 for v in self.max_df_by_modality.values()):
+                raise ValueError("k-mer document-frequency caps must be >= 0")
 
         self.alphabet = Alphabet(n=alphabet_n)
 
@@ -410,6 +420,27 @@ class Index(object):
         return IndexModelData(seq_buff, table_idx, table_buff, hog_counts, max_df)
 
     def _apply_information_filter(self, table_idx, table_buff, hog_counts, modality):
+        key = "seq" if modality == "Sequence" else "ss"
+        max_df = self.max_df_by_modality.get(key, 0)
+        if max_df > 0:
+            # an explicit cap of this modality replaces --kmer_percentage for it
+            df = np.diff(table_idx)
+            kept = df[(df > 0) & (df <= max_df)]
+            LOG.info(
+                "%s k-mers capped at df <= %d: %d of %d indexed k-mer types, "
+                "%.1f%% of the postings kept",
+                modality,
+                max_df,
+                kept.size,
+                int((df > 0).sum()),
+                100.0 * kept.sum() / max(df.sum(), 1),
+            )
+            return (
+                filtered_hog_kmer_counts(
+                    table_idx, table_buff, max_df, len(self.db.hog_table)
+                ),
+                max_df,
+            )
         if self.kmer_percentage == 100.0:
             return hog_counts, 0
 

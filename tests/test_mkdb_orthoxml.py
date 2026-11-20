@@ -395,3 +395,40 @@ def test_search_query_and_structure_must_pair_up(
             db_path, tmp_path / "out.tsv",
             "--query", query, "--structure", structure, "--chunksize", "3",
         )
+
+
+def test_structure_build_defaults(structure_db):
+    """mkdb defaults from the model audit: 3Di low-complexity mask (< 3 distinct
+    letters) and 3Di k-mers capped at 1000 families; sequences unfiltered."""
+    from omamer.kmer_mask import stored_min_distinct
+
+    db_path, _ = structure_db
+    with tables.open_file(str(db_path)) as h5:
+        attrs = h5.root.Index._v_attrs
+        assert int(attrs["ss_kmer_max_df"]) == 1000
+        assert int(attrs["kmer_max_df"]) == 0
+        assert stored_min_distinct(attrs, "ss") == 3
+        assert stored_min_distinct(attrs, "seq") is None
+
+
+def test_ss_max_df_caps_3di_kmers_at_build(dataset, structure_db, tmp_path):
+    path = dataset[0]
+    db_path = tmp_path / "capped.h5"
+    _mkdb(
+        db_path, dataset, "--structures", str(path / "ss1.fa"), str(path / "ss2.fa"),
+        "--ss_max_df", "1",
+    )
+    with tables.open_file(str(db_path)) as capped, tables.open_file(str(structure_db[0])) as full:
+        assert int(capped.root.Index._v_attrs["ss_kmer_max_df"]) == 1
+        # the same k-mer tables, but family probabilities without the shared k-mers
+        np.testing.assert_array_equal(
+            capped.root.Index.SSTableIndex[:], full.root.Index.SSTableIndex[:]
+        )
+        p_capped = capped.root.Index.SSFamilyProbability[:]
+        p_full = full.root.Index.SSFamilyProbability[:]
+        assert np.all(p_capped <= p_full + 1e-12)
+        assert np.any(p_capped < p_full)
+        # sequences are not capped
+        np.testing.assert_array_equal(
+            capped.root.Index.FamilyProbability[:], full.root.Index.FamilyProbability[:]
+        )

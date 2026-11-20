@@ -171,6 +171,10 @@ def mkdb_oma(args):
                 "seq": getattr(args, "bbinom_seq_kappa_scale", 1.0),
                 "ss": getattr(args, "bbinom_ss_kappa_scale", 1.0),
             },
+            "max_df_by_modality": {
+                "seq": getattr(args, "seq_max_df", 0),
+                "ss": getattr(args, "ss_max_df", 0),
+            },
             "n_values_by_modality": {
                 "seq": getattr(args, "bbinom_seq_n_values", None),
                 "ss": getattr(args, "bbinom_ss_n_values", None),
@@ -370,6 +374,8 @@ def search(args):
                 alpha=args.family_alpha,
                 summed_alpha=getattr(args, "summed_alpha", None),
                 ss_weight=getattr(args, "ss_weight", None),
+                seq_kappa_scale=getattr(args, "seq_kappa_scale", None),
+                ss_kappa_scale=getattr(args, "ss_kappa_scale", None),
                 family_correction=args.family_correction,
                 sst=args.threshold,
                 family_only=args.family_only,

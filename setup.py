@@ -46,15 +46,20 @@ requirements = [
 ]
 extra_requirements = {"build": ["pysais"]}
 
+with open("README.md", "rt", encoding="utf-8") as fp:
+    long_desc = fp.read()
+
 desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
 
 setup(
     name=name,
     version=__version__,
     author="Victor Rossier and Alex Warwick Vesztrocy",
-    email="alex@warwickvesztrocy.co.uk",
+    author_email="alex@warwickvesztrocy.co.uk",
     url="https://github.com/DessimozLab/omamer",
     description=desc,
+    long_description=long_desc,
+    long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=requirements,
     extras_require=extra_requirements,

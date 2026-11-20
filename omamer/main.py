@@ -339,9 +339,15 @@ def main():
     )
     search_parser.add_argument(
         "--search_mode",
-        choices=("auto", "seq", "ss", "sqs"),
+        choices=("auto", "seq", "ss", "sqs", "sum"),
         default="auto",
-        help="Query strategy: sequence, structure, or sequence with structure fallback.",
+        help="Query strategy: 'seq' sequence, 'ss' structure (3Di), 'sqs' "
+        "sequence with structure fallback when no family is significant "
+        "(the 'auto' choice when both are given), 'sum' both, with family "
+        "scores summed over the two modalities (each modality scores its "
+        "candidates as with --family_alpha 1, --family_alpha then applies "
+        "to the sum; subfamilies are placed with the sequence when it has "
+        "the family as a candidate, else with the structure).",
     )
     search_parser.add_argument(
         "--family_model",
@@ -351,11 +357,13 @@ def main():
     )
     search_parser.add_argument(
         "--family_sorting",
-        choices=("normcount", "pvalue"),
-        default="normcount",
+        choices=("auto", "normcount", "pvalue"),
+        default="auto",
         help="Ranking of significant family candidates. 'normcount' uses "
         "normcount, overlap, then -log(p); 'pvalue' uses -log(p), overlap, "
-        "then normcount.",
+        "then normcount. 'auto' is 'pvalue' (the summed score) with "
+        "--search_mode sum and 'normcount' otherwise. In sum mode, normcount "
+        "and overlap are those of the placement modality.",
     )
 
     search_parser.add_argument(

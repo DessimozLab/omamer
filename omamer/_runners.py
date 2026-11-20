@@ -374,7 +374,7 @@ def search(args):
                 ref_taxon_off=ref_taxoff,
                 search_mode=getattr(args, "search_mode", "auto"),
                 family_model=getattr(args, "family_model", "auto"),
-                family_sorting=getattr(args, "family_sorting", "normcount"),
+                family_sorting=getattr(args, "family_sorting", "auto"),
             )
             t_search1 = time()
 
@@ -410,9 +410,7 @@ def search(args):
                         file=args.out,
                     )
                     print(
-                        "!family-sorting: {}".format(
-                            getattr(args, "family_sorting", "normcount")
-                        ),
+                        "!family-sorting: {}".format(ms.resolved_family_sorting),
                         file=args.out,
                     )
 

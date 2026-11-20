@@ -62,6 +62,9 @@ from .stat_models import (
 SEARCH_SEQUENCE = 1
 SEARCH_STRUCTURE = 2
 SEARCH_SEQUENCE_THEN_STRUCTURE = 3
+# Both modalities are searched and the family scores are summed. Also the
+# value of the `modality` result field for families scored this way.
+SEARCH_SUM = 4
 
 
 # Array carriers passed to Numba.
@@ -154,18 +157,26 @@ def resolve_search_mode(mode, has_sequence, has_structure):
             SEARCH_SEQUENCE_THEN_STRUCTURE,
             has_sequence and has_structure,
         ),
+        "sum": (SEARCH_SUM, has_sequence and has_structure),
     }
     try:
         selected, available = modes[mode]
     except KeyError:
         raise ValueError(
-            "search_mode must be 'auto', 'seq', 'ss', or 'sqs'"
+            "search_mode must be 'auto', 'seq', 'ss', 'sqs', or 'sum'"
         ) from None
     if not available:
         raise ValueError(
             "search_mode={!r} requires matching query data and index".format(mode)
         )
     return selected
+
+
+def default_family_sorting(policy, mode):
+    """Resolve family_sorting='auto': the summed score in sum mode."""
+    if policy in (None, "auto"):
+        return "pvalue" if mode == SEARCH_SUM else "normcount"
+    return policy
 
 
 QUERY_FAMILY_RESULT_DTYPE = np.dtype(
@@ -212,13 +223,26 @@ class SearchModality:
     hog_model: HogModelParameters
 
     def search(
-        self, results, database, placement, family_scoring, num_threads, fallback=None
+        self,
+        results,
+        database,
+        placement,
+        family_scoring,
+        num_threads,
+        secondary=None,
+        mode=None,
     ):
         # Numba's parallel lowering requires flat, array-bearing carriers.
-        mode = (
-            self.index.modality if fallback is None else SEARCH_SEQUENCE_THEN_STRUCTURE
-        )
-        secondary = self if fallback is None else fallback
+        # Without a secondary modality, this one is searched alone; with one,
+        # the default is the sequence-then-structure fallback.
+        if mode is None:
+            mode = (
+                self.index.modality
+                if secondary is None
+                else SEARCH_SEQUENCE_THEN_STRUCTURE
+            )
+        if secondary is None:
+            secondary = self
         lookup_queries(
             results.families,
             results.subfamilies,
@@ -564,43 +588,40 @@ def filter_by_overlap(qres, query_len, fam_highloc, fam_lowloc, k):
 
 
 @numba.njit(nogil=True)
-def place_sequence(
-    family_results,
-    subfam_results,
+def search_families(
     sequence,
-    sequence_id,
     database,
     index,
     family_model,
-    hog_model,
-    placement,
     family_scoring,
     scratch,
-) -> bool:
+):
+    """
+    Search the k-mers of one query and score its family candidates.
+
+    Returns the significant candidates (unsorted) and the number n of k-mers
+    used for scoring. The per-HOG k-mer counts of the query stay in the
+    calling thread's row of `scratch` until its next search.
+    """
     trans = database.trans
     k = database.k
     digits_lookup = database.digits_lookup
-    fam_tab = database.families
     hog_tab = database.hogs
-    level_arr = database.levels
 
     table_idx = index.table_idx
-    top_n_fams = placement.top_n_families
-    sst = placement.subfamily_score_threshold
-    family_only = placement.family_only
 
     query_len = sequence.shape[0]
     n_kmers = query_len - (k - 1)
     x_flag = table_idx.size - 1
 
     if n_kmers <= 0:
-        return False
+        return init_query_family_results(0), np.int64(0)
 
     # get sequence k-mers
     (r1, p1, _) = parse_seq(sequence, digits_lookup, n_kmers, k, trans, x_flag)
 
     if len(r1) == 1 and r1[0] == x_flag:
-        return False
+        return init_query_family_results(0), np.int64(0)
 
     thread_id = numba.get_thread_id()
     n_skipped = search_seq_kmers(
@@ -614,7 +635,6 @@ def place_sequence(
     )
 
     thread_hit_fams = scratch.hit_families[thread_id]
-    thread_hog_counts = scratch.hog_counts[thread_id]
     thread_fam_counts = scratch.family_counts[thread_id]
     thread_fam_lowloc = scratch.family_low_location[thread_id]
     thread_fam_highloc = scratch.family_high_location[thread_id]
@@ -626,12 +646,12 @@ def place_sequence(
     qres["id"][:] = idx
     qres["count"][:] = thread_fam_counts[idx]
 
-    n = len(r1) - n_skipped
+    n = np.int64(len(r1) - n_skipped)
 
     # cheap filter: is # of k-mers at the expected number?
     qres = filter_family_candidates(qres, n, family_model)
     if len(qres) == 0:
-        return False
+        return qres, n
 
     # filter out by demanding at least 0.25x query coverage
     qres = filter_by_overlap(
@@ -642,67 +662,247 @@ def place_sequence(
         k,
     )
     if len(qres) == 0:
-        return False
+        return qres, n
 
     qres = score_family_candidates(qres, n, family_model, family_scoring)
-    if len(qres) == 0:
-        return False
+    return qres, n
 
-    # 5. Store results
-    # - a. rank the significant family candidates using the requested policy
-    qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
 
-    # - b. store results
-    n_store = min(len(qres), top_n_fams)
+@numba.njit(nogil=True)
+def store_family_results(family_results, sequence_id, qres, n_store, modality):
     family_results["id"][sequence_id, :n_store] = qres["id"][:n_store] + 1
     family_results["pvalue"][sequence_id, :n_store] = qres["pvalue"][:n_store]
     family_results["count"][sequence_id, :n_store] = qres["count"][:n_store]
     family_results["normcount"][sequence_id, :n_store] = qres["normcount"][:n_store]
     family_results["overlap"][sequence_id, :n_store] = qres["overlap"][:n_store]
-    family_results["modality"][sequence_id, :n_store] = index.modality
+    family_results["modality"][sequence_id, :n_store] = modality
 
-    # 5. Place within families
+
+@numba.njit(nogil=True)
+def place_in_family(
+    subfam_results,
+    sequence_id,
+    rank,
+    family_id,
+    n,
+    hog_counts,
+    database,
+    hog_model,
+    placement,
+):
+    """
+    Place a query on the HOG path of one family, from the per-HOG k-mer counts
+    `hog_counts` of the search that scored it (n k-mers).
+    """
+    entry = database.families[family_id]
+    hog_s = entry["HOGoff"]
+    hog_e = hog_s + entry["HOGnum"]
+
+    if placement.family_only:
+        # early exit
+        subfam_results["id"][sequence_id, rank] = hog_s + 1
+        return
+
+    fam_hog2parent = get_fam_hog2parent(entry, database.hogs)
+    fam_level_offsets = get_fam_level_offsets(entry, database.levels)
+
+    # cumulation of counts
+    c = hog_counts[hog_s:hog_e].copy()
+
+    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
+
+    # new expected count, but using old cumulation
+    (fam_hog_scores, fam_bestpath) = hog_path_placement(
+        c,
+        n,
+        fam_level_offsets,
+        fam_hog2parent,
+        hog_counts[hog_s:hog_e],
+        hog_model.hog_probability[hog_s:hog_e],
+    )
+
+    # place on path
+    choice = 0  # default root
+    choice_score = 0.0
+    for j in np.argwhere(fam_bestpath).flatten():
+        sf_score = fam_hog_scores[j]
+        if sf_score >= placement.subfamily_score_threshold:
+            choice = j
+            choice_score = sf_score
+
+    # store results
+    subfam_results["id"][sequence_id, rank] = choice + hog_s + 1
+    subfam_results["score"][sequence_id, rank] = choice_score
+    subfam_results["count"][sequence_id, rank] = (
+        c[int(choice)] if choice_score != 0.0 else 0
+    )
+
+
+@numba.njit(nogil=True)
+def place_sequence(
+    family_results,
+    subfam_results,
+    sequence,
+    sequence_id,
+    database,
+    index,
+    family_model,
+    hog_model,
+    placement,
+    family_scoring,
+    scratch,
+) -> bool:
+    (qres, n) = search_families(
+        sequence, database, index, family_model, family_scoring, scratch
+    )
+    if len(qres) == 0:
+        return False
+
+    # Store results
+    # - a. rank the significant family candidates using the requested policy
+    top_n_fams = placement.top_n_families
+    qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
+
+    # - b. store results
+    n_store = min(len(qres), top_n_fams)
+    store_family_results(family_results, sequence_id, qres, n_store, index.modality)
+
+    # Place within families
+    thread_hog_counts = scratch.hog_counts[numba.get_thread_id()]
     for i in range(n_store):
-        entry = fam_tab[qres["id"][i]]
-        hog_s = entry["HOGoff"]
-        hog_e = hog_s + entry["HOGnum"]
-
-        if family_only:
-            # early exit
-            subfam_results["id"][sequence_id, i] = hog_s + 1
-            continue
-
-        fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
-        fam_level_offsets = get_fam_level_offsets(entry, level_arr)
-
-        # cumulation of counts
-        c = thread_hog_counts[hog_s:hog_e].copy()
-
-        cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
-
-        # new expected count, but using old cumulation
-        (fam_hog_scores, fam_bestpath) = hog_path_placement(
-            c,
+        place_in_family(
+            subfam_results,
+            sequence_id,
+            i,
+            qres["id"][i],
             n,
-            fam_level_offsets,
-            fam_hog2parent,
-            thread_hog_counts[hog_s:hog_e],
-            hog_model.hog_probability[hog_s:hog_e],
+            thread_hog_counts,
+            database,
+            hog_model,
+            placement,
         )
 
-        # place on path
-        choice = 0  # default root
-        choice_score = 0.0
-        for j in np.argwhere(fam_bestpath).flatten():
-            sf_score = fam_hog_scores[j]
-            if sf_score >= sst:
-                choice = j
-                choice_score = sf_score
+    return True
 
-        # store results
-        subfam_results["id"][sequence_id, i] = choice + hog_s + 1
-        subfam_results["score"][sequence_id, i] = choice_score
-        subfam_results["count"][sequence_id, i] = c[int(choice)] if choice_score != 0.0 else 0
+
+@numba.njit(nogil=True)
+def sum_family_scores(seq_res, ss_res):
+    """
+    Union of the family candidates of the two modalities, keyed by family.
+
+    The score (`pvalue`, in corrected -log units) of a family is the sum of
+    its sequence and 3Di scores; a family missing from one modality takes 0
+    from it. The other fields (count, normcount, overlap) are those of the
+    sequence candidate when there is one, else of the 3Di one: the modality
+    whose HOG counts are used for the placement.
+    """
+    n_seq = len(seq_res)
+    combined = init_query_family_results(n_seq + len(ss_res))
+    combined[:n_seq] = seq_res
+
+    order = np.argsort(seq_res["id"])
+    seq_ids = seq_res["id"][order]
+    n_combined = n_seq
+    for i in range(len(ss_res)):
+        family_id = ss_res["id"][i]
+        j = np.searchsorted(seq_ids, family_id)
+        if j < n_seq and seq_ids[j] == family_id:
+            combined["pvalue"][order[j]] += ss_res["pvalue"][i]
+        else:
+            combined[n_combined] = ss_res[i]
+            n_combined += 1
+    return combined[:n_combined]
+
+
+@numba.njit(nogil=True)
+def place_sequence_sum(
+    family_results,
+    subfam_results,
+    sequence,
+    structure,
+    sequence_id,
+    database,
+    sequence_index,
+    sequence_family_model,
+    sequence_hog_model,
+    structure_index,
+    structure_family_model,
+    structure_hog_model,
+    placement,
+    family_scoring,
+    sequence_scratch,
+    structure_scratch,
+) -> bool:
+    """
+    Search both modalities and rank families by the sum of their scores.
+
+    Each modality scores its candidates without a significance threshold
+    (as with alpha = 1: every family with a positive corrected score is
+    kept), so that a family weakly supported by both is not lost; the
+    threshold `family_scoring.neglog_alpha` applies to the summed score.
+    Within a family, the query is placed with the sequence HOG counts when
+    the family is a sequence candidate, else with the 3Di ones.
+    """
+    candidate_scoring = FamilyScoringParameters(0.0, family_scoring.log_correction)
+    (seq_res, seq_n) = search_families(
+        sequence,
+        database,
+        sequence_index,
+        sequence_family_model,
+        candidate_scoring,
+        sequence_scratch,
+    )
+    (ss_res, ss_n) = search_families(
+        structure,
+        database,
+        structure_index,
+        structure_family_model,
+        candidate_scoring,
+        structure_scratch,
+    )
+    qres = sum_family_scores(seq_res, ss_res)
+
+    # the significance filter of score_family_candidates, on the sum (all
+    # summed scores are positive, as each modality keeps positive ones only)
+    qres = qres[qres["pvalue"] >= family_scoring.neglog_alpha]
+    if len(qres) == 0:
+        return False
+
+    top_n_fams = placement.top_n_families
+    qres = family_result_sort(qres, top_n_fams, placement.family_sorting)
+    n_store = min(len(qres), top_n_fams)
+    store_family_results(family_results, sequence_id, qres, n_store, SEARCH_SUM)
+
+    # placement modality: the sequence when it has the family as a candidate
+    seq_ids = np.sort(seq_res["id"])
+    thread_id = numba.get_thread_id()
+    for i in range(n_store):
+        family_id = qres["id"][i]
+        j = np.searchsorted(seq_ids, family_id)
+        if j < len(seq_ids) and seq_ids[j] == family_id:
+            place_in_family(
+                subfam_results,
+                sequence_id,
+                i,
+                family_id,
+                seq_n,
+                sequence_scratch.hog_counts[thread_id],
+                database,
+                sequence_hog_model,
+                placement,
+            )
+        else:
+            place_in_family(
+                subfam_results,
+                sequence_id,
+                i,
+                family_id,
+                ss_n,
+                structure_scratch.hog_counts[thread_id],
+                database,
+                structure_hog_model,
+                placement,
+            )
 
     return True
 
@@ -721,6 +921,7 @@ class MergeSearch(object):
         self.ki = ki
         self.has_structure = self.db.has_structure()
         self.resolved_family_models = {}
+        self.resolved_family_sorting = None
         self._reported_family_models = set()
 
         self.include_extant_genes = include_extant_genes
@@ -951,6 +1152,7 @@ class MergeSearch(object):
                 raise ValueError(
                     "Sequence and structure queries must have matching counts"
                 )
+            # sequence-then-structure fallback or sum: sequence first
             selected = (("seq", sbuff), ("ss", ssbuff))
         return tuple(
             self._search_modality(modality, buffer, family_model_policy)
@@ -970,8 +1172,12 @@ class MergeSearch(object):
         ref_taxon_off=None,
         search_mode="auto",
         family_model="auto",
-        family_sorting="normcount",
+        family_sorting="auto",
     ):
+        """
+        family_sorting 'auto' ranks families by normcount, except in the sum
+        mode where it ranks them by the summed score ('pvalue').
+        """
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
@@ -984,11 +1190,12 @@ class MergeSearch(object):
         if not 0.0 < alpha <= 1.0:
             raise ValueError("alpha must be in the interval (0, 1]")
         modalities = self._search_plan(mode, sbuff, ssbuff, family_model)
+        self.resolved_family_sorting = default_family_sorting(family_sorting, mode)
         placement = PlacementConfig(
             top_n_fams,
             sst,
             family_only,
-            resolve_family_sorting(family_sorting),
+            resolve_family_sorting(self.resolved_family_sorting),
         )
         family_scoring = FamilyScoringParameters(
             -math.log(alpha),
@@ -996,7 +1203,7 @@ class MergeSearch(object):
         )
 
         results = make_search_results(max(len(seqs), len(struct_seqs)), top_n_fams)
-        self._lookup(results, modalities, placement, family_scoring)
+        self._lookup(results, modalities, placement, family_scoring, mode)
 
         t1 = time()
         td = max((t1 - t0), 1e-3)
@@ -1162,6 +1369,7 @@ class MergeSearch(object):
         modality[:] = pd.NA
         modality[decision_raw == 1] = "seq"
         modality[decision_raw == 2] = "ss"
+        modality[decision_raw == SEARCH_SUM] = "seq+ss"
 
         data = {
             "qseqid": qseqid,
@@ -1224,12 +1432,46 @@ class MergeSearch(object):
 
         return pd.DataFrame(data)[HEADER]
 
-    def _lookup(self, results, modalities, placement, family_scoring):
-        fallback = modalities[1] if len(modalities) == 2 else None
+    def _lookup(self, results, modalities, placement, family_scoring, mode=None):
+        secondary = modalities[1] if len(modalities) == 2 else None
         modalities[0].search(
             results, self._search_database, placement, family_scoring,
-            numba.get_num_threads(), fallback,
+            numba.get_num_threads(), secondary, mode,
         )
+
+
+@numba.njit(nogil=True, inline="always")
+def make_search_scratch(num_threads, database):
+    return SearchScratch(
+        np.zeros(
+            (num_threads, database.families.size),
+            dtype=np.int32,
+        ),
+        np.zeros(
+            (num_threads, database.hogs.size),
+            dtype=np.int32,
+        ),
+        np.zeros(
+            (num_threads, database.hogs.size),
+            dtype=np.uint16,
+        ),
+        np.zeros(
+            (num_threads, database.families.size),
+            dtype=np.uint16,
+        ),
+        np.full(
+            (num_threads, database.families.size),
+            -1,
+            dtype=np.int32,
+        ),
+        np.full(
+            (num_threads, database.families.size),
+            -1,
+            dtype=np.int32,
+        ),
+        np.zeros(num_threads, dtype=np.uint32),
+        np.zeros(num_threads, dtype=np.uint32),
+    )
 
 
 @numba.njit(parallel=True, nogil=True, cache=True)
@@ -1249,35 +1491,11 @@ def lookup_queries(
     placement,
     family_scoring,
 ):
-    scratch = SearchScratch(
-        np.zeros(
-            (lookup_config.num_threads, database.families.size),
-            dtype=np.int32,
-        ),
-        np.zeros(
-            (lookup_config.num_threads, database.hogs.size),
-            dtype=np.int32,
-        ),
-        np.zeros(
-            (lookup_config.num_threads, database.hogs.size),
-            dtype=np.uint16,
-        ),
-        np.zeros(
-            (lookup_config.num_threads, database.families.size),
-            dtype=np.uint16,
-        ),
-        np.full(
-            (lookup_config.num_threads, database.families.size),
-            -1,
-            dtype=np.int32,
-        ),
-        np.full(
-            (lookup_config.num_threads, database.families.size),
-            -1,
-            dtype=np.int32,
-        ),
-        np.zeros(lookup_config.num_threads, dtype=np.uint32),
-        np.zeros(lookup_config.num_threads, dtype=np.uint32),
+    scratch = make_search_scratch(lookup_config.num_threads, database)
+    # the sum mode keeps the HOG counts of both searches of a query
+    structure_scratch = make_search_scratch(
+        lookup_config.num_threads if lookup_config.mode == SEARCH_SUM else 0,
+        database,
     )
 
     n_iter = (
@@ -1289,8 +1507,29 @@ def lookup_queries(
     for sequence_id in numba.prange(n_iter):
         placed = False
 
+        # search both and sum the family scores
+        if lookup_config.mode == SEARCH_SUM:
+            place_sequence_sum(
+                family_results,
+                subfam_results,
+                select_from_batch(sequences, sequence_id),
+                select_from_batch(structures, sequence_id),
+                sequence_id,
+                database,
+                sequence_index,
+                sequence_family_model,
+                sequence_hog_model,
+                structure_index,
+                structure_family_model,
+                structure_hog_model,
+                placement,
+                family_scoring,
+                scratch,
+                structure_scratch,
+            )
+
         # search sequence
-        if lookup_config.mode != SEARCH_STRUCTURE:
+        elif lookup_config.mode != SEARCH_STRUCTURE:
             sequence = select_from_batch(sequences, sequence_id)
             placed = place_sequence(
                 family_results,
@@ -1307,7 +1546,10 @@ def lookup_queries(
             )
 
         # if failed and we have structure, search structure
-        if lookup_config.mode != SEARCH_SEQUENCE and not placed:
+        if (
+            lookup_config.mode == SEARCH_STRUCTURE
+            or lookup_config.mode == SEARCH_SEQUENCE_THEN_STRUCTURE
+        ) and not placed:
             structure = select_from_batch(structures, sequence_id)
             place_sequence(
                 family_results,

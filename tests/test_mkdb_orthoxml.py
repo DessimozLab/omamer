@@ -252,6 +252,53 @@ def test_search_structure_db(dataset, structure_db, tmp_path, inputs):
     assert set(df["modality"]) == {"ss" if inputs == "ss" else "seq"}
 
 
+def _search_both(dataset, structure_db, tmp_path, mode, *options):
+    _, seqs, structures = dataset
+    db_path, _ = structure_db
+    ids = sorted(seqs)
+    return _search(
+        db_path,
+        tmp_path / "{}.tsv".format(mode),
+        "--query", _write_fasta(tmp_path / "q.fa", [(x, seqs[x]) for x in ids]),
+        "--structure", _write_fasta(tmp_path / "s.fa", [(x, structures[x]) for x in ids]),
+        "--search_mode", mode,
+        *options,
+    )
+
+
+def test_search_sum_mode(dataset, structure_db, tmp_path):
+    _, seqs, _ = dataset
+    _, hogs = structure_db
+    df = _search_both(dataset, structure_db, tmp_path, "sum")
+    assert sorted(df["qseqid"]) == sorted(seqs)
+    assert set(df["modality"]) == {"seq+ss"}
+    for qseqid, hogid in zip(df["qseqid"], df["hogid"]):
+        assert hogs[qseqid].startswith(hogid), (qseqid, hogid, hogs[qseqid])
+
+
+def test_search_sum_mode_adds_family_scores(dataset, structure_db, tmp_path):
+    options = ("--family_alpha", "1", "--top_n_fams", "20", "--family_only")
+
+    def scores(mode):
+        df = _search_both(dataset, structure_db, tmp_path, mode, *options)
+        return {
+            (q, h): (p, m)
+            for q, h, p, m in zip(df["qseqid"], df["hogid"], df["family_p"], df["modality"])
+        }
+
+    seq = scores("seq")
+    ss = scores("ss")
+    summed = scores("sum")
+    assert set(summed) == set(seq) | set(ss)
+    both = set(seq) & set(ss)
+    # every query is found in its own family by both modalities
+    assert {q for q, _ in both} == set(dataset[1])
+    for key, (p, modality) in summed.items():
+        assert modality == "seq+ss"
+        expected = seq.get(key, (0.0,))[0] + ss.get(key, (0.0,))[0]
+        assert p == pytest.approx(expected, rel=1e-6), key
+
+
 @pytest.mark.parametrize(
     "structure_ids, message",
     [

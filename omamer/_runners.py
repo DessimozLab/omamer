@@ -163,6 +163,10 @@ def mkdb_oma(args):
         kmer_percentage=args.kmer_percentage,
         models=args.models,
         bbinom_options={
+            "min_distinct_by_modality": {
+                "seq": getattr(args, "seq_min_distinct", None),
+                "ss": getattr(args, "ss_min_distinct", None),
+            },
             "kappa_scale_by_modality": {
                 "seq": getattr(args, "bbinom_seq_kappa_scale", 1.0),
                 "ss": getattr(args, "bbinom_ss_kappa_scale", 1.0),
@@ -630,6 +634,10 @@ def refit_bbinom(args):
                 kappa_scale={
                     "seq": getattr(args, "seq_kappa_scale", 1.0),
                     "ss": getattr(args, "ss_kappa_scale", 1.0),
+                }[modality],
+                min_distinct={
+                    "seq": getattr(args, "seq_min_distinct", None),
+                    "ss": getattr(args, "ss_min_distinct", None),
                 }[modality],
                 # A shard fits only part of the family set, so it must not
                 # claim in the database that it trained the whole thing.

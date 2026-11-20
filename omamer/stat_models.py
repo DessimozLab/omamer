@@ -268,6 +268,9 @@ def learn_index_models(
     kappa_scale_by_modality = dict(
         bbinom_options.pop("kappa_scale_by_modality", {}) or {}
     )
+    min_distinct_by_modality = dict(
+        bbinom_options.pop("min_distinct_by_modality", {}) or {}
+    )
 
     for modality, data in modality_data.items():
         LOG.info("Learning binomial model for modality '%s'", modality)
@@ -300,6 +303,8 @@ def learn_index_models(
                 fit_options["n_values"] = modality_n_values
             if kappa_scale_by_modality.get(modality) is not None:
                 fit_options["kappa_scale"] = float(kappa_scale_by_modality[modality])
+            if min_distinct_by_modality.get(modality) is not None:
+                fit_options["min_distinct"] = int(min_distinct_by_modality[modality])
             try:
                 rows = fit_bbinom_coefficients_from_buffer(
                     db,

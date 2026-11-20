@@ -47,7 +47,7 @@ from .hierarchy import (
     is_taxon_implied,
 )
 from .sequence_buffer import SequenceBuffer
-from .kmer_mask import modality_kmer_mask
+from .kmer_mask import modality_kmer_mask, stored_min_distinct
 from .stat_models import (
     FamilyModelParameters,
     FamilyScoringParameters,
@@ -930,7 +930,12 @@ class MergeSearch(object):
                 table["buff"],
                 source,
                 cutoff,
-                modality_kmer_mask(modality, self.ki.k, self.ki.alphabet.n),
+                modality_kmer_mask(
+                    modality,
+                    self.ki.k,
+                    self.ki.alphabet.n,
+                    stored_min_distinct(self.db.db.root.Index._v_attrs, modality),
+                ),
             ),
             self._family_model(modality, family_model_policy),
             HogModelParameters(hog_probability),

@@ -224,6 +224,15 @@ def main():
     )
     for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
         mkdb_parser.add_argument(
+            "--{}_min_distinct".format(modality),
+            default=None,
+            type=int,
+            help="Ignore {} k-mers with fewer than this many distinct letters "
+            "(low complexity) in the beta-binomial training and at search; stored "
+            "in the database. 3 helped 3Di in the model audit.".format(name),
+        )
+    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+        mkdb_parser.add_argument(
             "--bbinom_{}_kappa_scale".format(modality),
             default=1.0,
             type=float,
@@ -544,6 +553,15 @@ def main():
         help="Overdispersion of the family models: per family, or pooled over "
         "all families of a modality (see mkdb --bbinom_kappa).",
     )
+    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+        refit_parser.add_argument(
+            "--{}_min_distinct".format(modality),
+            default=None,
+            type=int,
+            help="Ignore {} k-mers with fewer than this many distinct letters "
+            "(low complexity) in the beta-binomial training and at search; stored "
+            "in the database. 3 helped 3Di in the model audit.".format(name),
+        )
     for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
         refit_parser.add_argument(
             "--{}_kappa_scale".format(modality),

@@ -405,3 +405,15 @@ def test_pool_family_kappa_uses_the_median_and_the_binomial_mean():
 
     scaled = pool_family_kappa(rows, family_probability, kappa_scale=0.03)
     np.testing.assert_allclose(np.exp(scaled["kappa_coef_0"]), 0.03 * np.sqrt(10 * 1000))
+
+
+def test_min_distinct_is_stored_and_masks_the_training(tiny_build, monkeypatch):
+    from omamer.kmer_mask import stored_min_distinct
+
+    monkeypatch.delenv("OMAMER_SEQ_MIN_DISTINCT", raising=False)
+    db, buffers_path = tiny_build
+    with TrainingBuffers(buffers_path) as buffers:
+        rows = refit_modality(db, buffers, "seq", store_metadata=True, kappa="pooled", min_distinct=2, **FIT_OPTIONS)
+    # k=2 here: 2 masks the 2-mers with one letter (e.g. AA)
+    assert stored_min_distinct(db.db.root.Index._v_attrs, "seq") == 2
+    assert len(rows)

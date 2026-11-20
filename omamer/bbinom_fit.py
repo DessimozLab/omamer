@@ -1457,6 +1457,7 @@ def fit_bbinom_coefficients_from_buffer(
     store_metadata=True,
     kappa="family",
     kappa_scale=1.0,
+    min_distinct=None,
 ):
     """Fit beta-binomial coefficients from buffers retained during mkdb.
 
@@ -1495,9 +1496,19 @@ def fit_bbinom_coefficients_from_buffer(
     kmer_filter_max_df = _modality_kmer_max_df(db, modality)
     from .kmer_mask import modality_kmer_mask
 
-    kmer_mask = modality_kmer_mask(modality, db.ki.k, db.ki.alphabet.n)
+    if min_distinct is None:
+        min_distinct = int(
+            os.environ.get(
+                {"ss": "OMAMER_SS_MIN_DISTINCT", "seq": "OMAMER_SEQ_MIN_DISTINCT"}[modality], "0"
+            )
+            or 0
+        )
+    kmer_mask = modality_kmer_mask(modality, db.ki.k, db.ki.alphabet.n, min_distinct)
     if kmer_mask.size:
         LOG.info("Masking %d low-complexity %s k-mer codes", int(kmer_mask.sum()), modality)
+    if store_metadata:
+        # search applies the same mask as the training
+        db.db.root.Index._v_attrs["{}_kmer_min_distinct".format(modality)] = int(min_distinct)
     n_records = len(db.protein_table)
     n_unique = load_or_scan_unique_counts(
         sequence_buffer,

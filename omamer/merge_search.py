@@ -54,7 +54,6 @@ from .stat_models import (
     HogModelParameters,
     cumulate_counts_1fam,
     family_log_correction,
-    filter_family_candidates,
     make_family_model,
     score_family_candidates,
 )
@@ -618,10 +617,10 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 @numba.njit(nogil=True)
-def find_family_candidates(sequence, database, index, family_model, scratch):
+def find_family_candidates(sequence, database, index, scratch):
     """
     Search the k-mers of one query and keep the family candidates that pass
-    the cheap count filter and the query coverage filter, before scoring.
+    the query coverage filter, before scoring (`score_family_candidates`).
 
     Returns the candidates (unsorted), the number n of k-mers used for
     scoring and the searched k-mers (see `search_seq_kmers`).
@@ -663,12 +662,13 @@ def find_family_candidates(sequence, database, index, family_model, scratch):
     thread_fam_highloc = scratch.family_high_location[thread_id]
     thread_num_hit_fams = scratch.num_hit_families[thread_id]
 
-    # Identify families of interest. The query coverage filter (at least
-    # 25 positions between the first and the last hit) goes first: it is a
-    # few array reads per family, and it removes about three in four of the
-    # hit families before the count filter evaluates the family model for
-    # each (with the beta-binomial, a sigmoid). Both filters keep the hit
-    # order, so their order does not change the candidates.
+    # Identify families of interest: those with hits over at least 25
+    # positions of the query. The count filter (is the number of k-mers at
+    # least the expected number?) is left to `score_family_candidates`,
+    # which evaluates the family model there for its bound as well: with the
+    # beta-binomial, a sigmoid per family. Coverage removes about three in
+    # four of the hit families at the cost of a few array reads each, the
+    # count filter one in five of the rest.
     min_overlap = 25 / query_len
     covered = np.empty(thread_num_hit_fams, dtype=np.uint32)
     n_covered = 0
@@ -691,9 +691,6 @@ def find_family_candidates(sequence, database, index, family_model, scratch):
         ) / query_len
 
     n = np.int64(len(r1) - n_skipped)
-
-    # cheap filter: is # of k-mers at the expected number?
-    qres = filter_family_candidates(qres, n, family_model)
     return qres, n, kmers
 
 
@@ -714,7 +711,7 @@ def search_families(
     of a family are computed on demand (`count_family_hogs`).
     """
     (qres, n, kmers) = find_family_candidates(
-        sequence, database, index, family_model, scratch
+        sequence, database, index, scratch
     )
     if len(qres) > 0:
         qres = score_family_candidates(qres, n, family_model, family_scoring)
@@ -1113,7 +1110,6 @@ def place_sequence_hybrid(
         sequence,
         database,
         sequence_index,
-        sequence_family_model,
         scratch,
     )
     if len(candidates) > 0:

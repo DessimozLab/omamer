@@ -805,14 +805,11 @@ def beta_binomial_pmf_test(x, n, alpha, beta, scoring):
 @numba.njit(nogil=True)
 def _filter_by_significance_bound(qres, n, model, scoring):
     """
-    Filters families by probabilistic bounds on p-value of
-    the observed number of matches.
+    Filters families by the count filter (`filter_family_candidates`), then
+    by probabilistic bounds on p-value of the observed number of matches.
+    Both in one pass: the beta-binomial q of a family serves both.
     """
-    probability = model.family_probability[qres["id"]]
-    # Compute the empirical proportion of observed k-mers.
-    # We clip it for the edge cases k = n, k = 0.
     epsilon = 1e-10
-    observed_probability = np.clip(qres["count"] / n, epsilon, 1.0 - epsilon)
     keep = np.full(len(qres), True)
     packed = has_packed_bbinom(model)
     log_n = math.log(float(n)) if n > 0 else 0.0
@@ -827,35 +824,45 @@ def _filter_by_significance_bound(qres, n, model, scoring):
         else:
             is_bbinom = has_family_bbinom(family_id, model)
         if is_bbinom:
-            # For the beta-binomial, compute the first member of the tail as
-            # a bound to test significance.
-            #    P(X = k) <= P(X >= k) <= alpha
-            # we therefore test
-            #    P(X = k) <= alpha
-            #    -log P(X = k) >= -log(alpha)
+            # the count filter, as `compute_expected_counts`
             if packed:
-                (alpha, beta) = packed_bbinom_params(
-                    model.packed[family_id], n, log_n, n_q, n_kappa
-                )
+                z = packed_bbinom_z(row, n, log_n)
+                q = packed_bbinom_q(row, z, n_q)
             else:
                 n_eval = bbinom_eval_n(family_id, n, model.n_min, model.n_max)
-                alpha, beta, _ = beta_binomial_params_for_n(
+                alpha, beta, q = beta_binomial_params_for_n(
                     n_eval,
                     model.q_coef[family_id],
                     model.kappa_coef[family_id],
                     model.center[family_id],
                     model.scale[family_id],
                 )
+            if not qres["count"][i] >= q * n:
+                keep[i] = False
+                continue
+            if packed:
+                (alpha, beta) = packed_bbinom_params_q(row, z, q, n_q, n_kappa)
+            # For the beta-binomial, compute the first member of the tail as
+            # a bound to test significance.
+            #    P(X = k) <= P(X >= k) <= alpha
+            # we therefore test
+            #    P(X = k) <= alpha
+            #    -log P(X = k) >= -log(alpha)
             keep[i] = beta_binomial_pmf_test(
                 qres["count"][i], n, alpha, beta, scoring
             )
         else:
+            expected = model.family_probability[family_id]
+            if not qres["count"][i] >= expected * n:
+                keep[i] = False
+                continue
             # For the binomial model, perform the Chernoff KL-div test.
             # The Chernoff upper bound for the binomial X:
             #     P(X >= k) <= exp(-n KL_div(k/n || p))
             #
-            observed = observed_probability[i]
-            expected = probability[i]
+            # The empirical proportion of observed k-mers, clipped for the
+            # edge cases k = n, k = 0.
+            observed = min(max(qres["count"][i] / n, epsilon), 1.0 - epsilon)
             kl_divergence = (
                 observed * math.log(observed / expected)
                 + (1.0 - observed)
@@ -878,7 +885,10 @@ def score_family_candidates(
     model,
     scoring,
 ):
-    """Apply the fast bound, exact tail score, and final significance test."""
+    """
+    Apply the count filter (`filter_family_candidates`) and the fast bound,
+    exact tail score, and final significance test.
+    """
     qres = _filter_by_significance_bound(qres, n, model, scoring)
     if len(qres) == 0:
         return qres

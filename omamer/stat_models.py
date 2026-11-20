@@ -645,7 +645,7 @@ def packed_bbinom_kappa(row, z, n_q, n_kappa):
     return math.exp(log_kappa)
 
 
-@numba.njit(nogil=True)
+@numba.njit(nogil=True, cache=True)
 def _fill_constant_kappa(packed, n_q, n_kappa):
     """
     PACKED_KAPPA: kappa at z = 0 when the kappa coefficients of degree >= 1

@@ -334,8 +334,8 @@ def test_search_hybrid_mode(dataset, structure_db, tmp_path, options):
         _search(
             db_path, out, "--query", query, "--structure", structure,
             "--search_mode", mode, "--chunksize", "5",
-            # the same summed threshold in both modes (the hybrid default is stricter)
-            "--summed_alpha", "1e-6", *options,
+            # the same combination in both modes (the hybrid default discounts 3Di)
+            "--ss_weight", "1", *options,
         )
         outputs[mode] = _rows_by_query(out)
         if mode == "hybrid":

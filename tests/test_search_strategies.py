@@ -483,15 +483,27 @@ def test_sum_mode_adds_scores_and_places_with_scoring_modality(
     assert results.families["id"][0, 0] == 1
 
 
-def test_summed_neglog_alpha_defaults():
+def test_summed_threshold_and_ss_weight_defaults():
     from omamer.merge_search import (
-        HYBRID_SUMMED_NEGLOG_ALPHA, summed_neglog_alpha,
+        HYBRID_SS_WEIGHT, resolve_ss_weight, summed_neglog_alpha,
     )
-    # explicit value wins in both modes
-    assert summed_neglog_alpha(math.exp(-50), SEARCH_HYBRID) == pytest.approx(50.0)
-    assert summed_neglog_alpha(math.exp(-50), SEARCH_SUM) == pytest.approx(50.0)
-    # default: strict in the hybrid mode, the family threshold in the sum mode
-    assert summed_neglog_alpha(None, SEARCH_HYBRID) == HYBRID_SUMMED_NEGLOG_ALPHA
-    assert summed_neglog_alpha(None, SEARCH_SUM) == -1.0
+    assert summed_neglog_alpha(math.exp(-50)) == pytest.approx(50.0)
+    assert summed_neglog_alpha(None) == -1.0
     with pytest.raises(ValueError):
-        summed_neglog_alpha(0.0, SEARCH_HYBRID)
+        summed_neglog_alpha(0.0)
+    # the 3Di evidence is discounted in the hybrid mode, not in the sum mode
+    assert resolve_ss_weight(None, SEARCH_HYBRID) == HYBRID_SS_WEIGHT
+    assert resolve_ss_weight(None, SEARCH_SUM) == 1.0
+    assert resolve_ss_weight(0.5, SEARCH_HYBRID) == 0.5
+    with pytest.raises(ValueError):
+        resolve_ss_weight(0.0, SEARCH_SUM)
+
+
+def test_sum_family_scores_weights_3di():
+    seq = _family_results([(3, 10.0, 7, 0.5, 0.9), (1, 2.0, 4, 0.2, 0.8)])
+    ss = _family_results([(1, 5.0, 9, 0.7, 0.6), (5, 1.5, 3, 0.1, 0.5)])
+    by_id = {int(x["id"]): x for x in sum_family_scores(seq, ss, 0.2)}
+    assert by_id[3]["pvalue"] == 10.0
+    assert by_id[1]["pvalue"] == pytest.approx(3.0)
+    assert by_id[5]["pvalue"] == pytest.approx(0.3)
+    assert by_id[5]["count"] == 3

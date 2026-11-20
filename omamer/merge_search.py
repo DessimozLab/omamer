@@ -872,13 +872,13 @@ def place_sequence(
 
 
 @numba.njit(nogil=True)
-def sum_family_scores(seq_res, ss_res):
+def sum_family_scores(seq_res, ss_res, ss_weight=1.0):
     """
     Union of the family candidates of the two modalities, keyed by family.
 
-    The score (`pvalue`, in corrected -log units) of a family is the sum of
-    its sequence and 3Di scores; a family missing from one modality takes 0
-    from it. The other fields (count, normcount, overlap) are those of the
+    The score (`pvalue`, in corrected -log units) of a family is its sequence
+    score plus `ss_weight` times its 3Di score; a family missing from one
+    modality takes 0 from it. The other fields (count, normcount, overlap) are those of the
     sequence candidate when there is one, else of the 3Di one: the modality
     whose HOG counts are used for the placement.
     """
@@ -893,9 +893,10 @@ def sum_family_scores(seq_res, ss_res):
         family_id = ss_res["id"][i]
         j = np.searchsorted(seq_ids, family_id)
         if j < n_seq and seq_ids[j] == family_id:
-            combined["pvalue"][order[j]] += ss_res["pvalue"][i]
+            combined["pvalue"][order[j]] += ss_weight * ss_res["pvalue"][i]
         else:
             combined[n_combined] = ss_res[i]
+            combined["pvalue"][n_combined] = ss_weight * ss_res["pvalue"][i]
             n_combined += 1
     return combined[:n_combined]
 
@@ -908,31 +909,43 @@ def candidate_scoring_parameters(family_scoring):
     score is kept), so that a family weakly supported by both modalities is
     not lost.
     """
-    return FamilyScoringParameters(0.0, family_scoring.log_correction, -1.0)
+    return FamilyScoringParameters(
+        0.0, family_scoring.log_correction, -1.0, family_scoring.ss_weight
+    )
 
 
-# Default threshold (-ln) on the summed score of the hybrid mode's 3Di stage.
-# The sum of two -ln p is not a p-value, and the 3Di scores place proteins
-# without sequence homology: on the strict Metazoa benchmark (sequence pooled
-# kappa x0.3, 3Di k-mers in <= 1000 families) the sequence threshold (13.8) on
-# the sum places 36% of the negatives, 80 places 7% (sequence stage alone: 5%)
-# and keeps most of the gain of the 3Di stage.
-HYBRID_SUMMED_NEGLOG_ALPHA = 80.0
+# Default weight of the 3Di score in the hybrid mode's second stage, where a
+# family is placed when (sequence score) + HYBRID_SS_WEIGHT * (3Di score)
+# reaches the family threshold: in E-values, E_seq * E_3Di ** 0.2 <= alpha.
+# The 3Di E-values are far too optimistic for proteins that share a structure
+# without sequence homology (strict Metazoa benchmark: 3Di at E <= 1e-6 places
+# 32% of such proteins, 1.7% of reversed decoys). Discounting the 3Di evidence
+# with one weight ranked better than a separate threshold on the plain sum, at
+# every family threshold from 1e-6 to e^-30 (sequence pooled kappa x0.3, 3Di
+# k-mers in <= 1000 families).
+HYBRID_SS_WEIGHT = 0.2
 
 
-def summed_neglog_alpha(summed_alpha, mode):
+def summed_neglog_alpha(summed_alpha):
     """
     -ln of the threshold on summed scores: from `summed_alpha` when given,
-    else HYBRID_SUMMED_NEGLOG_ALPHA in the hybrid mode, else -1 (the family
-    threshold is used, see `place_summed`).
+    else -1 (the family threshold is used, see `place_summed`).
     """
-    if summed_alpha is not None:
-        if not 0.0 < summed_alpha <= 1.0:
-            raise ValueError("summed_alpha must be in the interval (0, 1]")
-        return -math.log(summed_alpha)
-    if mode == SEARCH_HYBRID:
-        return HYBRID_SUMMED_NEGLOG_ALPHA
-    return -1.0
+    if summed_alpha is None:
+        return -1.0
+    if not 0.0 < summed_alpha <= 1.0:
+        raise ValueError("summed_alpha must be in the interval (0, 1]")
+    return -math.log(summed_alpha)
+
+
+def resolve_ss_weight(ss_weight, mode):
+    """Weight of the 3Di score in summed scores: HYBRID_SS_WEIGHT in the
+    hybrid mode and 1 in the sum mode, unless given."""
+    if ss_weight is None:
+        return HYBRID_SS_WEIGHT if mode == SEARCH_HYBRID else 1.0
+    if not ss_weight > 0.0:
+        raise ValueError("ss_weight must be positive")
+    return float(ss_weight)
 
 
 @numba.njit(nogil=True)
@@ -969,7 +982,7 @@ def place_summed(
         candidate_scoring_parameters(family_scoring),
         scratch,
     )
-    qres = sum_family_scores(seq_res, ss_res)
+    qres = sum_family_scores(seq_res, ss_res, family_scoring.ss_weight)
 
     # the significance filter of score_family_candidates, on the sum (all
     # summed scores are positive, as each modality keeps positive ones only)
@@ -1419,11 +1432,13 @@ class MergeSearch(object):
         family_model="auto",
         family_sorting="auto",
         summed_alpha=None,
+        ss_weight=None,
     ):
         """
         summed_alpha: threshold on the summed sequence + 3Di scores (sum mode,
-        and the 3Di stage of the hybrid mode); None uses alpha in the sum mode
-        and HYBRID_SUMMED_NEGLOG_ALPHA in the hybrid mode.
+        and the 3Di stage of the hybrid mode); None uses alpha.
+        ss_weight: weight of the 3Di score in these sums; None uses
+        HYBRID_SS_WEIGHT in the hybrid mode and 1 in the sum mode.
         family_sorting 'auto' ranks families by normcount, except the summed
         scores (sum mode, and the fallback of the hybrid mode), ranked by
         the summed score ('pvalue').
@@ -1458,7 +1473,8 @@ class MergeSearch(object):
         family_scoring = FamilyScoringParameters(
             -math.log(alpha),
             family_log_correction(family_correction, self.fam_tab.size),
-            summed_neglog_alpha(summed_alpha, mode),
+            summed_neglog_alpha(summed_alpha),
+            resolve_ss_weight(ss_weight, mode),
         )
 
         results = make_search_results(max(len(seqs), len(struct_seqs)), top_n_fams)

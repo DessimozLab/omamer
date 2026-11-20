@@ -369,6 +369,7 @@ def search(args):
                 top_n_fams=args.top_n_fams,
                 alpha=args.family_alpha,
                 summed_alpha=getattr(args, "summed_alpha", None),
+                ss_weight=getattr(args, "ss_weight", None),
                 family_correction=args.family_correction,
                 sst=args.threshold,
                 family_only=args.family_only,

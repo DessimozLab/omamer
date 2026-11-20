@@ -386,12 +386,21 @@ def main():
         "--summed_alpha",
         type=float,
         default=None,
-        help="Significance threshold for the summed sequence + 3Di scores of "
-        "--search_mode sum and of the 3Di stage of --search_mode hybrid (same "
-        "units and correction as --family_alpha). Default: e^-80 in the hybrid "
-        "mode, --family_alpha in the sum mode. The summed score is not a "
-        "calibrated p-value: 3Di also places proteins without sequence "
-        "homology, so the threshold must be much stricter than --family_alpha.",
+        help="Advanced: a separate threshold for the combined sequence + 3Di "
+        "scores of --search_mode sum and of the second stage of --search_mode "
+        "hybrid. Default: --family_alpha.",
+    )
+    search_parser.add_argument(
+        "--ss_weight",
+        type=float,
+        default=None,
+        help="Weight w of the 3Di evidence when it is combined with the "
+        "sequence (--search_mode hybrid and sum): a family is placed when "
+        "E_seq * E_3Di^w <= --family_alpha, with E the per-query E-values of "
+        "the family. With w = 0.2, a 3Di E-value of 1e-30 counts as much as a "
+        "sequence E-value of 1e-6. Default: 0.2 in the hybrid mode (3Di "
+        "E-values are too optimistic for proteins that share a structure "
+        "without sequence homology), 1 in the sum mode.",
     )
     search_parser.add_argument(
         "--family_correction",

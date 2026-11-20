@@ -1,6 +1,47 @@
 
 # Change log
 
+## Version 2.2.0
+
+### Changed
+
+- Support numpy 2 (numpy >= 1.26 and pytables >= 3.10.1 are now required)
+- Python >= 3.10 is now required (support for Python 3.8 and 3.9 is dropped,
+  as pytables >= 3.10 no longer supports them)
+- `mkdb` stores the HOGs of a family level in a fixed order, so repeated builds
+  of the same input produce identical databases
+- `search --include_extant_genes` no longer reloads the database tables for
+  every result row, which made it very slow on large databases
+- CI runs the test suite with Python 3.12 and 3.14 and with numpy 1 and 2,
+  including search results checked against golden files
+- `mkdb --orthoxml` adds the taxonomic levels that a HOG spans implicitly, as
+  pyoma does for the OMA browser. A subHOG now starts at the level of the
+  duplication that created it, and nested duplications get their intermediate
+  HOG, so FastOMA output gives the same database as the OMA browser build
+- The species tree is read with Bio.Phylo instead of ete3, so ete3 (and
+  `six` and `legacy-cgi`, which it needed) is no longer a dependency. Numeric
+  internal node names (e.g. NCBI taxon ids) and quoted names are kept as they
+  are; the resulting databases are the same as before.
+- `mkdb --orthoxml` reads the species tree from the `<taxonomy>` of the
+  OrthoXML file (OrthoXML >= 0.5) if `--species_tree` is not given
+
+### Fixed
+
+- `mkdb` stops with an error if taxon names below the root taxon are not
+  unique or a taxon has no name (#52). Duplicate names were merged into one
+  taxon, or made a taxon its own parent, so that `mkdb` looped forever.
+  Names may still repeat outside the root taxon, e.g. in an NCBI taxonomy.
+- `mkdb` no longer runs out of memory on HOGs with a duplication nested
+  directly in another duplication (e.g. FastOMA output), where an intermediate
+  HOG such as `HOG:1.1a` is missing for `HOG:1.1a.1a`. Such HOGs were made
+  their own parent, so the k-mer table computation looped forever.
+- `mkdb --orthoxml` stores the NCBI taxon ids of the OrthoXML species
+- `mkdb --reduced_alphabet` built a wrong k-mer table: k-mers that are equal
+  in the reduced alphabet, but not in the original sequences (e.g. `AS` and
+  `AT`), were stored as several runs, with duplicate and too specific HOG
+  entries. Searches with such databases placed many queries in the wrong
+  family. Databases built with `--reduced_alphabet` must be rebuilt.
+
 ## Version 2.1.2
 
 ### Fixed

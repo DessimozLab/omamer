@@ -191,11 +191,10 @@ class Database(object):
         self._check_open_writeable()
 
         def _parse_stree(stree_path, roottax):
-            from ete3 import Tree
+            from .species_tree import load_species_tree
 
             LOG.debug("parsing species tree {}".format(stree_path))
-            stree = Tree(stree_path, format=1, quoted_node_names=True)
-            pruned_stree = [x for x in stree.traverse() if x.name == roottax][0]
+            stree = load_species_tree(stree_path).subtree(roottax)
 
             tax2parent = {}
             tax2children = {}
@@ -203,19 +202,15 @@ class Database(object):
             species = set()
             nspecies_below = {}
 
-            for tl in pruned_stree.traverse():
-                tax = tl.name.encode("ascii")
-                tax2parent[tax] = (
-                    tl.up.name.encode("ascii") if tl.up else "root".encode("ascii")
-                )
-                tax2children[tax] = [x.name.encode("ascii") for x in tl.children]
-                tax2level[tax] = tl.get_distance(stree)
-                if tl.is_leaf():
-                    sp_name = tl.name.encode("ascii")
-                    species.add(sp_name)
-                    nspecies_below[sp_name] = 1
-                else:
-                    nspecies_below[tl.name.encode("ascii")] = sum(1 for _ in tl.iter_leaves())
+            for name, parent, children, level, is_species, nspecies in stree.taxa():
+                tax = name.encode("ascii")
+                # the parent of the root taxon is not used, it gets ParentOff -1
+                tax2parent[tax] = (parent if parent is not None else "root").encode("ascii")
+                tax2children[tax] = [x.encode("ascii") for x in children]
+                tax2level[tax] = level
+                if is_species:
+                    species.add(tax)
+                nspecies_below[tax] = nspecies
 
             return (tax2parent, tax2children, tax2level, species, nspecies_below)
 
@@ -398,7 +393,7 @@ class Database(object):
         for fam_id, hogs in sorted(fam2hogs.items(), key=lambda x: int(x[0])):
             ### hogs
             # sort by level
-            hogs = sorted(hogs, key=lambda x: len(x.split(b".")))
+            hogs = sorted(hogs, key=lambda x: (len(x.split(b".")), x))
             hog_num = len(hogs)
 
             # parents
@@ -464,8 +459,8 @@ class Database(object):
                     child_hogs_numbers[i],
                     child_prots_offsets[i],
                     child_prots_numbers[i],
-                    -1,
-                    -1,
+                    0,
+                    0,
                     0,
                     oma_hog_size,
                     oma_hog_completeness,
@@ -609,18 +604,20 @@ class Database(object):
 
     @staticmethod
     def find_parent_hog(hog_id, hogs):
-        if isinstance(hog_id, str):
-            split_hog = hog_id.split(".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, ".".join(split_hog[:-1]))
-            return parent_hog
-        elif isinstance(hog_id, bytes):
-            split_hog = hog_id.split(b".")
-            parent_hog = -1
-            if len(split_hog) > 1:
-                parent_hog = np.searchsorted(hogs, b".".join(split_hog[:-1]))
-            return parent_hog
+        """
+        Offset in the sorted array hogs of the closest ancestor of hog_id, or -1.
+
+        Intermediate HOGs can be missing, e.g. for a duplication nested directly
+        in another duplication HOG:1.1a.1a exists but HOG:1.1a does not.
+        """
+        sep = "." if isinstance(hog_id, str) else b"."
+        split_hog = hog_id.split(sep)
+        for i in range(len(split_hog) - 1, 0, -1):
+            parent_id = sep.join(split_hog[:i])
+            parent_hog = np.searchsorted(hogs, parent_id)
+            if parent_hog < len(hogs) and hogs[parent_hog] == parent_id:
+                return parent_hog
+        return -1
 
     def add_median_seqlen_col(self):
         """
@@ -1069,8 +1066,15 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.oxml_path = oxml_path
         self.hog_parser = OrthoxmlParser(oxml_path)
 
-    def parse_oxml(self, nspecies_below):
-        from .orthoxml_parser import is_orthologGroup_node
+    def parse_oxml(self, nspecies_below, stree_path):
+        from .orthoxml_parser import TaxonomyLevels, is_orthologGroup_node
+        from .species_tree import load_species_tree
+
+        # the whole tree, HOGs above the root taxon are only filtered later
+        taxonomy = TaxonomyLevels(load_species_tree(stree_path).parents())
+
+        def gene_species(gene_id):
+            return self.hog_parser.species.get_species(gene_id).name
 
         def generate_hog_tab(hog):
             # this is more memory intensive (we cache the results)
@@ -1143,6 +1147,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         entries = []
         LOG.debug("loading hog structure and membership from orthoxml")
         for hog in tqdm(self.hog_parser.iter_hogs(auto_clean=True), desc="Parsing HOGs"):
+            # same HOG levels as in the OMA browser
+            hog.insert_missing_levels(taxonomy, gene_species)
             hog_data = list(filter(lambda x: x is not None, generate_hog_tab(hog)))
             gene_data = list(generate_prot_tab(hog))
             hog_data += list(generate_hogs_for_prot(hog, gene_data))
@@ -1182,7 +1188,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         self.add_taxid_col()
 
         LOG.debug("build hog_table from orthoxml")
-        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below)
+        (hog_tab, ent_tab) = self.parse_oxml(nspecies_below, stree_path)
 
         LOG.debug("select and strip OMA HOGs")
         (
@@ -1381,8 +1387,9 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         taxid_column = []
         i = -100
         for tax_name in self._db_Taxonomy.col("ID"):
-            sp = self.hog_parser.species[tax_name]
-            if sp is not None and hasattr(sp, "NCBITaxID"):
+            sp = self.hog_parser.species[tax_name.decode("ascii")]
+            # NCBITaxId="0" means unknown, e.g. in FastOMA output
+            if sp is not None and sp.NCBITaxID > 0:
                 taxid_column.append(sp.NCBITaxID)
             else:
                 taxid_column.append(i)

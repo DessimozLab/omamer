@@ -34,18 +34,20 @@ with open("{:s}/__init__.py".format(name), "rt") as fp:
 requirements = [
     "alive_progress",
     "biopython",
-    "ete3",
     "lxml",
     "numba",
-    "numpy<2",     # pytables has no numpy2 compatible version yet
-    "pandas>2.0.0",
+    "numpy>=1.26",
+    "pandas>2.0.0,<3",
     "property_manager",
     "Rmath4",
     "scipy",
-    "tables",
+    "tables>=3.10.1",  # first release supporting numpy 2
     "tqdm",
 ]
 extra_requirements = {"build": ["pysais"]}
+
+with open("README.md", "rt", encoding="utf-8") as fp:
+    long_desc = fp.read()
 
 desc = "OMAmer - tree-driven and alignment-free protein assignment to sub-families"
 
@@ -53,13 +55,15 @@ setup(
     name=name,
     version=__version__,
     author="Victor Rossier and Alex Warwick Vesztrocy",
-    email="alex@warwickvesztrocy.co.uk",
+    author_email="alex@warwickvesztrocy.co.uk",
     url="https://github.com/DessimozLab/omamer",
     description=desc,
+    long_description=long_desc,
+    long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=requirements,
     extras_require=extra_requirements,
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     license="LGPLv3",
     #scripts=["bin/omamer"],
     entry_points={'console_scripts': ['omamer = omamer.main:main']}

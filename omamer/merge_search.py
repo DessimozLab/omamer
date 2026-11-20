@@ -618,20 +618,6 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 @numba.njit(nogil=True)
-def filter_by_overlap(qres, query_len, fam_highloc, fam_lowloc, k):
-    """
-    Filters families by sequence coverage.
-    """
-    for i in range(len(qres)):
-        family_id = qres["id"][i]
-        qres["overlap"][i] = (
-            fam_highloc[family_id] - fam_lowloc[family_id] + k
-        ) / query_len
-
-    return qres[qres["overlap"] >= (25 / query_len)]
-
-
-@numba.njit(nogil=True)
 def find_family_candidates(sequence, database, index, family_model, scratch):
     """
     Search the k-mers of one query and keep the family candidates that pass
@@ -677,27 +663,37 @@ def find_family_candidates(sequence, database, index, family_model, scratch):
     thread_fam_highloc = scratch.family_high_location[thread_id]
     thread_num_hit_fams = scratch.num_hit_families[thread_id]
 
-    # Identify families of interest
-    idx = thread_hit_fams[:thread_num_hit_fams]
-    qres = init_query_family_results(len(idx))
+    # Identify families of interest. The query coverage filter (at least
+    # 25 positions between the first and the last hit) goes first: it is a
+    # few array reads per family, and it removes about three in four of the
+    # hit families before the count filter evaluates the family model for
+    # each (with the beta-binomial, a sigmoid). Both filters keep the hit
+    # order, so their order does not change the candidates.
+    min_overlap = 25 / query_len
+    covered = np.empty(thread_num_hit_fams, dtype=np.uint32)
+    n_covered = 0
+    for i in range(thread_num_hit_fams):
+        family_id = thread_hit_fams[i]
+        overlap = (
+            thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k
+        ) / query_len
+        if overlap >= min_overlap:
+            covered[n_covered] = family_id
+            n_covered += 1
+    idx = covered[:n_covered]
+    qres = init_query_family_results(n_covered)
     qres["id"][:] = idx
     qres["count"][:] = thread_fam_counts[idx]
+    for i in range(n_covered):
+        family_id = idx[i]
+        qres["overlap"][i] = (
+            thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k
+        ) / query_len
 
     n = np.int64(len(r1) - n_skipped)
 
     # cheap filter: is # of k-mers at the expected number?
     qres = filter_family_candidates(qres, n, family_model)
-    if len(qres) == 0:
-        return qres, n, kmers
-
-    # filter out by demanding at least 0.25x query coverage
-    qres = filter_by_overlap(
-        qres,
-        query_len,
-        thread_fam_highloc,
-        thread_fam_lowloc,
-        k,
-    )
     return qres, n, kmers
 
 

@@ -252,6 +252,118 @@ def test_search_structure_db(dataset, structure_db, tmp_path, inputs):
     assert set(df["modality"]) == {"ss" if inputs == "ss" else "seq"}
 
 
+def _search_both(dataset, structure_db, tmp_path, mode, *options):
+    _, seqs, structures = dataset
+    db_path, _ = structure_db
+    ids = sorted(seqs)
+    return _search(
+        db_path,
+        tmp_path / "{}.tsv".format(mode),
+        "--query", _write_fasta(tmp_path / "q.fa", [(x, seqs[x]) for x in ids]),
+        "--structure", _write_fasta(tmp_path / "s.fa", [(x, structures[x]) for x in ids]),
+        "--search_mode", mode,
+        *options,
+    )
+
+
+def test_search_sum_mode(dataset, structure_db, tmp_path):
+    _, seqs, _ = dataset
+    _, hogs = structure_db
+    df = _search_both(dataset, structure_db, tmp_path, "sum")
+    assert sorted(df["qseqid"]) == sorted(seqs)
+    assert set(df["modality"]) == {"seq+ss"}
+    for qseqid, hogid in zip(df["qseqid"], df["hogid"]):
+        assert hogs[qseqid].startswith(hogid), (qseqid, hogid, hogs[qseqid])
+
+
+def test_search_sum_mode_adds_family_scores(dataset, structure_db, tmp_path):
+    options = ("--family_alpha", "1", "--top_n_fams", "20", "--family_only")
+
+    def scores(mode):
+        df = _search_both(dataset, structure_db, tmp_path, mode, *options)
+        return {
+            (q, h): (p, m)
+            for q, h, p, m in zip(df["qseqid"], df["hogid"], df["family_p"], df["modality"])
+        }
+
+    seq = scores("seq")
+    ss = scores("ss")
+    summed = scores("sum")
+    assert set(summed) == set(seq) | set(ss)
+    both = set(seq) & set(ss)
+    # every query is found in its own family by both modalities
+    assert {q for q, _ in both} == set(dataset[1])
+    for key, (p, modality) in summed.items():
+        assert modality == "seq+ss"
+        expected = seq.get(key, (0.0,))[0] + ss.get(key, (0.0,))[0]
+        assert p == pytest.approx(expected, rel=1e-6), key
+
+
+def _rows_by_query(path):
+    """The result lines of a search output, grouped by query."""
+    rows = {}
+    with open(path) as fp:
+        lines = [x for x in fp if not x.startswith("!")]
+    for line in lines[1:]:
+        rows.setdefault(line.split("\t")[0], []).append(line)
+    return lines[0], rows
+
+
+@pytest.mark.parametrize(
+    "options",
+    [(), ("--top_n_fams", "3"), ("--family_only",), ("--family_sorting", "pvalue")],
+)
+def test_search_hybrid_mode(dataset, structure_db, tmp_path, options):
+    """hybrid = seq for the queries with a significant sequence family, sum otherwise."""
+    _, seqs, structures = dataset
+    db_path, _ = structure_db
+    rng = np.random.default_rng(11)
+    ids = sorted(seqs)
+    # each protein with its own sequence (a significant sequence family) and
+    # with a random sequence (none, but the 3Di finds the family), and a
+    # query with neither
+    records = [(x, seqs[x], structures[x]) for x in ids]
+    records += [(x + "_r", _random_seq(rng), structures[x]) for x in ids]
+    records += [("none", _random_seq(rng), _random_seq(rng))]
+    query = _write_fasta(tmp_path / "q.fa", [(x, q) for x, q, _ in records])
+    structure = _write_fasta(tmp_path / "s.fa", [(x, s) for x, _, s in records])
+
+    outputs = {}
+    for mode in ("seq", "sum", "hybrid"):
+        out = tmp_path / "{}.tsv".format(mode)
+        _search(
+            db_path, out, "--query", query, "--structure", structure,
+            "--search_mode", mode, "--chunksize", "5", *options,
+        )
+        outputs[mode] = _rows_by_query(out)
+        if mode == "hybrid":
+            sorting = [x for x in open(out) if x.startswith("!family-sorting")]
+    (header, seq), (_, summed), (hybrid_header, hybrid) = (
+        outputs["seq"], outputs["sum"], outputs["hybrid"]
+    )
+    assert header == hybrid_header
+    assert list(hybrid) == [x for x, _, _ in records]
+
+    modality = header.rstrip("\n").split("\t").index("modality")
+    significant = {
+        x for x, rows in seq.items() if rows[0].split("\t")[modality] == "seq"
+    }
+    assert significant == set(ids)
+    for qseqid, rows in hybrid.items():
+        expected = seq if qseqid in significant else summed
+        assert rows == expected[qseqid], qseqid
+        assert {x.split("\t")[modality] for x in rows} <= (
+            {"seq"} if qseqid in significant else {"seq+ss", "N/A"}
+        )
+    # the 3Di finds the family of the queries with a random sequence
+    assert all(hybrid[x + "_r"][0].split("\t")[modality] == "seq+ss" for x in ids)
+
+    if "--family_sorting" in options:
+        assert sorting == ["!family-sorting: pvalue\n"]
+    else:
+        assert sorting == ["!family-sorting: seq:normcount,seq+ss:pvalue\n"]
+
+
 @pytest.mark.parametrize(
     "structure_ids, message",
     [

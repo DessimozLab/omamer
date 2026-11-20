@@ -5,21 +5,26 @@ import numpy as np
 import pytest
 
 from omamer.alphabets import Alphabet, get_transform
-from omamer.family_sort import FAMILY_SORT_NORMCOUNT
+from omamer.family_sort import FAMILY_SORT_NORMCOUNT, FAMILY_SORT_PVALUE
 from omamer.merge_search import (
+    SEARCH_HYBRID,
     SEARCH_SEQUENCE,
     SEARCH_SEQUENCE_THEN_STRUCTURE,
     SEARCH_STRUCTURE,
+    SEARCH_SUM,
     MergeSearch,
     PlacementConfig,
-    SearchDatabase,
     SearchModality,
     SequenceBatch,
+    default_family_sorting,
+    init_query_family_results,
     lookup_queries,
     make_kmer_index,
+    make_search_database,
     make_search_results,
     place_sequence,
     resolve_search_mode,
+    sum_family_scores,
 )
 from omamer.stat_models import (
     FamilyModel,
@@ -39,6 +44,8 @@ from omamer.stat_models import (
         ("seq", True, True, SEARCH_SEQUENCE),
         ("ss", True, True, SEARCH_STRUCTURE),
         ("sqs", True, True, SEARCH_SEQUENCE_THEN_STRUCTURE),
+        ("sum", True, True, SEARCH_SUM),
+        ("hybrid", True, True, SEARCH_HYBRID),
     ],
 )
 def test_resolve_search_mode(
@@ -53,6 +60,17 @@ def test_resolve_search_mode(
 def test_resolve_search_mode_rejects_unavailable_input():
     with pytest.raises(ValueError, match="requires matching"):
         resolve_search_mode("ss", True, False)
+    with pytest.raises(ValueError, match="requires matching"):
+        resolve_search_mode("sum", True, False)
+    with pytest.raises(ValueError, match="requires matching"):
+        resolve_search_mode("hybrid", False, True)
+
+
+def test_default_family_sorting():
+    assert default_family_sorting("auto", SEARCH_SUM) == "pvalue"
+    assert default_family_sorting("auto", SEARCH_SEQUENCE) == "normcount"
+    assert default_family_sorting("auto", SEARCH_SEQUENCE_THEN_STRUCTURE) == "normcount"
+    assert default_family_sorting("normcount", SEARCH_SUM) == "normcount"
 
 
 def test_resolve_family_model():
@@ -89,7 +107,7 @@ def test_auto_model_reports_all_invalid_beta_binomial_fallback(caplog):
 @pytest.fixture
 def search_data():
     alphabet = Alphabet(21)
-    database = SearchDatabase(
+    database = make_search_database(
         get_transform(2, alphabet.DIGITS_AA),
         2,
         alphabet.DIGITS_AA_LOOKUP,
@@ -332,3 +350,116 @@ def test_index_infers_beta_binomial_model_for_legacy_database(tmp_path):
         handle.create_array(group, "FamilyBBinomValid", np.array([True]))
         index = Index(SimpleNamespace(db=handle))
         assert index.models == ("binomial", "beta-binomial")
+
+
+def _family_results(rows):
+    qres = init_query_family_results(len(rows))
+    for i, row in enumerate(rows):
+        for field, value in zip(("id", "pvalue", "count", "normcount", "overlap"), row):
+            qres[field][i] = value
+    return qres
+
+
+def test_sum_family_scores_unions_families():
+    seq = _family_results([(3, 10.0, 7, 0.5, 0.9), (1, 2.0, 4, 0.2, 0.8)])
+    ss = _family_results([(1, 5.0, 9, 0.7, 0.6), (5, 1.5, 3, 0.1, 0.5)])
+    combined = sum_family_scores(seq, ss)
+    by_id = {int(x["id"]): x for x in combined}
+    assert sorted(by_id) == [1, 3, 5]
+    assert by_id[3]["pvalue"] == 10.0
+    assert by_id[1]["pvalue"] == 7.0
+    assert by_id[5]["pvalue"] == 1.5
+    # the other fields come from the sequence when it has the family
+    assert by_id[1]["count"] == 4 and by_id[1]["overlap"] == 0.8
+    assert by_id[5]["count"] == 3 and by_id[5]["normcount"] == 0.1
+    assert len(sum_family_scores(seq[:0], ss[:0])) == 0
+    np.testing.assert_array_equal(sum_family_scores(seq[:0], ss), ss)
+
+
+@pytest.mark.parametrize("family_only", [True, False])
+@pytest.mark.parametrize("threads", [1, 2])
+def test_sum_mode_adds_scores_and_places_with_scoring_modality(
+    search_data, family_only, threads
+):
+    data = search_data
+    sequences = [GOOD_QUERY, "X" * 40, GOOD_QUERY, ""]
+    structures = [GOOD_QUERY, GOOD_QUERY, "X" * 40, ""]
+    # the sequence index hits family 1 (HOG 2), the structure one family 2
+    sequence_search = SearchModality(
+        query_batch(sequences), data.sequence_index, data.model, data.hog_model
+    )
+    structure_search = SearchModality(
+        query_batch(structures), data.structure_index, data.model, data.hog_model
+    )
+    search = SimpleNamespace(_search_database=data.database)
+    placement = PlacementConfig(20, 0.1, family_only, FAMILY_SORT_PVALUE)
+    scoring = FamilyScoringParameters(0.0, 0.0)
+
+    def run(modalities, mode):
+        results = make_search_results(len(sequences), 20)
+        previous_threads = numba.get_num_threads()
+        numba.set_num_threads(threads)
+        try:
+            MergeSearch._lookup(search, results, modalities, placement, scoring, mode)
+        finally:
+            numba.set_num_threads(previous_threads)
+        return results
+
+    seq_only = run((sequence_search,), SEARCH_SEQUENCE)
+    ss_only = run((structure_search,), SEARCH_STRUCTURE)
+    summed = run((sequence_search, structure_search), SEARCH_SUM)
+    fam = summed.families
+    sub = summed.subfamilies
+    seq_hog, ss_hog = (1, 3) if family_only else (2, 3)
+
+    # query 0: both families, each from one modality
+    assert sorted(fam["id"][0, :2]) == [1, 2]
+    assert np.all(fam["modality"][0, :2] == SEARCH_SUM)
+    for rank in range(2):
+        if fam["id"][0, rank] == 1:
+            assert fam["pvalue"][0, rank] == seq_only.families["pvalue"][0, 0]
+            assert sub["id"][0, rank] == seq_hog
+        else:
+            assert fam["pvalue"][0, rank] == ss_only.families["pvalue"][0, 0]
+            assert sub["id"][0, rank] == ss_hog
+    # queries 1, 2: a single usable modality; query 3: nothing
+    assert fam["id"][1, 0] == 2 and sub["id"][1, 0] == ss_hog
+    assert fam["id"][2, 0] == 1 and sub["id"][2, 0] == seq_hog
+    assert not np.any(fam["id"][1:, 1:])
+    assert fam["id"][3, 0] == 0 and fam["modality"][3, 0] == 0
+
+    # hybrid: the sequence results for the queries with a significant
+    # sequence family (0, 2), the summed ones for the others (1, 3)
+    hybrid = run((sequence_search, structure_search), SEARCH_HYBRID)
+    for query, expected in ((0, seq_only), (1, summed), (2, seq_only), (3, summed)):
+        np.testing.assert_array_equal(
+            hybrid.families[query], expected.families[query]
+        )
+        np.testing.assert_array_equal(
+            hybrid.subfamilies[query], expected.subfamilies[query]
+        )
+    assert hybrid.families["modality"][0, 0] == SEARCH_SEQUENCE
+    assert hybrid.families["modality"][1, 0] == SEARCH_SUM
+
+    # the same family in both modalities: the scores add up
+    both = run((sequence_search, sequence_search), SEARCH_SUM)
+    assert both.families["id"][0, 0] == 1
+    np.testing.assert_allclose(
+        both.families["pvalue"][0, 0], 2 * seq_only.families["pvalue"][0, 0]
+    )
+    assert both.subfamilies["id"][0, 0] == seq_hog
+
+    # the threshold applies to the sum: neither modality alone passes
+    single = seq_only.families["pvalue"][0, 0]
+    strict = FamilyScoringParameters(1.5 * single, 0.0)
+    results = make_search_results(len(sequences), 20)
+    MergeSearch._lookup(
+        search, results, (sequence_search, sequence_search), placement, strict,
+        SEARCH_SUM,
+    )
+    assert results.families["id"][0, 0] == 1
+    results = make_search_results(len(sequences), 20)
+    MergeSearch._lookup(
+        search, results, (sequence_search,), placement, strict, SEARCH_SEQUENCE
+    )
+    assert results.families["id"][0, 0] == 0

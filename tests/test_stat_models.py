@@ -158,3 +158,46 @@ def test_family_candidate_operations_dispatch_and_fallback():
     assert score_family_candidates.nopython_signatures
     assert filter_family_candidates.targetoptions["nogil"]
     assert score_family_candidates.targetoptions["nogil"]
+
+
+@pytest.mark.parametrize("n_q, n_kappa", [(3, 2), (1, 1), (6, 5)])
+def test_packed_beta_binomial_model_is_bit_identical(n_q, n_kappa):
+    """The packed coefficient rows give the same floats as the arrays."""
+    rng = np.random.default_rng(5)
+    n_families = 300
+    valid = rng.random(n_families) < 0.8
+    scale = rng.uniform(0.5, 2.0, n_families)
+    scale[:5] = 0.0  # disabled fits
+    n_min = rng.integers(5, 60, n_families).astype(np.uint32)
+    n_max = (n_min + rng.integers(0, 400, n_families)).astype(np.uint32)
+    n_max[5:20] = 0  # no clamp
+    model = make_family_model(
+        "beta-binomial",
+        rng.uniform(1e-4, 0.05, n_families),
+        rng.normal(-3.0, 0.3, (n_families, n_q)) / np.arange(1, n_q + 1),
+        rng.normal(3.0, 0.3, (n_families, n_kappa)) / np.arange(1, n_kappa + 1),
+        rng.uniform(3.0, 6.0, n_families),
+        scale,
+        valid,
+        n_min,
+        n_max,
+    )
+    assert model.packed.shape[0] == n_families
+    unpacked = model._replace(packed=np.empty((0, 0), dtype=np.float64))
+    qres = np.zeros(n_families, dtype=QUERY_RESULT_DTYPE)
+    qres["id"] = rng.permutation(n_families)
+    for n in (1, 7, 40, 150, 1000):
+        qres["count"] = rng.integers(0, n + 1, n_families)
+        for scoring in (
+            FamilyScoringParameters(0.0, 0.0),
+            FamilyScoringParameters(-np.log(1e-6), np.log(n_families)),
+        ):
+            for search_model in (model, unpacked):
+                filtered = filter_family_candidates(qres.copy(), n, search_model)
+                scored = score_family_candidates(
+                    filtered.copy(), n, search_model, scoring
+                )
+                if search_model is model:
+                    expected = (filtered, scored)
+            assert filtered.tobytes() == expected[0].tobytes()
+            assert scored.tobytes() == expected[1].tobytes()

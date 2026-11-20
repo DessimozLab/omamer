@@ -1176,7 +1176,7 @@ def fit_family_bbinom_from_hist(
     return row
 
 
-def pool_family_kappa(rows, family_probability, modality="seq", kmer_percentage=100.0):
+def pool_family_kappa(rows, family_probability, modality="seq", kmer_percentage=100.0, kappa_scale=1.0):
     """
     Give every family the same overdispersion: the median kappa of the valid
     fits (which must have been fitted with a kappa that does not depend on n).
@@ -1187,6 +1187,10 @@ def pool_family_kappa(rows, family_probability, modality="seq", kmer_percentage=
     the overdispersion of the null and removes the scatter. Families without a
     valid fit get the binomial family probability as their mean, so that every
     family uses the same model.
+
+    kappa_scale multiplies the pooled kappa. In the model audit a much smaller
+    kappa than the median fit ranked sequence queries better (x0.03 on Primates
+    and Metazoa); for 3Di the median was about right.
     """
     n_families = int(len(family_probability))
     rows = rows.copy() if rows is not None else pd.DataFrame()
@@ -1197,7 +1201,9 @@ def pool_family_kappa(rows, family_probability, modality="seq", kmer_percentage=
     )
     if not valid.any():
         raise InsufficientTrainingData("No valid fit to pool the overdispersion from")
-    log_kappa = float(np.median(rows.loc[valid, "kappa_coef_0"]))
+    if not kappa_scale > 0:
+        raise ValueError("kappa_scale must be positive, got {!r}".format(kappa_scale))
+    log_kappa = float(np.median(rows.loc[valid, "kappa_coef_0"])) + math.log(kappa_scale)
 
     p = np.clip(np.asarray(family_probability, dtype=np.float64), 1e-12, 1 - 1e-12)
     logit_p = np.log(p / (1 - p))
@@ -1450,6 +1456,7 @@ def fit_bbinom_coefficients_from_buffer(
     n_counts_cache=None,
     store_metadata=True,
     kappa="family",
+    kappa_scale=1.0,
 ):
     """Fit beta-binomial coefficients from buffers retained during mkdb.
 
@@ -1561,9 +1568,11 @@ def fit_bbinom_coefficients_from_buffer(
             _modality_family_probability(db, modality),
             modality=modality,
             kmer_percentage=db.ki.kmer_percentage,
+            kappa_scale=kappa_scale,
         )
         if store_metadata:
             attrs = db.db.root.Index._v_attrs
+            attrs["{}_bbinom_kappa_scale".format(modality)] = float(kappa_scale)
             attrs["{}_bbinom_kappa".format(modality)] = "pooled"
             attrs["{}_bbinom_pooled_kappa".format(modality)] = float(
                 np.exp(rows["kappa_coef_0"].iloc[0])

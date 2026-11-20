@@ -402,3 +402,6 @@ def test_pool_family_kappa_uses_the_median_and_the_binomial_mean():
 
     with pytest.raises(InsufficientTrainingData):
         pool_family_kappa(rows.assign(fit_valid=False), family_probability)
+
+    scaled = pool_family_kappa(rows, family_probability, kappa_scale=0.03)
+    np.testing.assert_allclose(np.exp(scaled["kappa_coef_0"]), 0.03 * np.sqrt(10 * 1000))

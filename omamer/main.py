@@ -222,6 +222,14 @@ def main():
         "('family'), or one value for all families of a modality ('pooled': the "
         "median of per-family fits with a kappa independent of the query length).",
     )
+    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+        mkdb_parser.add_argument(
+            "--bbinom_{}_kappa_scale".format(modality),
+            default=1.0,
+            type=float,
+            help="With --bbinom_kappa pooled: multiply the pooled {} kappa by this "
+            "factor.".format(name),
+        )
     mkdb_parser.add_argument(
         "--bbinom_min_nonzero_queries",
         default=20,
@@ -536,6 +544,14 @@ def main():
         help="Overdispersion of the family models: per family, or pooled over "
         "all families of a modality (see mkdb --bbinom_kappa).",
     )
+    for modality, name in (("seq", "amino-acid"), ("ss", "3Di")):
+        refit_parser.add_argument(
+            "--{}_kappa_scale".format(modality),
+            default=1.0,
+            type=float,
+            help="With --kappa pooled: multiply the pooled {} kappa by this "
+            "factor.".format(name),
+        )
     refit_parser.add_argument(
         "--min_nonzero_queries",
         default=20,

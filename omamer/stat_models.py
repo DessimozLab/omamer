@@ -725,16 +725,18 @@ def filter_family_candidates(qres, n, model):
     return qres[qres["count"] >= expected_count]
 
 
-# Largest observed count for which `beta_binomial_neglogpmf_bounds` is used:
-# it costs one multiplication-division step per unit of the count.
-PMF_BOUNDS_MAX_COUNT = 64
+# Largest observed count for which `beta_binomial_pmf_test` uses the bound of
+# `beta_binomial_neglogpmf_upper`: it costs one multiplication-division step
+# per unit of the count.
+PMF_BOUND_MAX_COUNT = 64
 
 
 @numba.njit(nogil=True)
-def beta_binomial_neglogpmf_bounds(x, n, alpha, beta):
+def beta_binomial_neglogpmf_upper(x, n, alpha, beta):
     """
-    Lower and upper bounds of -log P(X = x) for X ~ BetaBinomial(n, alpha,
-    beta), with 0 < x <= n, without lgamma: two logarithms and x steps.
+    An upper bound of -log P(X = x) for X ~ BetaBinomial(n, alpha, beta),
+    with 0 < x <= n, without lgamma: acc + log(prod) + extra (`acc` is 0
+    unless the partial products leave [1e-100, 1e100]).
 
     With a = n - x and kappa = alpha + beta, `beta_binomial_logpmf` is
 
@@ -744,35 +746,35 @@ def beta_binomial_neglogpmf_bounds(x, n, alpha, beta):
         E1 = lgamma(n + beta + alpha) - lgamma(n + beta),
         E2 = lgamma(beta + alpha) - lgamma(beta),
 
-    (the integer-step lgamma differences written as products). lgamma is
+    the integer-step lgamma differences written as products. lgamma is
     convex, so an increment lgamma(y + alpha) - lgamma(y) lies between
     alpha psi(y) and alpha psi(y + alpha), and the digamma function psi
     satisfies log(y) - 1/y < psi(y) < log(y) - 1/(2y) for y > 0. Hence
 
-        alpha [psi(n + beta) - psi(kappa)] <= E1 - E2
-                                           <= alpha [psi(n + kappa) - psi(beta)].
+        E1 - E2 <= alpha [psi(n + kappa) - psi(beta)]
+                <  alpha [log(r) + 1/beta]
+                <= alpha [(r - 1) / sqrt(r) + 1/beta] = extra,
 
-    The interval is about alpha (alpha + 1) / beta wide: narrow for the
-    family models, where alpha = q kappa is small relative to beta.
+    with r = (n + kappa) / beta >= 1 (log(y) <= (y - 1) / sqrt(y) for
+    y >= 1). The bound exceeds the exact value by about alpha (alpha + 1) /
+    beta: little for the family models, where alpha = q kappa is small
+    relative to beta.
     """
     a = n - x
     acc = 0.0
-    prod = 1.0
+    num = 1.0
+    den = 1.0
     for j in range(x):
-        prod *= ((j + 1.0) / (j + alpha)) * ((a + beta + j) / (a + 1.0 + j))
-        if prod > 1e150 or prod < 1e-150:
-            acc += math.log(prod)
-            prod = 1.0
-    acc += math.log(prod)
-
-    kappa = alpha + beta
-    upper = acc + alpha * (
-        math.log((n + kappa) / beta) - 0.5 / (n + kappa) + 1.0 / beta
-    )
-    lower = acc + alpha * (
-        math.log((n + beta) / kappa) - 1.0 / (n + beta) + 0.5 / kappa
-    )
-    return lower, upper
+        num *= (j + 1.0) * (a + beta + j)
+        den *= (j + alpha) * (a + 1.0 + j)
+        if num > 1e100 or den > 1e100 or num < 1e-100 or den < 1e-100:
+            acc += math.log(num) - math.log(den)
+            num = 1.0
+            den = 1.0
+    inv_beta = 1.0 / beta
+    r = (n + alpha + beta) * inv_beta
+    extra = alpha * ((n + alpha) * inv_beta / math.sqrt(r) + inv_beta)
+    return acc, num / den, extra
 
 
 @numba.njit(nogil=True)
@@ -780,24 +782,27 @@ def beta_binomial_pmf_test(x, n, alpha, beta, scoring):
     """
     The significance bound of the beta-binomial (see
     `_filter_by_significance_bound`): -log P(X = x), corrected, reaches
-    -log(alpha). Decided by `beta_binomial_neglogpmf_bounds` unless the
-    exact value is within a rounding margin of the threshold, so that the
-    outcome is that of the exact `beta_binomial_logpmf`.
+    -log(alpha).
+
+    Rejected without lgamma when the upper bound of
+    `beta_binomial_neglogpmf_upper` is below the threshold by more than a
+    rounding margin, else decided with the exact `beta_binomial_logpmf`; the
+    outcome is that of the exact test. The bound passes for about 1 in 200
+    candidate families on Metazoa.
     """
-    if 0 < x <= n and x <= PMF_BOUNDS_MAX_COUNT:
-        threshold = scoring.neglog_alpha + scoring.log_correction
-        lower, upper = beta_binomial_neglogpmf_bounds(
+    threshold = scoring.neglog_alpha + scoring.log_correction
+    if 0 < x <= n and x <= PMF_BOUND_MAX_COUNT:
+        acc, prod, extra = beta_binomial_neglogpmf_upper(
             x, float(n), alpha, beta
         )
         # The exact value is a sum of lgamma of magnitude up to about
         # (n + kappa) log(n + kappa), each within a few ulp; the margin
-        # exceeds that rounding error by orders of magnitude.
+        # exceeds that rounding error by orders of magnitude (log(y) <
+        # sqrt(y)), and the rounding of the bound as well.
         size = n + alpha + beta + 2.0
-        margin = 1e-6 + 1e-12 * size * math.log(size)
-        if upper < threshold - margin:
+        margin = 1e-6 + 1e-12 * size * math.sqrt(size)
+        if acc + math.log(prod) + extra < threshold - margin:
             return False
-        if lower > threshold + margin:
-            return True
     neglogpmf = -beta_binomial_logpmf(float(x), float(n), alpha, beta)
     return neglogpmf - scoring.log_correction >= scoring.neglog_alpha
 

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from omamer.alphabets import Alphabet, get_transform
 from omamer.kmer_mask import low_complexity_mask, modality_kmer_mask
@@ -29,3 +30,13 @@ def test_modality_kmer_mask_per_modality(monkeypatch):
     np.testing.assert_array_equal(modality_kmer_mask("ss", 3, 21), low_complexity_mask(3, 21, 3))
     monkeypatch.setenv("OMAMER_SEQ_MIN_DISTINCT", "2")
     assert int(modality_kmer_mask("seq", 3, 21).sum()) == 21
+
+
+@pytest.mark.parametrize("k, alphabet_n, min_distinct", [(1, 21, 2), (3, 21, 2), (4, 21, 3), (4, 5, 4)])
+def test_low_complexity_mask_matches_sorted_digits(k, alphabet_n, min_distinct):
+    codes = np.arange(alphabet_n**k)
+    digits = np.stack([(codes // alphabet_n**i) % alphabet_n for i in range(k)], axis=1)
+    distinct = np.array([len(set(row)) for row in digits.tolist()])
+    np.testing.assert_array_equal(
+        low_complexity_mask(k, alphabet_n, min_distinct), distinct < min_distinct
+    )

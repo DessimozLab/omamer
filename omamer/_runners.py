@@ -40,6 +40,10 @@ def mkdb_oma(args):
     for (k, v) in vars(args).items():
         LOG.info(" - {}: {}".format(k, v))
 
+    # the 3Di files are read by path (FileType checked that they exist)
+    for fp in args.structures or ():
+        fp.close()
+
     # work out mode
     browser_db_mode = (args.oma_path is not None)
 
@@ -120,11 +124,10 @@ def mkdb_oma(args):
     )
 
     if args.exclude_families:
-        db.excluded_families = {
-            line.strip().encode("ascii")
-            for line in args.exclude_families
-            if line.strip()
-        }
+        with args.exclude_families as fp:
+            db.excluded_families = {
+                line.strip().encode("ascii") for line in fp if line.strip()
+            }
         LOG.info("Read {} root-HOG ids to exclude".format(len(db.excluded_families)))
 
     # add sequences from database

@@ -21,9 +21,10 @@ from collections import Counter
 
 MAX_REPORTED = 10
 
-# a single- or double-quoted newick label, as ete3 reads them
+# a double-quoted newick label (group 1), as ete3 reads them, or a
+# single-quoted one, as Bio.Phylo reads them
 QUOTED_LABEL_RE = re.compile(
-    r"""(?=["'])(?:"[^"\\]*(?:\\[\s\S][^"\\]*)*"|'[^'\\]*(?:\\[\s\S][^'\\]*)*')"""
+    r"""("[^"\\]*(?:\\[\s\S][^"\\]*)*")|'(?:\\.|[^'])*'"""
 )
 QUOTED_LABEL_PREFIX = "omamer_quoted_label_"
 
@@ -79,15 +80,20 @@ class SpeciesTree(object):
             with open(path, "rt") as fp:
                 newick = fp.read()
 
-        # Bio.Phylo only knows single-quoted labels, while the OMA browser
-        # double-quotes names, which may contain parentheses, commas or
-        # apostrophes (e.g. "Synechococcus sp. (strain JA-2-3B'a(2-13))").
-        # As ete3 did, replace every quoted label by a placeholder before
-        # parsing and restore the name (without the quotes) afterwards.
+        # Bio.Phylo only knows single-quoted labels (with '' for a quote),
+        # while the OMA browser double-quotes names, which may contain
+        # parentheses, commas or apostrophes (e.g. "Synechococcus sp.
+        # (strain JA-2-3B'a(2-13))"). As ete3 did, replace every
+        # double-quoted label by a placeholder before parsing and restore the
+        # name (without the quotes) afterwards. Single-quoted labels are left
+        # to Bio.Phylo; they are matched so that a double quote inside one is
+        # not taken for the start of a label.
         quoted = []
 
         def unquote(match):
-            quoted.append(match.group(0)[1:-1])
+            if match.group(1) is None:
+                return match.group(0)
+            quoted.append(match.group(1)[1:-1])
             return "{}{}".format(QUOTED_LABEL_PREFIX, len(quoted) - 1)
 
         newick = QUOTED_LABEL_RE.sub(unquote, newick)

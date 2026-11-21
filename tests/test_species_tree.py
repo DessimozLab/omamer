@@ -74,6 +74,11 @@ def test_levels_are_branch_lengths_to_the_whole_tree_root():
                 "a, b: c",
             },
         ),
+        # single-quoted names with '' for a quote, and with double quotes
+        (
+            "(('O''Brien sp.':1,'a \"b\" c':1)'AB''s',C)R;",
+            {"R", "AB's", "O'Brien sp.", 'a "b" c', "C"},
+        ),
         # underscores are kept
         ("((Homo_sapiens,B)Homi_ninae,C)R;", {"R", "Homi_ninae", "Homo_sapiens", "B", "C"}),
         # comments are ignored

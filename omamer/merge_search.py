@@ -21,11 +21,12 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
-from Rmath4 import pbinom, phyper
-from numba.tests.support import captured_stdout
-from numba.typed import List, Dict
-from property_manager import lazy_property, cached_property
+import math
+from collections import namedtuple
 from time import time
+
+from numba.typed import List
+from property_manager import lazy_property, cached_property
 import numba
 import numpy as np
 import pandas as pd
@@ -33,6 +34,7 @@ import pandas as pd
 
 from ._utils import LOG
 from .alphabets import get_transform
+from .kmer_mask import modality_kmer_mask, stored_min_distinct
 from .sequence_buffer import SequenceBuffer
 from .hierarchy import (
     get_root_leaf_offsets,
@@ -40,99 +42,163 @@ from .hierarchy import (
     is_taxon_implied,
     get_children,
 )
-from ._clock import clock, as_seconds
 
 
 # maximum neglogp to set
 MAX_LOGP = 20000.0
 
+SEARCH_SEQUENCE = 1
+SEARCH_STRUCTURE = 2
+
+# Array carriers passed to the compiled search (see `lookup_queries`).
+SequenceBatch = namedtuple("SequenceBatch", ("buffer", "offsets"))
+
+# The k-mer index of one modality and its binomial models. `max_df` > 0:
+# k-mers in more HOGs are ignored; `kmer_mask`: ignored k-mer codes (empty:
+# none), e.g. low-complexity ones. Ignored k-mers do not count towards n.
+KmerIndex = namedtuple(
+    "KmerIndex",
+    (
+        "table_idx",
+        "table_buff",
+        "modality",
+        "max_df",
+        "kmer_mask",
+        "family_probability",
+        "hog_probability",
+    ),
+)
+
+# `hog2fam`: the family of each HOG, as a contiguous array: the search looks
+# it up once per posting, and a strided read of the HOG table costs a cache
+# line per lookup.
+SearchDatabase = namedtuple(
+    "SearchDatabase",
+    ("trans", "k", "digits_lookup", "families", "hogs", "levels", "hog2fam"),
+)
+
+SearchConfig = namedtuple(
+    "SearchConfig",
+    (
+        "mode",
+        "top_n_families",
+        "subfamily_score_threshold",
+        "family_only",
+        "neglog_alpha",
+        "log_correction",
+    ),
+)
+
+# Per-thread family counters of the k-mer search. Only the entries of the
+# families hit by the previous query are reset.
+SearchScratch = namedtuple(
+    "SearchScratch",
+    (
+        "hit_families",
+        "family_counts",
+        "family_low_location",
+        "family_high_location",
+        "num_hit_families",
+    ),
+)
+
+QUERY_FAMILY_RESULT_DTYPE = np.dtype(
+    [
+        ("id", np.uint32),
+        ("pvalue", np.float64),
+        ("count", np.uint32),
+        ("normcount", np.float64),
+        ("overlap", np.float64),
+    ]
+)
+
+SearchResults = namedtuple("SearchResults", ("families", "subfamilies"))
+
+
+def make_search_results(n_queries, top_n_families):
+    family_dtype = np.dtype(
+        [
+            ("id", np.uint32),
+            ("pvalue", np.float64),
+            ("count", np.uint32),
+            ("normcount", np.float64),
+            ("overlap", np.float64),
+            ("modality", np.uint8),
+        ]
+    )
+    subfamily_dtype = np.dtype(
+        [("id", np.uint32), ("score", np.float64), ("count", np.uint32)]
+    )
+    shape = (n_queries, top_n_families)
+    return SearchResults(
+        np.zeros(shape, dtype=family_dtype),
+        np.zeros(shape, dtype=subfamily_dtype),
+    )
+
 
 @numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
-    Use pbinom from RMath4
+    Neg-log of the upper tail P(X >= x) of a Binomial(n, p), in pure numba
+    (so that the compiled search can be cached). Stops early once the
+    decaying tail is negligible.
     """
-    # bdtrc does not support high precision (so for v small p fails)
-    # bdtrc supports (float64, long, float64)
-    # return -1.0 * np.log(sc.bdtrc(np.float64(x - 1), n, p))
-    return -1.0 * pbinom(x - 1, n, p, 0, 1)
+    if x <= 0:
+        return 0.0
+    if x > n:
+        return np.inf
 
-    # pbinom(n - 1, m, m/N, 0, 0)
-    # phyper(n - 1, m, N - m, m, 0, 0)
-    #return -1.0 * phyper(x - 1, n, n/p - n, n, 0, 1)
+    log_px = (
+        math.lgamma(n + 1.0)
+        - math.lgamma(x + 1.0)
+        - math.lgamma(n - x + 1.0)
+        + x * math.log(p)
+        + (n - x) * math.log1p(-p)
+    )
+
+    odds = p / (1.0 - p)
+    acc = 1.0
+    term = 1.0
+    for k in range(x, n):
+        ratio = ((n - k) / (k + 1.0)) * odds
+        term *= ratio
+        acc += term
+        # tail is decaying and this term no longer moves the sum -> stop
+        if ratio < 1.0 and term < acc * 1e-16:
+            break
+
+    return -(log_px + math.log(acc))
 
 
 # ----
 # family result sorting
-@numba.njit
-def fam_res_compare(x1, x2):
+@numba.njit(nogil=True)
+def fam_res_compare(x1, x2, by_score):
     """
-    Compare two family results and order them according to normcount, overlap and pvalue.
+    Compare two family results and order them according to normcount, overlap
+    and pvalue, or (by_score) pvalue, overlap and normcount.
     """
-    # normalised count
-    if x1["normcount"] != x2["normcount"]:
-        # greater first
-        return -1 if (x1["normcount"] > x2["normcount"]) else 1
-    else:
+    if by_score:
+        if x1["pvalue"] != x2["pvalue"]:
+            # greater first. note, we use neglog units
+            return -1 if x1["pvalue"] > x2["pvalue"] else 1
         if x1["overlap"] != x2["overlap"]:
-            # greater first
-            return -1 if (x1["overlap"] > x2["overlap"]) else 1
-        else:
-            if x1["pvalue"] != x2["pvalue"]:
-                # greater first. note, we use neglog units
-                return -1 if (x1["pvalue"] > x2["pvalue"]) else 1
+            return -1 if x1["overlap"] > x2["overlap"] else 1
+        if x1["normcount"] != x2["normcount"]:
+            return -1 if x1["normcount"] > x2["normcount"] else 1
+    else:
+        if x1["normcount"] != x2["normcount"]:
+            return -1 if x1["normcount"] > x2["normcount"] else 1
+        if x1["overlap"] != x2["overlap"]:
+            return -1 if x1["overlap"] > x2["overlap"] else 1
+        if x1["pvalue"] != x2["pvalue"]:
+            return -1 if x1["pvalue"] > x2["pvalue"] else 1
     # equal. take whichever.
     return 0
 
 
-@numba.njit
-def fam_res_less(x1, x2):
-    """
-    Same as fam_res_compare, but operates as '<'
-    """
-    if x1["normcount"] != x2["normcount"]:
-        return x1["normcount"] < x2["normcount"]
-
-    if x1["overlap"] != x2["overlap"]:
-        return x1["overlap"] < x2["overlap"]
-
-    if x1["pvalue"] != x2["pvalue"]:
-        return x1["pvalue"] < x2["pvalue"]
-
-    return False
-
-
-@numba.njit
-def fam_res_le(x1, x2):
-    """
-    Same as fam_res_compare, but operates as '<='
-    """
-    if not fam_res_less(x1, x2):
-        return x1["normcount"] == x2["normcount"] and \
-            x1["overlap"] == x2["overlap"] and \
-            x1["pvalue"] == x2["pvalue"]
-
-    return True
-
-
-@numba.njit
-def fam_res_greater(x1, x2):
-    """
-    Same as fam_res_compare, but operates as '>'
-    """
-    return not fam_res_le(x1, x2)
-
-
-@numba.njit
-def fam_res_ge(x1, x2):
-    """
-    Same as fam_res_compare, but operates as '>='
-    """
-    return not fam_res_less(x1, x2)
-
-
-@numba.njit
-def family_result_argsort(x, ii):
+@numba.njit(nogil=True)
+def family_result_argsort(x, ii, by_score):
     """
     argsort of family results using defined comparison above.
     uses an implementation of quicksort.
@@ -146,7 +212,7 @@ def family_result_argsort(x, ii):
     else:
         for i in ii:
             # need to implement the order here.
-            j = fam_res_compare(x[i], x[ii[0]])
+            j = fam_res_compare(x[i], x[ii[0]], by_score)
             if j < 0:
                 # LHS of pivot
                 bfs.append(i)
@@ -158,43 +224,44 @@ def family_result_argsort(x, ii):
                 pvs.append(i)
 
         if len(bfs) > 0:
-            bfs = family_result_argsort(x, bfs)
+            bfs = family_result_argsort(x, bfs, by_score)
         if len(afs) > 0:
-            afs = family_result_argsort(x, afs)
+            afs = family_result_argsort(x, afs, by_score)
 
         return bfs + pvs + afs
 
 
-@numba.njit
-def family_result_sort(x, k):
+@numba.njit(nogil=True)
+def family_result_sort(x, k, by_score=False):
     """
-    Sort the family results according to normcount, overlap and pvalue (to break ties).
+    Sort the family results according to normcount, overlap and pvalue (to
+    break ties), or (by_score) pvalue, overlap and normcount.
     this uses a quicksort implementation as np.argsort does not support struct type in numba.
     """
 
     # Quickselect top k results
     idx = np.arange(len(x))
-    _ = _select(x, idx, k, 0, len(x) - 1)
+    _ = _select(x, idx, k, 0, len(x) - 1, by_score)
     x = x[idx[:k]]
 
     # Now mergesort the selected results, because we need to
     # report them sorted
-    idx = family_result_argsort(x, list(range(len(x))))
+    idx = family_result_argsort(x, list(range(len(x))), by_score)
     y = np.zeros_like(x)
     for i in range(len(x)):
         y[i] = x[idx[i]]
     return y
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _swap(array, i, j):
     tmp = array[i]
     array[i] = array[j]
     array[j] = tmp
 
 
-@numba.njit
-def _partition(x, idx, low, high):
+@numba.njit(nogil=True)
+def _partition(x, idx, low, high, by_score):
     """
     Index-based version of the partition algorithm of
     quicksort. Juggles indexes of the idx array that
@@ -203,11 +270,12 @@ def _partition(x, idx, low, high):
     mid = (low + high) >> 1
 
     # Use median of three {low, middle, high} as the pivot
-    if fam_res_greater(x[idx[mid]], x[idx[low]]):
+    # (fam_res_compare(a, b) < 0: a goes before b)
+    if fam_res_compare(x[idx[mid]], x[idx[low]], by_score) < 0:
         _swap(idx, mid, low)
-    if fam_res_greater(x[idx[high]], x[idx[mid]]):
+    if fam_res_compare(x[idx[high]], x[idx[mid]], by_score) < 0:
         _swap(idx, high, mid)
-        if fam_res_greater(x[idx[mid]], x[idx[low]]):
+        if fam_res_compare(x[idx[mid]], x[idx[low]], by_score) < 0:
             _swap(idx, low, mid)
 
     pivot = x[idx[mid]]
@@ -217,7 +285,7 @@ def _partition(x, idx, low, high):
     # Collect elements that are > pivot in the beginning
     i = low
     for j in range(low, high):
-        if fam_res_greater(x[idx[j]], pivot):
+        if fam_res_compare(x[idx[j]], pivot, by_score) < 0:
             _swap(idx, i, j)
             i += 1
 
@@ -227,22 +295,22 @@ def _partition(x, idx, low, high):
     return i
 
 
-@numba.njit
-def _select(x, idx, k, low, high):
+@numba.njit(nogil=True)
+def _select(x, idx, k, low, high, by_score):
     """
     Select the k'th largest element of the x array
     """
     if k >= len(x):
         return len(x)
 
-    i = _partition(x, idx, low, high)
+    i = _partition(x, idx, low, high, by_score)
     while i != k:
         if i < k:
             low = i + 1
-            i = _partition(x, idx, low, high)
+            i = _partition(x, idx, low, high, by_score)
         else:
             high = i - 1
-            i = _partition(x, idx, low, high)
+            i = _partition(x, idx, low, high, by_score)
     return idx[k]
 
 
@@ -276,23 +344,6 @@ def get_fam_level_offsets(fam_ent, level_arr):
 
 
 ## search functions
-@numba.njit
-def custom_unique1d(ar):
-    """
-    adapted from np._unique1d for numba
-    """
-    perm = ar.argsort(kind="mergesort")  # if return_index else 'quicksort')
-    aux = ar[perm]
-
-    mask = np.empty(aux.shape, dtype=np.bool_)
-    mask[:1] = True
-    mask[1:] = aux[1:] != aux[:-1]
-
-    idx = np.concatenate((np.nonzero(mask)[0], np.array([mask.size])))
-
-    return aux[mask], perm[mask], np.diff(idx)
-
-
 @numba.njit
 def unique1d_linear(array):
     """
@@ -352,67 +403,118 @@ def parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag):
     return unique1d_linear(r)
 
 
-@numba.njit
-def search_seq_kmers(r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                     hog_counts, fam_counts, fam_lowloc, fam_highloc,
-                     hit_fams, num_hit_fams, hit_hogs, num_hit_hogs):
+@numba.njit(nogil=True)
+def search_seq_kmers(r1, p1, hog2fam, x_flag, index, scratch, thread_id):
     """
-    Perform the kmer search, using the index.
+    Perform the k-mer search, using the index: count the k-mer hits of each
+    family and record the first and last query locations of these hits.
+
+    Returns the number of skipped k-mers (with X, masked, or above the
+    document frequency cap) and the searched k-mers that have postings (in
+    query order), from which `count_family_hogs` recovers the per-HOG
+    counts of a family.
     """
+    table_idx = index.table_idx
+    table_buff = index.table_buff
+    max_df = index.max_df
+
+    thread_fam_counts = scratch.family_counts[thread_id]
+    thread_fam_lowloc = scratch.family_low_location[thread_id]
+    thread_fam_highloc = scratch.family_high_location[thread_id]
+    thread_hit_fams = scratch.hit_families[thread_id]
+    thread_num_hit_fams = scratch.num_hit_families[thread_id]
+
     # Reinitialize counters modified by the previous call
-    for i in range(num_hit_fams):
-        family = hit_fams[i]
-        fam_counts[family] = 0
-        fam_lowloc[family] = -1
-        fam_highloc[family] = -1
+    for i in range(thread_num_hit_fams):
+        family = thread_hit_fams[i]
+        thread_fam_counts[family] = 0
+        thread_fam_lowloc[family] = -1
+        thread_fam_highloc[family] = -1
 
-    for i in range(num_hit_hogs):
-        hog = hit_hogs[i]
-        hog_counts[hog] = 0
-
-    num_hit_fams = 0
-    num_hit_hogs = 0
+    thread_num_hit_fams = 0
+    n_skipped = 0
+    kmers = np.empty(r1.shape[0], dtype=r1.dtype)
+    n_searched = 0
 
     # iterate unique k-mers
     for m in range(r1.shape[0]):
         kmer = r1[m]
         loc = p1[m]
 
-        # to ignore k-mers with X
+        # k-mers with X are ignored and do not count towards n (the unique
+        # codes contain the X flag at most once)
         if kmer == x_flag:
+            n_skipped += 1
+            continue
+
+        # masked k-mers (e.g. low-complexity 3Di) are ignored as well
+        if index.kmer_mask.size > 0 and index.kmer_mask[kmer]:
+            n_skipped += 1
             continue
 
         # get mapping to HOGs
-        x = table_idx[kmer: kmer + 2]
-        hogs = table_buff[x[0]: x[1]]
-        fams = hog_tab["FamOff"][hogs]
+        lo = table_idx[kmer]
+        hi = table_idx[kmer + 1]
+        df = hi - lo
 
-        for hog in hogs:
-            if not hog_counts[hog]:
-                hit_hogs[num_hit_hogs] = hog
-                num_hit_hogs += 1
+        if 0 < max_df < df:
+            n_skipped += 1
+            continue
 
-            hog_counts[hog] += 1
+        if df > 0:
+            kmers[n_searched] = kmer
+            n_searched += 1
 
-        for fam_off in fams:
-            if not fam_counts[fam_off]:
-                hit_fams[num_hit_fams] = fam_off
-                num_hit_fams += 1
+        # The locations p1 of the unique k-mers increase with m, so the low
+        # location of a family is that of its first hit and the high one
+        # that of its last hit.
+        for j in range(lo, hi):
+            fam_off = hog2fam[table_buff[j]]
+            count = thread_fam_counts[fam_off]
+            if not count:
+                thread_hit_fams[thread_num_hit_fams] = fam_off
+                thread_num_hit_fams += 1
+                thread_fam_lowloc[fam_off] = loc
+            thread_fam_counts[fam_off] = count + 1
+            thread_fam_highloc[fam_off] = loc
 
-            fam_counts[fam_off] += 1
+    scratch.num_hit_families[thread_id] = thread_num_hit_fams
+    return n_skipped, kmers[:n_searched]
 
-            # initiate first location
-            if fam_lowloc[fam_off] == -1:
-                fam_lowloc[fam_off] = loc
-                fam_highloc[fam_off] = loc
 
-            # update either lower or higher boundary
-            elif loc < fam_lowloc[fam_off]:
-                fam_lowloc[fam_off] = loc
-            elif loc > fam_highloc[fam_off]:
-                fam_highloc[fam_off] = loc
+@numba.njit(nogil=True)
+def count_family_hogs(kmers, index, hog_s, hog_e):
+    """
+    Per-HOG k-mer counts of the query in the family with HOGs [hog_s, hog_e).
 
-    return num_hit_fams, num_hit_hogs
+    A posting list is sorted by HOG offset and the HOGs of a family are
+    contiguous, so the postings of the family in the list of each k-mer are
+    found by binary search.
+    """
+    table_idx = index.table_idx
+    table_buff = index.table_buff
+    hog_s = np.int64(hog_s)
+    hog_e = np.int64(hog_e)
+    counts = np.zeros(hog_e - hog_s, dtype=np.uint16)
+    for m in range(kmers.shape[0]):
+        kmer = kmers[m]
+        a = np.int64(table_idx[kmer])
+        hi = np.int64(table_idx[kmer + 1])
+        b = hi
+        # first posting with HOG >= hog_s
+        while a < b:
+            mid = (a + b) >> 1
+            if np.int64(table_buff[mid]) < hog_s:
+                a = mid + 1
+            else:
+                b = mid
+        while a < hi:
+            hog = np.int64(table_buff[a])
+            if hog >= hog_e:
+                break
+            counts[hog - hog_s] += 1
+            a += 1
+    return counts
 
 
 ## functions to cumulate HOG k-mer counts
@@ -550,22 +652,285 @@ def get_closest_taxa_from_ref(q2hog_off, ref_taxoff, tax_tab, hog_tab, chog_buff
     return q2closest_taxon
 
 
-@numba.njit
-def unzip_dict(data: numba.typed.Dict):
-    keys = np.zeros(len(data))
-    values = np.zeros_like(keys)
-    for i, key in enumerate(data):
-        keys[i] = key
-        values[i] = data[key]
-    return keys, values
+@numba.njit(nogil=True)
+def find_family_candidates(sequence, database, index, scratch):
+    """
+    Search the k-mers of one query and keep the family candidates with hits
+    over at least 25 positions of the query, before scoring
+    (`score_family_candidates`).
+
+    Returns the candidates (unsorted), the number n of k-mers used for
+    scoring and the searched k-mers (see `search_seq_kmers`).
+    """
+    k = database.k
+    query_len = sequence.shape[0]
+    n_kmers = query_len - (k - 1)
+    x_flag = index.table_idx.size - 1
+
+    no_kmers = np.empty(0, dtype=np.uint32)
+    if n_kmers <= 0:
+        return np.zeros(0, dtype=QUERY_FAMILY_RESULT_DTYPE), np.int64(0), no_kmers
+
+    # seq -> bag of kmers
+    (r1, p1, _) = parse_seq(
+        sequence, database.digits_lookup, n_kmers, k, database.trans, x_flag
+    )
+
+    # skip if only one k-mer with X
+    if len(r1) == 1 and r1[0] == x_flag:
+        return np.zeros(0, dtype=QUERY_FAMILY_RESULT_DTYPE), np.int64(0), no_kmers
+
+    thread_id = numba.get_thread_id()
+    (n_skipped, kmers) = search_seq_kmers(
+        r1, p1, database.hog2fam, x_flag, index, scratch, thread_id
+    )
+
+    thread_hit_fams = scratch.hit_families[thread_id]
+    thread_fam_counts = scratch.family_counts[thread_id]
+    thread_fam_lowloc = scratch.family_low_location[thread_id]
+    thread_fam_highloc = scratch.family_high_location[thread_id]
+    thread_num_hit_fams = scratch.num_hit_families[thread_id]
+
+    # Filter by sequence coverage: there is no point to compute p-values for
+    # families that would be filtered by coverage later anyway. Coverage
+    # removes about three in four of the hit families at the cost of a few
+    # array reads each; the count filter (`score_family_candidates`) one in
+    # five of the rest.
+    min_overlap = 25 / query_len
+    covered = np.empty(thread_num_hit_fams, dtype=np.uint32)
+    n_covered = 0
+    for i in range(thread_num_hit_fams):
+        family_id = thread_hit_fams[i]
+        overlap = (
+            thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k
+        ) / query_len
+        if overlap >= min_overlap:
+            covered[n_covered] = family_id
+            n_covered += 1
+    idx = covered[:n_covered]
+    qres = np.zeros(n_covered, dtype=QUERY_FAMILY_RESULT_DTYPE)
+    qres["id"][:] = idx
+    qres["count"][:] = thread_fam_counts[idx]
+    for i in range(n_covered):
+        family_id = idx[i]
+        qres["overlap"][i] = (
+            thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k
+        ) / query_len
+
+    n = np.int64(len(r1) - n_skipped)
+    return qres, n, kmers
 
 
-@numba.njit
-def dict_slice(data: numba.typed.Dict, start: np.uint32, end: np.uint32) -> np.ndarray:
-    result = np.zeros(end - start, dtype=np.uint32)
-    for j in range(start, end):
-        result[j - start] = data.get(j, np.uint32(0))
-    return result
+@numba.njit(nogil=True)
+def is_significant(score, neglog_alpha):
+    """The significance test of a corrected score (with alpha = 1, a
+    positive score)."""
+    return score >= neglog_alpha and (neglog_alpha > 0.0 or score > 0.0)
+
+
+@numba.njit(nogil=True)
+def score_family_tails(qres, n, index, log_correction):
+    """
+    Set the corrected score (-log tail probability minus the correction,
+    clipped to [0, MAX_LOGP]) of every candidate, in place.
+    """
+    for i in range(len(qres)):
+        p = index.family_probability[qres["id"][i]]
+        neglog_tail = binom_neglogccdf(qres["count"][i], n, p)
+        qres["pvalue"][i] = min(MAX_LOGP, max(0.0, neglog_tail - log_correction))
+
+
+@numba.njit(nogil=True)
+def score_family_candidates(qres, n, index, neglog_alpha, log_correction):
+    """
+    The significant family candidates of a query, with their scores (in
+    corrected -log units) and normcounts.
+
+    Two fast filters come first, in one pass: the count filter (families
+    with fewer k-mer hits than expected are not significant) and the
+    Chernoff bound of the binomial tail.
+    """
+    epsilon = 1e-10
+    keep = np.full(len(qres), True)
+    for i in range(len(qres)):
+        expected = index.family_probability[qres["id"][i]]
+        if not qres["count"][i] >= expected * n:
+            keep[i] = False
+            continue
+        # The Chernoff upper bound for the binomial X:
+        #     P(X >= k) <= exp(-n KL_div(k/n || p))
+        #
+        # The empirical proportion of observed k-mers, clipped for the
+        # edge cases k = n, k = 0.
+        observed = min(max(qres["count"][i] / n, epsilon), 1.0 - epsilon)
+        kl_divergence = observed * math.log(observed / expected) + (
+            1.0 - observed
+        ) * math.log((1.0 - observed) / (1.0 - expected))
+        # Now we check P <= exp(-n KL_div(k/n || p)) <= alpha
+        #                   KL_div(k/n || p) >= -log(alpha) / n.
+        # and if it holds, we almost guarantee P <= alpha
+        # There is a very small chance of that P <= alpha < bound, and then this test
+        # fails with a false negative. In practice, it does not happen.
+        keep[i] = kl_divergence > neglog_alpha / n
+    qres = qres[keep]
+    if len(qres) == 0:
+        return qres
+
+    score_family_tails(qres, n, index, log_correction)
+
+    # normalised count
+    expected_count = index.family_probability[qres["id"]] * n
+    qres["normcount"][:] = (qres["count"] - expected_count) / (n - expected_count)
+
+    keep = np.empty(len(qres), dtype=np.bool_)
+    for i in range(len(qres)):
+        keep[i] = is_significant(qres["pvalue"][i], neglog_alpha)
+    return qres[keep]
+
+
+@numba.njit(nogil=True)
+def store_family_results(family_results, sequence_id, qres, n_store, modality):
+    family_results["id"][sequence_id, :n_store] = qres["id"][:n_store] + 1
+    family_results["pvalue"][sequence_id, :n_store] = qres["pvalue"][:n_store]
+    family_results["count"][sequence_id, :n_store] = qres["count"][:n_store]
+    family_results["normcount"][sequence_id, :n_store] = qres["normcount"][:n_store]
+    family_results["overlap"][sequence_id, :n_store] = qres["overlap"][:n_store]
+    family_results["modality"][sequence_id, :n_store] = modality
+
+
+@numba.njit(nogil=True)
+def place_in_family(
+    subfam_results, sequence_id, rank, family_id, n, kmers, index, database, config
+):
+    """
+    Place a query on the HOG path of one family, from the per-HOG counts of
+    the searched k-mers `kmers` (n k-mers used for scoring) in `index`.
+    """
+    entry = database.families[family_id]
+    hog_s = entry["HOGoff"]
+    hog_e = hog_s + entry["HOGnum"]
+
+    if config.family_only:
+        # early exit: the HOG counts are not needed
+        subfam_results["id"][sequence_id, rank] = hog_s + 1
+        return
+
+    fam_hog2parent = get_fam_hog2parent(entry, database.hogs)
+    fam_level_offsets = get_fam_level_offsets(entry, database.levels)
+
+    fam_hog_counts = count_family_hogs(kmers, index, hog_s, hog_e)
+
+    # cumulation of counts
+    c = fam_hog_counts.copy()
+
+    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
+
+    # new expected count, but using old cumulation
+    (fam_hog_scores, fam_bestpath) = hog_path_placement(
+        c,
+        n,
+        fam_level_offsets,
+        fam_hog2parent,
+        fam_hog_counts,
+        index.hog_probability[hog_s:hog_e],
+    )
+
+    # place on path
+    choice = 0  # default root
+    choice_score = 0.0
+    for j in np.argwhere(fam_bestpath).flatten():
+        sf_score = fam_hog_scores[j]
+        if sf_score >= config.subfamily_score_threshold:
+            choice = j
+            choice_score = sf_score
+
+    # store results
+    subfam_results["id"][sequence_id, rank] = choice + hog_s + 1
+    subfam_results["score"][sequence_id, rank] = choice_score
+    subfam_results["count"][sequence_id, rank] = (
+        c[int(choice)] if choice_score != 0.0 else 0
+    )
+
+
+@numba.njit(nogil=True)
+def place_family_results(
+    family_results, subfam_results, sequence_id, qres, n, kmers, database, index,
+    config, by_score=False,
+):
+    """Rank, store and place the significant family candidates of a query."""
+    top_n_fams = config.top_n_families
+    qres = family_result_sort(qres, top_n_fams, by_score)
+
+    # store results (fewer than top_n_fams may be significant)
+    n_store = min(len(qres), top_n_fams)
+    store_family_results(family_results, sequence_id, qres, n_store, index.modality)
+
+    # place within families
+    for i in range(n_store):
+        place_in_family(
+            subfam_results, sequence_id, i, qres["id"][i], n, kmers, index,
+            database, config,
+        )
+
+
+@numba.njit(nogil=True)
+def place_sequence(
+    family_results, subfam_results, sequence, sequence_id, database, index,
+    config, scratch,
+):
+    """Search and place one query in one modality; False if not placed."""
+    (qres, n, kmers) = find_family_candidates(sequence, database, index, scratch)
+    if len(qres) > 0:
+        qres = score_family_candidates(
+            qres, n, index, config.neglog_alpha, config.log_correction
+        )
+    if len(qres) == 0:
+        return False
+
+    place_family_results(
+        family_results, subfam_results, sequence_id, qres, n, kmers, database,
+        index, config,
+    )
+    return True
+
+
+# inlined: the parallel lowering of `lookup_queries` does not resolve the
+# namedtuple global otherwise
+@numba.njit(nogil=True, inline="always")
+def make_search_scratch(num_threads, n_families):
+    return SearchScratch(
+        np.zeros((num_threads, n_families), dtype=np.int32),
+        np.zeros((num_threads, n_families), dtype=np.uint16),
+        np.full((num_threads, n_families), -1, dtype=np.int32),
+        np.full((num_threads, n_families), -1, dtype=np.int32),
+        np.zeros(num_threads, dtype=np.uint32),
+    )
+
+
+@numba.njit(parallel=True, nogil=True, cache=True)
+def lookup_queries(
+    family_results, subfam_results, sequences, database, index, config,
+    num_threads,
+):
+    """
+    Search and place every query of the batch.
+
+    num_threads is passed in (numba.get_num_threads() of the caller): that
+    threading-layer intrinsic embeds a runtime function pointer, which
+    would make this kernel non-cacheable.
+    """
+    scratch = make_search_scratch(num_threads, database.families.size)
+
+    for sequence_id in numba.prange(sequences.offsets.size - 1):
+        sequence = sequences.buffer[
+            sequences.offsets[sequence_id] :
+            np.int64(sequences.offsets[sequence_id + 1] - 1)
+        ]
+        place_sequence(
+            family_results, subfam_results, sequence, sequence_id, database,
+            index, config, scratch,
+        )
+
 
 class MergeSearch(object):
     def __init__(self, ki, include_extant_genes=False):
@@ -612,6 +977,53 @@ class MergeSearch(object):
     def ref_hog_prob(self):
         return self.db._db_Index_HOGProbability[:]
 
+    @cached_property
+    def _search_database(self):
+        return SearchDatabase(
+            self.trans,
+            self.ki.k,
+            self.ki.alphabet.DIGITS_AA_LOOKUP,
+            self.fam_tab,
+            self.hog_tab,
+            self.level_arr,
+            np.ascontiguousarray(self.hog_tab["FamOff"]),
+        )
+
+    def _kmer_index(self, modality):
+        """The k-mer index and models of a modality ('seq' or 'ss')."""
+        attrs = self.db.db.root.Index._v_attrs
+        if modality == "seq":
+            (table, source, max_df, family_probability, hog_probability) = (
+                self.kmer_table,
+                SEARCH_SEQUENCE,
+                getattr(attrs, "kmer_max_df", 0),
+                self.ref_fam_prob,
+                self.ref_hog_prob,
+            )
+        else:
+            (table, source, max_df, family_probability, hog_probability) = (
+                self.ss_kmer_table,
+                SEARCH_STRUCTURE,
+                getattr(attrs, "ss_kmer_max_df", 0),
+                self.ss_ref_fam_prob,
+                self.ss_ref_hog_prob,
+            )
+        kmer_mask = modality_kmer_mask(
+            modality,
+            self.ki.k,
+            self.ki.alphabet.n,
+            stored_min_distinct(attrs, modality),
+        )
+        return KmerIndex(
+            table["idx"],
+            table["buff"],
+            source,
+            np.int64(max_df),
+            kmer_mask,
+            family_probability,
+            hog_probability,
+        )
+
     def merge_search(
         self,
         seqs,
@@ -625,47 +1037,26 @@ class MergeSearch(object):
         t0 = time()
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
 
-        # allocate result arrays
-        family_results = np.zeros(
-            (len(sbuff.idx) - 1, top_n_fams),
-            dtype=np.dtype(
-                [
-                    ("id", np.uint32),
-                    ("pvalue", np.float64),
-                    ("count", np.uint32),
-                    ("normcount", np.float64),
-                    ("overlap", np.float64),
-                ]
-            ),
+        # perform the search
+        results = make_search_results(len(sbuff.idx) - 1, top_n_fams)
+        config = SearchConfig(
+            SEARCH_SEQUENCE,
+            int(top_n_fams),
+            float(sst),
+            bool(family_only),
+            -math.log(alpha),
+            math.log(self.fam_tab.size),
         )
-        subfam_results = np.zeros(
-            (len(sbuff.idx) - 1, top_n_fams),
-            dtype=np.dtype(
-                [("id", np.uint32), ("score", np.float64), ("count", np.uint32)]
-            ),
+        lookup_queries(
+            results.families,
+            results.subfamilies,
+            SequenceBatch(sbuff.buff, sbuff.idx),
+            self._search_database,
+            self._kmer_index("seq"),
+            config,
+            numba.get_num_threads(),
         )
-
-        # perform the search. arguments are given like this as we are using numba.
-        self._lookup(
-            family_results,
-            subfam_results,
-            sbuff.buff,
-            sbuff.idx,
-            self.trans,
-            self.kmer_table["idx"],
-            self.kmer_table["buff"],
-            self.ki.k,
-            self.ki.alphabet.DIGITS_AA_LOOKUP,
-            self.fam_tab,
-            self.hog_tab,
-            self.level_arr,
-            top_n_fams=top_n_fams,
-            ref_fam_prob=self.ref_fam_prob,
-            ref_hog_prob=self.ref_hog_prob,
-            alpha_cutoff=alpha,
-            sst=sst,
-            family_only=family_only,
-        )
+        (family_results, subfam_results) = results
 
         t1 = time()
         td = max((t1 - t0), 1e-3)
@@ -792,225 +1183,3 @@ class MergeSearch(object):
             )
 
         return df[HEADER]
-
-    @lazy_property
-    def _lookup(self):
-        def func(
-                family_results,
-                subfam_results,
-                seqs,
-                seqs_idx,
-                trans,
-                table_idx,
-                table_buff,
-                k,
-                DIGITS_AA_LOOKUP,
-                fam_tab,
-                hog_tab,
-                level_arr,
-                top_n_fams,
-                ref_fam_prob,
-                ref_hog_prob,
-                alpha_cutoff,
-                sst,
-                family_only,
-        ):
-            """
-            top_n_fams: number of family for which HOG scores are computed
-            """
-            # flags to ignore k-mers containing X
-            x_flag = table_idx.size - 1
-
-            # Arrays for thread-local data. We allocate them
-            # in advance to avoid doing so for every query
-            num_threads = numba.get_num_threads()
-            hog_counts = np.zeros((num_threads, hog_tab.size), dtype=np.uint16)
-            fam_counts = np.zeros((num_threads, fam_tab.size), dtype=np.uint16)
-            fam_lowloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            fam_highloc = np.full((num_threads, fam_tab.size), -1, dtype=np.int32)
-            hit_fams = np.zeros((num_threads, fam_tab.size), dtype=np.int32)
-            hit_hogs = np.zeros((num_threads, hog_tab.size), dtype=np.int32)
-            num_hit_fams = np.zeros(num_threads, dtype=np.uint32)
-            num_hit_hogs = np.zeros(num_threads, dtype=np.uint32)
-
-            for zz in numba.prange(len(seqs_idx) - 1):
-                # load seq
-                s = seqs[seqs_idx[zz]: np.int64(seqs_idx[zz + 1] - 1)]
-                query_len = s.shape[0]
-                n_kmers = query_len - (k - 1)
-
-                # double check we don't have short peptides (of len < k)
-                if n_kmers == 0:
-                    continue
-
-                # seq -> bag of kmers
-                (r1, p1, _) = parse_seq(s, DIGITS_AA_LOOKUP, n_kmers, k, trans, x_flag)
-
-                # skip if only one k-mer with X
-                if len(r1) > 1:
-                    pass
-                elif r1[0] == x_flag:
-                    continue
-
-                # k-mers with X are not searched and do not count towards n
-                # (the unique codes contain the X flag at most once)
-                n = len(r1) - np.sum(r1 == x_flag)
-
-                # Get thread-local data structures for search
-                thread_hit_fams = hit_fams[numba.get_thread_id()]
-                thread_hit_hogs = hit_hogs[numba.get_thread_id()]
-                thread_hog_counts = hog_counts[numba.get_thread_id()]
-                thread_fam_counts = fam_counts[numba.get_thread_id()]
-                thread_fam_lowloc = fam_lowloc[numba.get_thread_id()]
-                thread_fam_highloc = fam_highloc[numba.get_thread_id()]
-                thread_num_hit_fams = num_hit_fams[numba.get_thread_id()]
-                thread_num_hit_hogs = num_hit_hogs[numba.get_thread_id()]
-
-                # search using kmers
-                thread_num_hit_fams, thread_num_hit_hogs = search_seq_kmers(
-                    r1, p1, hog_tab, fam_tab, x_flag, table_idx, table_buff,
-                    thread_hog_counts, thread_fam_counts, thread_fam_lowloc, thread_fam_highloc,
-                    thread_hit_fams, thread_num_hit_fams, thread_hit_hogs, thread_num_hit_hogs
-                )
-
-                num_hit_fams[numba.get_thread_id()] = thread_num_hit_fams
-                num_hit_hogs[numba.get_thread_id()] = thread_num_hit_hogs
-
-                # Identify families of interest
-                idx = thread_hit_fams[:thread_num_hit_fams]
-                qres = np.repeat(np.zeros_like(family_results[zz, 0]), len(idx))
-                qres["id"][:] = idx
-                qres["count"][:] = thread_fam_counts[idx]
-
-                # 2. Fast family filtering
-                #     - a. filter by count. We are only interested in families
-                #     that have at least their expected number of k-mer matches,
-                #     because that number should be already given by random
-                #     (however is still insignificant).
-                mu = ref_fam_prob[qres["id"]] * n
-                qres = qres[qres["count"] >= mu]
-
-                #     - b. filter by sequence coverage. There is no point to
-                #     compute p-value for families that are going to be hard
-                #     filtered by coverage later anyway.
-                for i in range(len(qres)):
-                    family_id = qres["id"][i]
-                    qres["overlap"][i] = (thread_fam_highloc[family_id] - thread_fam_lowloc[family_id] + k) / query_len
-
-                qres = qres[(qres["overlap"] >= (25 / query_len))]
-                if len(qres) == 0:
-                    continue
-
-                # - c. Filter by predicted p-value: perform the Chernoff KL-div test,
-                # that is, the Chernoff upper bound for the binomial X:
-                #     P(X >= k) <= exp(-n D(k/n || p))
-                # where D is Kullback-Leibler divergence.
-                # First, compute k / n, the empirical proportion of Bernoulli successes.
-                # We need to clip it a little for the case n = k, because it's used
-                # in logarithms later. For the other edge case, we already have k > 0
-                # guaranteed, so we're good here
-                epsilon = 1e-10
-                k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
-
-                # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
-                # There is a theoretical chance of that P < alpha <= bound, and the test will
-                # fail with a false negative. I could not observe any instances of this.
-                p = ref_fam_prob[qres["id"]]
-                kl_div = k_n * np.log(k_n / p) + (1 - k_n) * np.log((1 - k_n) / (1 - p))
-                qres = qres[kl_div > -np.log(alpha_cutoff)/n]
-
-                if len(qres) == 0:
-                    continue
-
-                # 3. compute p-value for each family. note: in negative log units
-                correction_factor = np.log(len(ref_fam_prob))
-                for i in numba.prange(len(qres)):
-                    qres["pvalue"][i] = min(
-                        float(MAX_LOGP),
-                        max(
-                            0.0,
-                            (
-                                binom_neglogccdf(
-                                    qres["count"][i],
-                                    n,
-                                    ref_fam_prob[qres["id"][i]],
-                                )
-                                - correction_factor
-                            ),
-                        ),
-                    )
-
-                # Filter on the actual p-value
-                alpha = -1.0 * np.log(alpha_cutoff)
-                qres = qres[qres["pvalue"] >= alpha]
-                # filter out 0 neg log p. alpha > 0 is normal. alpha = 0 is edge case.
-                qres = qres if alpha > 0 else qres[qres["pvalue"] > 0]
-                if len(qres) == 0:
-                    continue
-
-                # 4. Compute normalised count
-                expected_count = ref_fam_prob[qres["id"]] * n
-                qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        n - expected_count
-                )
-
-                # 5. Store results
-                # - a. sort by normcount, then overlap, then p-value for tie-breaking
-                qres = family_result_sort(qres, top_n_fams)
-
-                # - b. store results (fewer than top_n_fams may be significant)
-                n_store = min(len(qres), top_n_fams)
-                family_results["id"][zz, :n_store] = qres["id"][:n_store] + 1
-                family_results["pvalue"][zz, :n_store] = qres["pvalue"][:n_store]
-                family_results["count"][zz, :n_store] = qres["count"][:n_store]
-                family_results["normcount"][zz, :n_store] = qres["normcount"][:n_store]
-                family_results["overlap"][zz, :n_store] = qres["overlap"][:n_store]
-
-                # 5. Place within families
-                for i in numba.prange(n_store):
-                    entry = fam_tab[qres["id"][i]]
-                    hog_s = entry["HOGoff"]
-                    hog_e = hog_s + entry["HOGnum"]
-
-                    if family_only:
-                        # early exit
-                        subfam_results["id"][zz, i] = hog_s + 1
-                        continue
-
-                    fam_hog2parent = get_fam_hog2parent(entry, hog_tab)
-                    fam_level_offsets = get_fam_level_offsets(entry, level_arr)
-
-                    # cumulation of counts
-                    c = thread_hog_counts[hog_s:hog_e].copy()
-
-                    cumulate_counts_1fam(c, fam_level_offsets, fam_hog2parent)
-
-                    # new expected count, but using old cumulation
-                    (fam_hog_scores, fam_bestpath) = hog_path_placement(
-                        c,
-                        n,
-                        fam_level_offsets,
-                        fam_hog2parent,
-                        thread_hog_counts[hog_s:hog_e],
-                        ref_hog_prob[hog_s:hog_e],
-                    )
-
-                    # place on path
-                    choice = 0  # default root
-                    choice_score = 0.0
-                    best_score = -1
-                    for j in np.argwhere(fam_bestpath).flatten():
-                        sf_score = fam_hog_scores[j]
-                        best_score = max(best_score, sf_score)
-                        if sf_score >= sst:
-                            choice = j
-                            choice_score = sf_score
-
-                    # store results
-                    subfam_results["id"][zz, i] = choice + hog_s + 1
-                    subfam_results["score"][zz, i] = choice_score
-                    subfam_results["count"][zz, i] = (
-                        c[int(choice)] if choice_score != 0.0 else 0
-                    )
-
-        return numba.jit(func, parallel=True, nopython=True, nogil=True)

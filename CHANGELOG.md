@@ -3,6 +3,22 @@
 
 ## Unreleased
 
+### Added
+
+- `mkdb --structures` indexes the 3Di sequences of the proteins as well: the
+  OMA browser structure file (`structure/structure_db-full.h5`) for a browser
+  build, or FASTA files with the protein ids for an OrthoXML build. Every
+  selected protein needs a 3Di sequence. The 3Di index is stored as
+  `/Index/SSTableIndex`, `SSTableBuffer`, `SSFamilyProbability` and
+  `SSHOGProbability`.
+- `mkdb --seq_max_df` / `--ss_max_df` (defaults 0, no cap, and 1000): k-mers
+  found in more families than this are ignored in the family and HOG
+  probabilities and at search. `mkdb --seq_min_distinct` / `--ss_min_distinct`
+  (defaults 0, off, and 3): k-mers with fewer distinct letters are ignored at
+  search. The four settings are stored in the database.
+- `mkdb --exclude_families` leaves the given root-HOGs out of a build, e.g. to
+  obtain queries without a family for benchmarks.
+
 ### Changed
 
 - Support numpy 2 (numpy >= 1.26 and pytables >= 3.10.1 are now required)
@@ -41,6 +57,14 @@
   `AT`), were stored as several runs, with duplicate and too specific HOG
   entries. Searches with such databases placed many queries in the wrong
   family. Databases built with `--reduced_alphabet` must be rebuilt.
+- The species tree reader handles double-quoted taxon names, as in the OMA
+  browser `speciestree.nwk`; it failed on the All.May2026 tree.
+- `mkdb --orthoxml` assigned genes to the wrong species when the gene ids of a
+  species are not one contiguous range in the order of the species.
+- With `--reduced_alphabet`, `search` sanitised the queries with the reduced
+  alphabet, which turned S, T, N, Q, Y, V, R, M and lower-case letters into X.
+- `mkdb` from the OMA browser fills the protein table in batches (one append
+  per protein took about an hour for LUCA).
 
 ## Version 2.1.2
 

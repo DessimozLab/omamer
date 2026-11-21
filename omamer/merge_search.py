@@ -819,15 +819,29 @@ def kmer_df_reference(table_idx, max_df=0, kmer_mask=None):
     k-mer is proportional to its df, a query whose k-mers have mean df m
     expects n p_F m / m0 hits in family F.
     """
-    df = np.diff(np.asarray(table_idx, dtype=np.int64)).astype(np.float64)
-    keep = np.ones(df.size, dtype=np.bool_)
-    if max_df > 0:
-        keep &= df <= max_df
-    if kmer_mask is not None and kmer_mask.size > 0:
-        keep &= ~kmer_mask[: df.size]
-    df = df[keep]
-    total = df.sum()
-    return float(np.dot(df, df) / total) if total > 0 else 0.0
+    (total, total_sq) = _kmer_df_sums(
+        table_idx,
+        np.int64(max_df),
+        np.zeros(0, dtype=np.bool_) if kmer_mask is None else kmer_mask,
+    )
+    return float(total_sq) / float(total) if total > 0 else 0.0
+
+
+@numba.njit(nogil=True)
+def _kmer_df_sums(table_idx, max_df, kmer_mask):
+    """sum(df) and sum(df^2) of the k-mers of `kmer_df_reference`, exact
+    (in integers) and without a copy of the index."""
+    total = np.int64(0)
+    total_sq = np.int64(0)
+    for i in range(len(table_idx) - 1):
+        if kmer_mask.size > 0 and kmer_mask[i]:
+            continue
+        df = np.int64(table_idx[i + 1]) - np.int64(table_idx[i])
+        if 0 < max_df < df:
+            continue
+        total += df
+        total_sq += df * df
+    return total, total_sq
 
 
 @numba.njit(nogil=True)

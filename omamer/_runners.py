@@ -196,6 +196,14 @@ def search(args):
 
     # reload
     db = Database(args.db)
+    if (
+        args.structure or args.search_mode in ("ss", "sqs", "sum", "hybrid")
+    ) and not db.has_structure():
+        raise RuntimeError(
+            "The database {} has no 3Di index (it was built without "
+            "--structures): search it without --structure, in the search mode "
+            "'auto' or 'seq'".format(args.db)
+        )
 
     # setup search
     ms = MergeSearch(ki=db.ki, include_extant_genes=args.include_extant_genes)
@@ -395,7 +403,7 @@ def _ensure_data_loaded(ms, load_structure=True):
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
     # a sequence-only search does not need the 3Di index of the database
-    if load_structure and ms.has_structure:
+    if load_structure:
         _load("ss_kmer_table", "3Di k-mer index")
         _load("ss_ref_fam_prob", "3Di family probability estimates")
         _load("ss_ref_hog_prob", "3Di sub-family probability estimates")

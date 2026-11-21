@@ -1501,9 +1501,9 @@ class MergeSearch(object):
 
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
-        mode = resolve_search_mode(
-            search_mode, len(seqs) > 0, self.has_structure and len(struct_seqs) > 0
-        )
+        if len(struct_seqs) > 0 and not self.has_structure:
+            raise ValueError("3Di queries need a database with a 3Di index")
+        mode = resolve_search_mode(search_mode, len(seqs) > 0, len(struct_seqs) > 0)
         seq_index = ss_index = None
         if mode != SEARCH_STRUCTURE:
             seq_index = self._kmer_index(

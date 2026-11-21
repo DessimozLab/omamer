@@ -18,6 +18,7 @@ import tables
 
 from omamer.database import Database
 from omamer.main import main
+from omamer.merge_search import MergeSearch
 
 SPECIES = ["A", "B", "C"]
 FAMILIES = 2
@@ -204,14 +205,23 @@ def test_search_structure_requires_index(dataset, tmp_path):
     _mkdb(db_path, path, [path / "seqs.fa"])
     query = _write_fasta(tmp_path / "q.fa", seqs.items())
     structure = _write_fasta(tmp_path / "s.fa", structures.items())
-    # 'auto' searches the sequence only
-    df = _search(db_path, tmp_path / "out.tsv", "--query", query, "--structure", structure)
+    df = _search(db_path, tmp_path / "out.tsv", "--query", query)
     assert set(df["modality"]) == {"seq"}
-    with pytest.raises(ValueError, match="requires matching"):
-        _search(
-            db_path, tmp_path / "out.tsv", "--query", query, "--structure",
-            structure, "--search_mode", "hybrid",
-        )
+    # a 3Di input or a 3Di search mode is an error, not ignored
+    for options in (
+        ["--query", query, "--structure", structure],
+        ["--structure", structure],
+        ["--query", query, "--search_mode", "hybrid"],
+        ["--query", query, "--structure", structure, "--search_mode", "seq"],
+    ):
+        with pytest.raises(RuntimeError, match="no 3Di index"):
+            _search(db_path, tmp_path / "out.tsv", *options)
+    with Database(str(db_path)) as db:
+        with pytest.raises(ValueError, match="3Di index"):
+            MergeSearch(db.ki).merge_search(
+                seqs=[seqs[x] for x in sorted(seqs)], ids=sorted(seqs),
+                struct_seqs=[structures[x] for x in sorted(seqs)],
+            )
 
 
 @pytest.mark.parametrize(

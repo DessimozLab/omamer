@@ -1047,11 +1047,11 @@ def place_in_family(
 @numba.njit(nogil=True)
 def place_family_results(
     family_results, subfam_results, sequence_id, qres, n, kmers, database, index,
-    config, by_score=False,
+    config,
 ):
     """Rank, store and place the significant family candidates of a query."""
     top_n_fams = config.top_n_families
-    qres = family_result_sort(qres, top_n_fams, by_score)
+    qres = family_result_sort(qres, top_n_fams)
 
     # store results (fewer than top_n_fams may be significant)
     n_store = min(len(qres), top_n_fams)

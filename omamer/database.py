@@ -40,6 +40,9 @@ from .hierarchy import (
 from .index import Index
 from ._utils import LOG, is_progress_disabled, compute_file_md5, auto_open
 
+# sanitises the 3Di sequences as the protein sequences, built once
+_sanitise_3di = Alphabet(n=21).sanitise_seq
+
 
 class Database(object):
     """
@@ -1074,7 +1077,7 @@ class DatabaseFromOMA(Database):
         seq = seq.rstrip("\x00")
         if seq.endswith(" "):
             seq = seq[:-1]
-        seq = Alphabet(n=21).sanitise_seq(seq) + " "
+        seq = _sanitise_3di(seq) + " "
         return np.frombuffer(seq.encode("ascii"), dtype="S1")
 
 

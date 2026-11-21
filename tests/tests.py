@@ -6,6 +6,13 @@ from omamer.merge_search import (
 
 dtype = [("normcount", float), ("overlap", float), ("pvalue", float)]
 
+# the field orders of family_result_sort, by normcount (default) or by score
+SORT_ORDERS = (
+    (False, ("normcount", "overlap", "pvalue")),
+    (True, ("pvalue", "overlap", "normcount")),
+)
+
+
 def generate_random_data(seed, size=100):
     rng = np.random.default_rng(seed)
     data = np.zeros(size, dtype=dtype)
@@ -15,16 +22,16 @@ def generate_random_data(seed, size=100):
     return data
 
 
-def naive_sort(arr, k=None):
+def naive_sort(arr, fields=("normcount", "overlap", "pvalue"), k=None):
     """
-    Sort by descending normcount, then overlap, then pvalue.
+    Sort by the given fields, descending.
     """
     # Convert to list of numpy records (so x['field'] works)
     records = list(arr)
     # Sort using tuple key, reverse for descending
     sorted_list = sorted(
         records,
-        key=lambda x: (x['normcount'], x['overlap'], x['pvalue']),
+        key=lambda x: tuple(x[field] for field in fields),
         reverse=True
     )
     if k is not None:
@@ -41,44 +48,52 @@ def assert_structs_close(a, b, atol=1e-8):
         np.testing.assert_allclose(a[field], b[field], atol=atol,
                                    err_msg=f"Field '{field}' differs")
 
+@pytest.mark.parametrize(("by_score", "fields"), SORT_ORDERS)
 @pytest.mark.parametrize("seed", list(range(100)))
-def test_family_sort(seed):
+def test_family_sort(seed, by_score, fields):
     x = generate_random_data(seed)
     # Full sort
-    sorted_auto = family_result_sort(x, k=len(x))
-    sorted_naive = naive_sort(x)
+    sorted_auto = family_result_sort(x, len(x), by_score)
+    sorted_naive = naive_sort(x, fields)
     assert_structs_close(sorted_auto, sorted_naive)
 
     # Top-k selection
     k = 10
-    sorted_auto_k = family_result_sort(x, k=k)
-    sorted_naive_k = naive_sort(x, k)
+    sorted_auto_k = family_result_sort(x, k, by_score)
+    sorted_naive_k = naive_sort(x, fields, k)
     assert_structs_close(sorted_auto_k, sorted_naive_k)
 
 
+def test_family_sort_default_order():
+    x = generate_random_data(0)
+    assert_structs_close(family_result_sort(x, k=10), naive_sort(x, k=10))
+
+
+@pytest.mark.parametrize(("by_score", "fields"), SORT_ORDERS)
 @pytest.mark.parametrize("seed", list(range(100)))
-def test_ties(seed):
+def test_ties(seed, by_score, fields):
     random_data = generate_random_data(seed)
+    primary, secondary, tertiary = fields
     # Make a tie with the best record
-    sorted_full = naive_sort(random_data)
-    sorted_full[-1]["normcount"] = sorted_full[0]["normcount"]
-    sorted_full[-1]["overlap"] = sorted_full[0]["overlap"] + 1
+    sorted_full = naive_sort(random_data, fields)
+    sorted_full[-1][primary] = sorted_full[0][primary]
+    sorted_full[-1][secondary] = sorted_full[0][secondary] + 1
     np.random.shuffle(sorted_full)
     random_data = sorted_full
 
     k = 10
-    sorted_auto_k = family_result_sort(random_data, k=k)
-    sorted_naive_k = naive_sort(random_data, k=k)
+    sorted_auto_k = family_result_sort(random_data, k, by_score)
+    sorted_naive_k = naive_sort(random_data, fields, k=k)
     assert_structs_close(sorted_auto_k, sorted_naive_k)
 
     # Make a tie by the 2nd parameter
-    sorted_full = naive_sort(random_data)
-    sorted_full[-1]["normcount"] = sorted_full[0]["normcount"]
-    sorted_full[-1]["overlap"] = sorted_full[0]["overlap"]
-    sorted_full[-1]["pvalue"] = sorted_full[0]["pvalue"] + 1
+    sorted_full = naive_sort(random_data, fields)
+    sorted_full[-1][primary] = sorted_full[0][primary]
+    sorted_full[-1][secondary] = sorted_full[0][secondary]
+    sorted_full[-1][tertiary] = sorted_full[0][tertiary] + 1
     np.random.shuffle(sorted_full)
     random_data = sorted_full
 
-    sorted_auto_k = family_result_sort(random_data, k=k)
-    sorted_naive_k = naive_sort(random_data, k=k)
+    sorted_auto_k = family_result_sort(random_data, k, by_score)
+    sorted_naive_k = naive_sort(random_data, fields, k=k)
     assert_structs_close(sorted_auto_k, sorted_naive_k)

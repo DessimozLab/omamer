@@ -39,7 +39,6 @@ requirements = [
     "numpy>=1.26",
     "pandas>2.0.0,<3",
     "property_manager",
-    "Rmath4",
     "scipy",
     "tables>=3.10.1",  # first release supporting numpy 2
     "tqdm",

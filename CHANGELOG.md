@@ -18,9 +18,34 @@
   search. The four settings are stored in the database.
 - `mkdb --exclude_families` leaves the given root-HOGs out of a build, e.g. to
   obtain queries without a family for benchmarks.
+- `search -s/--structure` takes the 3Di sequences of the queries (same ids, in
+  the same order as `--query`); the database needs a 3Di index.
+- `search --search_mode`: `seq`, `ss` (3Di only), `sqs` (sequence, then 3Di
+  alone for the queries without a significant family), `sum` (the sequence and
+  3Di family scores summed, the 3Di score weighted by `--ss_weight`) and
+  `hybrid` (sequence, then the summed score for the queries without a
+  significant family). `auto` (default): `hybrid` with both inputs, else the
+  one given. `--summed_alpha` (default: `--family_alpha`) is the threshold of
+  summed scores. The output has a new column `modality`.
+- `search --family_selection choose_scored` (default): the candidates with a
+  positive score are ranked by normcount and only the top family is tested.
+  `filter` is the previous rule (test every candidate, rank the significant
+  ones).
+- `search --seq_kmer_df_exponent` / `--ss_kmer_df_exponent` (defaults 1.5 and
+  0): the binomial hit probability of the tested family is p_F * (m / m0)^b,
+  with m the mean number of families that contain the query's k-mers and m0 the
+  reference (`--*_kmer_df_reference`; default: the mean over the index's
+  postings). Queries made of common k-mers then need more hits.
 
 ### Changed
 
+- The default search is `--family_selection choose_scored` with
+  `--seq_kmer_df_exponent 1.5`. The previous behaviour is
+  `--family_selection filter --seq_kmer_df_exponent 0`.
+- Faster search: the k-mers are counted in two passes (HOG counts only for the
+  families that are placed), and the coverage and count filters and the
+  significance bound are applied while scoring. The binomial tail is computed
+  in numba; Rmath4 is no longer needed.
 - Support numpy 2 (numpy >= 1.26 and pytables >= 3.10.1 are now required)
 - Python >= 3.10 is now required (support for Python 3.8 and 3.9 is dropped,
   as pytables >= 3.10 no longer supports them)
@@ -63,6 +88,10 @@
   species are not one contiguous range in the order of the species.
 - With `--reduced_alphabet`, `search` sanitised the queries with the reduced
   alphabet, which turned S, T, N, Q, Y, V, R, M and lower-case letters into X.
+- `search` no longer counts k-mers that contain X towards the query's number
+  of k-mers.
+- `search -n` larger than 1 filled the unused family ranks with memory read
+  past the end of an array (the rows were filtered out of the output).
 - `mkdb` from the OMA browser fills the protein table in batches (one append
   per protein took about an hour for LUCA).
 

@@ -166,6 +166,9 @@ class Database(object):
 
         return self.__getattribute__(attr)
 
+    def has_structure(self):
+        return "/Index/SSTableIndex" in self.db
+
     def get_hog_id(self, i):
         # extract the hog id from the hog id buffer
         x = self._db_HOG[i]
@@ -1036,6 +1039,23 @@ class DatabaseFromOMA(Database):
 
         return fam2hogs, hog2oma_hog, hog2tax, hog2gene_nr, hog2completeness
 
+    @staticmethod
+    def _normalise_structure_sequence(seq):
+        """
+        A 3Di sequence (str, bytes or array of ASCII codes, possibly ending
+        with the space delimiter) as a record of the 3Di buffer, sanitised as
+        the protein sequences.
+        """
+        if isinstance(seq, np.ndarray):
+            seq = seq.astype(np.uint8).tobytes() if seq.dtype.kind in "ui" else seq.tobytes()
+        if isinstance(seq, bytes):
+            seq = seq.decode("ascii", "ignore")
+        seq = seq.rstrip("\x00")
+        if seq.endswith(" "):
+            seq = seq[:-1]
+        seq = Alphabet(n=21).sanitise_seq(seq) + " "
+        return np.frombuffer(seq.encode("ascii"), dtype="S1")
+
 
 class DatabaseFromOrthoXML(DatabaseFromOMA):
     """
@@ -1177,7 +1197,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         return hog_tab.to_records(), ent_tab
 
     ### main function ###
-    def build_database(self, oxml_path, fasta_paths, stree_path):
+    def build_database(self, oxml_path, fasta_paths, stree_path, structure_paths=None):
         self._check_open_writeable()
 
         # build taxonomy table except the SpeOff column
@@ -1206,6 +1226,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             hog2tax,
             hog2oma_hog,
             seq_buff,
+            prot_ids,
         ) = self.select_and_filter_OMA_proteins(
             ent_tab,
             fasta_paths,
@@ -1243,7 +1264,12 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         # compute the median sequence length of each HOG
         self.add_median_seqlen_col()
 
-        return seq_buff
+        ss_buff = None
+        if structure_paths:
+            LOG.debug("load 3Di sequences")
+            ss_buff = self._load_selected_3di_fasta(structure_paths, prot_ids)
+
+        return seq_buff, ss_buff
 
     def add_metadata(self):
         super().add_metadata()
@@ -1306,6 +1332,8 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
         )
 
         sanitiser = Alphabet(n=21).sanitise_seq
+        # ids of the stored proteins, in the order of the protein table
+        prot_ids = []
 
         # go over all fasta records
         for fasta_fn in fasta_paths:
@@ -1343,6 +1371,7 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
                         seq_buffs.append(seq)
 
                         # store protein information
+                        prot_ids.append(prot_id)
                         prot_id = prot_id.encode("ascii")
                         prot_tab.append(
                             [(len(prot_id_buff), len(prot_id), sp_off, 0, seq_len)]
@@ -1378,7 +1407,48 @@ class DatabaseFromOrthoXML(DatabaseFromOMA):
             raise ValueError("Did not find all protein sequences ({} / {})".format(prot_off, len(ent_tab)))
 
         seq_buff = np.concatenate(seq_buffs)
-        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff
+        return fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff, prot_ids
+
+    @classmethod
+    def _load_selected_3di_fasta(cls, fasta_paths, prot_ids):
+        """
+        3Di buffer of the selected proteins, in the order of the protein table
+        (record i of the 3Di and sequence buffers is protein i). The FASTA
+        records are matched to the proteins as the sequences are. Every
+        protein needs one 3Di sequence.
+        """
+        selected = set(prot_ids)
+        structures = {}
+        for fasta_fn in fasta_paths:
+            with auto_open(fasta_fn, "rt") as fp:
+                for rec in tqdm(
+                    SeqIO.parse(fp, "fasta"),
+                    disable=is_progress_disabled(),
+                    desc="Parsing structures ({})".format(os.path.basename(fasta_fn)),
+                ):
+                    if rec.description in selected:
+                        prot_id = rec.description
+                    elif rec.id in selected:
+                        prot_id = rec.id
+                    else:
+                        continue
+                    if prot_id in structures:
+                        raise ValueError(
+                            "Found multiple 3Di sequences for protein {}".format(prot_id)
+                        )
+                    structures[prot_id] = str(rec.seq)
+
+        missing = [x for x in prot_ids if not structures.get(x)]
+        if missing:
+            raise ValueError(
+                "Did not find 3Di sequences for {} of {} selected proteins, e.g. {}".format(
+                    len(missing), len(prot_ids), ", ".join(missing[:5])
+                )
+            )
+
+        return np.concatenate(
+            [cls._normalise_structure_sequence(structures[x]) for x in prot_ids]
+        )
 
     def add_taxid_col(self):
         """
@@ -1422,7 +1492,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         self.oma_version = ""
 
     ### main function ###
-    def build_database(self, oma_h5_path, stree_path):
+    def build_database(self, oma_h5_path, stree_path, structure_h5_path=None):
         self._check_open_writeable()
 
         # load OMA h5 file
@@ -1457,6 +1527,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
             hog2tax,
             hog2oma_hog,
             seq_buff,
+            entry_nrs,
         ) = self.select_and_filter_OMA_proteins(
             h5file, fam2hogs, hog2oma_hog, hog2tax, species, self.min_fam_size
         )
@@ -1491,7 +1562,13 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         # close and open in read mode
         h5file.close()
 
-        return seq_buff
+        ss_buff = None
+        if structure_h5_path:
+            LOG.debug("load 3Di sequences")
+            with tables.open_file(structure_h5_path, mode="r") as structure_h5file:
+                ss_buff = self.load_3di_sequences(structure_h5file, entry_nrs)
+
+        return seq_buff, ss_buff
 
     def add_metadata(self):
         super().add_metadata()
@@ -1527,6 +1604,8 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         # store rows for species and protein tables and sequence buffer
         sp_rows = [()] * len(species)  # keep sorted
         seq_buffs = []
+        # OMA entry numbers of the proteins, to find their 3Di sequences
+        entry_nrs = []
 
         prot_tab = self.db.create_table(
             "/",
@@ -1596,6 +1675,7 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                     prot_rows.append((id_off, len(oma_id), sp_off, 0, seq_len))
                     prot_ids.append(oma_id)
                     id_off += len(oma_id)
+                    entry_nrs.append(rr["EntryNr"])
                     if len(prot_rows) >= 1000000:
                         append_proteins()
 
@@ -1624,7 +1704,51 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
         del genome_tab, ent_tab, oma_seq_buffer
 
         seq_buff = np.concatenate(seq_buffs)
-        return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff)
+        return (fam2hogs, hog2protoffs, hog2tax, hog2oma_hog, seq_buff, entry_nrs)
+
+    def load_3di_sequences(self, structure_h5file, entry_nrs):
+        """
+        3Di buffer of the selected proteins, in the order of the protein table
+        (record i of the 3Di and sequence buffers is protein i), from the OMA
+        browser structure file. Every protein needs a 3Di sequence.
+        """
+        ss_index = structure_h5file.root.index
+        ss_buffer = structure_h5file.root.sequences_3di
+
+        ss_entry_nrs = ss_index.col("EntryNr")
+        order = np.argsort(ss_entry_nrs, kind="mergesort")
+        ss_entry_nrs = ss_entry_nrs[order]
+        offsets = ss_index.col("Offset_3DI")[order]
+        lengths = ss_index.col("Length_3DI")[order]
+        duplicated = ss_entry_nrs[1:][ss_entry_nrs[1:] == ss_entry_nrs[:-1]]
+        if len(duplicated) > 0:
+            raise ValueError(
+                "Found multiple 3Di index rows for EntryNr={}".format(duplicated[0])
+            )
+
+        entry_nrs = np.asarray(entry_nrs, dtype=ss_entry_nrs.dtype)
+        pos = np.searchsorted(ss_entry_nrs, entry_nrs)
+        found = pos < len(ss_entry_nrs)
+        found[found] = ss_entry_nrs[pos[found]] == entry_nrs[found]
+        found[found] = lengths[pos[found]] > 0
+        if not np.all(found):
+            raise ValueError(
+                "Did not find 3Di sequences for {} of {} selected proteins, "
+                "e.g. EntryNr={}".format(
+                    np.count_nonzero(~found), len(entry_nrs), entry_nrs[~found][0]
+                )
+            )
+
+        ss_buffs = []
+        for i in tqdm(
+            pos,
+            disable=is_progress_disabled(),
+            mininterval=1,
+            desc="Parsing 3Di sequences",
+        ):
+            seq = ss_buffer[offsets[i] : offsets[i] + lengths[i]]
+            ss_buffs.append(self._normalise_structure_sequence(seq))
+        return np.concatenate(ss_buffs)
 
     def add_taxid_col(self, h5file):
         """

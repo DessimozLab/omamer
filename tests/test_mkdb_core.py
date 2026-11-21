@@ -591,3 +591,24 @@ def test_insert_missing_hog_levels():
         TaxonomyLevels(SpeciesTree.from_string("(((A,B)AB,C)ABC,D)R;").parents()), species.get
     )
     assert etree.tostring(hog.struct) == before
+
+
+@pytest.mark.parametrize(
+    "seq",
+    [
+        np.frombuffer(b"DEAEA ", dtype=np.uint8),  # OMA browser structure file
+        np.frombuffer(b"DEAEA ", dtype="S1"),
+        np.frombuffer(b"DEAEA \x00\x00", dtype=np.uint8),
+        b"DEAEA",
+        "DEAEA",
+    ],
+)
+def test_normalise_structure_sequence(seq):
+    norm = DatabaseFromOMA._normalise_structure_sequence(seq)
+    assert norm.dtype == np.dtype("S1")
+    assert norm.tobytes() == b"DEAEA "
+
+
+def test_normalise_structure_sequence_sanitises_as_sequences():
+    norm = DatabaseFromOMA._normalise_structure_sequence("deaBz")
+    assert norm.tobytes() == b"DEAXX "

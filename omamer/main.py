@@ -148,6 +148,24 @@ def main():
         help="Use reduced alphabet from Linclust paper.",
     )
     mkdb_parser.add_argument("--k", default=6, help="k-mer length", type=int)
+    for modality, name, default in (("seq", "amino-acid", 0), ("ss", "3Di", 3)):
+        mkdb_parser.add_argument(
+            "--{}_min_distinct".format(modality),
+            default=default,
+            type=int,
+            help="Ignore {} k-mers with fewer than this many distinct letters "
+            "(low complexity) at search; stored in the database. 0: no mask."
+            .format(name),
+        )
+    for modality, name, default in (("seq", "amino-acid", 0), ("ss", "3Di", 1000)):
+        mkdb_parser.add_argument(
+            "--{}_max_df".format(modality),
+            default=default,
+            type=int,
+            help="Ignore {} k-mers that occur in more than this many families "
+            "in the family and HOG probabilities and at search; stored in the "
+            "database. 0: no cap.".format(name),
+        )
     mkdb_parser.add_argument(
         "--oma_path",
         help="Path to OMA browser release (must include OmaServer.h5 and speciestree.nwk). [BROWSERBUILD]",
@@ -166,6 +184,12 @@ def main():
         "--sequences",
         nargs='*',
         help="Paths to sequence files (1 or multiple, only for non-browser build). [OXMLBUILD]",
+        type=FileType("r")
+    )
+    mkdb_parser.add_argument(
+        "--structures",
+        nargs='*',
+        help="Optional -- 3Di sequences of the proteins, to index them as well: the OMA browser structure HDF5 file (exactly one) [BROWSERBUILD], or FASTA files with the ids of the sequence files (1 or multiple) [OXMLBUILD].",
         type=FileType("r")
     )
     mkdb_parser.add_argument(

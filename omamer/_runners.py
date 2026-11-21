@@ -57,6 +57,13 @@ def mkdb_oma(args):
         check_file_exists(oma_db_fn)
         nwk = os.path.join(args.oma_path, "speciestree.nwk")
         check_file_exists(nwk)
+        structure_h5_fn = None
+        if args.structures:
+            if len(args.structures) != 1:
+                raise ValueError(
+                    "BROWSERBUILD expects exactly one path to 3Di HDF5 file via --structures"
+                )
+            structure_h5_fn = args.structures[0].name
 
     else:
         if args.orthoxml is None or not args.sequences:
@@ -68,6 +75,7 @@ def mkdb_oma(args):
         # find files
         oxml_fn = args.orthoxml.name
         fasta_fns = list(map(lambda x: x.name, args.sequences))
+        structure_fns = [x.name for x in args.structures] if args.structures else []
         nwk = args.species_tree.name if args.species_tree is not None else None
 
     # read the species tree, from the OrthoXML file if none is given
@@ -114,16 +122,23 @@ def mkdb_oma(args):
     # add sequences from database
     LOG.info("Loading sequences")
     if browser_db_mode:
-        seq_buff = db.build_database(oma_db_fn, full_stree)
+        seq_buff, ss_buff = db.build_database(oma_db_fn, full_stree, structure_h5_fn)
     else:
-        seq_buff = db.build_database(oxml_fn, fasta_fns, full_stree)
+        seq_buff, ss_buff = db.build_database(oxml_fn, fasta_fns, full_stree, structure_fns)
 
     LOG.info("Building index")
     db.ki = Index(
-        db, k=args.k, reduced_alphabet=args.reduced_alphabet, hidden_taxa=hidden_taxa
+        db,
+        k=args.k,
+        reduced_alphabet=args.reduced_alphabet,
+        hidden_taxa=hidden_taxa,
+        kmer_max_df=args.seq_max_df,
+        ss_kmer_max_df=args.ss_max_df,
+        seq_min_distinct=args.seq_min_distinct,
+        ss_min_distinct=args.ss_min_distinct,
     )
     db.ki.sp_filter
-    db.ki.build_kmer_table(seq_buff)
+    db.ki.build_kmer_table(seq_buff, ss_buff)
     db.add_metadata()
     db.add_md5_hash()
 

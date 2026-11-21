@@ -1,4 +1,5 @@
 !query-md5: e6d0369d840cc77872edd020e3611ff6
+!search-mode: seq
 !family-selection: choose_scored
 !kmer-df-correction: seq:b=1.5,m0=2.80
 !db-info-source: OMA / All.May2026

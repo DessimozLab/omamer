@@ -187,7 +187,13 @@ def search(args):
         from . import __version__
         from ._utils import compute_file_md5
         from .database import Database
-        from .merge_search import MergeSearch
+        from .merge_search import (
+            SEARCH_HYBRID,
+            SEARCH_MODES,
+            SEARCH_SUM,
+            MergeSearch,
+            resolve_search_mode,
+        )
         from .sequence_reader import SequenceReader
 
         bar.text(" [DONE]")
@@ -313,6 +319,25 @@ def search(args):
                         file=args.out,
                     )
                     print("!db-path: {}".format(db.filename), file=args.out)
+                    mode = resolve_search_mode(
+                        args.search_mode, bool(args.query), bool(args.structure)
+                    )
+                    print(
+                        "!search-mode: {}".format(
+                            {v: k for k, v in SEARCH_MODES.items()}[mode]
+                        ),
+                        file=args.out,
+                    )
+                    if mode in (SEARCH_SUM, SEARCH_HYBRID):
+                        print("!ss-weight: {:g}".format(args.ss_weight), file=args.out)
+                        print(
+                            "!summed-alpha: {:g}".format(
+                                args.summed_alpha
+                                if args.summed_alpha is not None
+                                else args.family_alpha
+                            ),
+                            file=args.out,
+                        )
                     print(
                         "!family-selection: {}".format(args.family_selection),
                         file=args.out,

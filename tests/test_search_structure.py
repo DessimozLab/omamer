@@ -175,6 +175,15 @@ def test_search_structure_db(dataset, tmp_path, inputs, mode, modality, family_o
         if family_only:
             assert "." not in hogid
     assert set(df["modality"]) == {modality}
+    header = [
+        line for line in (tmp_path / "out.tsv").read_text().splitlines()
+        if line.startswith("!")
+    ]
+    resolved = {"seq": "seq", "ss": "ss", "both": "hybrid"}[inputs] if mode == "auto" else mode
+    assert "!search-mode: {}".format(resolved) in header
+    summed = resolved in ("sum", "hybrid")
+    assert ("!ss-weight: 0.5" in header) == summed
+    assert ("!summed-alpha: 1e-06" in header) == summed
 
 
 def test_search_structure_fallbacks(dataset, tmp_path):

@@ -60,6 +60,13 @@ SEARCH_SUM = 4
 # the sequence, then the summed scores for the queries without a significant
 # sequence family
 SEARCH_HYBRID = 5
+SEARCH_MODES = {
+    "seq": SEARCH_SEQUENCE,
+    "ss": SEARCH_STRUCTURE,
+    "sqs": SEARCH_SEQUENCE_THEN_STRUCTURE,
+    "sum": SEARCH_SUM,
+    "hybrid": SEARCH_HYBRID,
+}
 
 # How the family of a query is selected:
 # - filter: test every candidate, rank the significant ones (OMAmer 2);
@@ -156,20 +163,15 @@ def resolve_search_mode(mode, has_sequence, has_structure):
             return SEARCH_STRUCTURE
         raise ValueError("Search requires sequence or structure queries")
 
-    modes = {
-        "seq": (SEARCH_SEQUENCE, has_sequence),
-        "ss": (SEARCH_STRUCTURE, has_structure),
-        "sqs": (SEARCH_SEQUENCE_THEN_STRUCTURE, has_sequence and has_structure),
-        "sum": (SEARCH_SUM, has_sequence and has_structure),
-        "hybrid": (SEARCH_HYBRID, has_sequence and has_structure),
-    }
     try:
-        selected, available = modes[mode]
+        selected = SEARCH_MODES[mode]
     except KeyError:
         raise ValueError(
             "search_mode must be 'auto', 'seq', 'ss', 'sqs', 'sum' or 'hybrid'"
         ) from None
-    if not available:
+    if not {SEARCH_SEQUENCE: has_sequence, SEARCH_STRUCTURE: has_structure}.get(
+        selected, has_sequence and has_structure
+    ):
         raise ValueError(
             "search_mode={!r} requires matching query data and index".format(mode)
         )

@@ -849,6 +849,11 @@ class DatabaseFromOMA(Database):
                             and hog_comp >= min_fam_completeness
                         )
                     )
+                    # families removed on purpose, e.g. to make negative queries
+                    if ok and curr_oma_hog.split(b".")[0] in getattr(
+                        self, "excluded_families", ()
+                    ):
+                        ok = False
                     if ok:
                         fam += 1
                         curr_oma_roothog_ok = True

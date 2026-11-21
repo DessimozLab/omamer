@@ -130,6 +130,21 @@ def test_sequence_only_build(dataset, tmp_path):
         db.close()
 
 
+def test_exclude_families(dataset, tmp_path):
+    exclude = tmp_path / "excluded.txt"
+    exclude.write_text("HOG:0000001\n\n")
+    db_path = tmp_path / "excluded.h5"
+    _mkdb(db_path, dataset, "--exclude_families", str(exclude))
+    db = Database(str(db_path))
+    try:
+        assert len(db._db_Family) == FAMILIES - 1
+        assert all(db.get_hog_id(i).startswith("HOG:0000002") for i in range(len(db._db_HOG)))
+        prot_ids = {db.get_prot_id(i) for i in range(len(db._db_Protein))}
+        assert prot_ids == {_protein_id(1, sp) for sp in SPECIES}
+    finally:
+        db.close()
+
+
 def test_structure_build_aligns_3di_with_proteins(dataset, tmp_path):
     path, seqs, structures = dataset
     db_path = tmp_path / "ss.h5"

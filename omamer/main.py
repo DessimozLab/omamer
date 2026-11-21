@@ -138,6 +138,12 @@ def main():
         help="Optional -- path to a file giving a list of taxa to hide the proteins during index creation only. HOGs will still exist in the database, but it will not be possible to place to them. Names must match EXACTLY to those in the given newick species tree.",
         type=FileType("r"),
     )
+    mkdb_parser.add_argument(
+        "--exclude_families",
+        required=False,
+        help="Optional -- path to a file with OMA root-HOG ids (e.g. HOG:E0789753), one per line. These families and all their sub-HOGs are left out of the database, e.g. to obtain queries without a family for benchmarks.",
+        type=FileType("r"),
+    )
     # mkdb_parser.add_argument(
     #    "--species", default="", help="Alternatively to --hidden_taxa, provide a file with species offsets in sp_tab (tmp option for scaling experiment)", type=str
     # )

@@ -48,14 +48,9 @@ class Index(object):
 
         # load k, alphabet size and hidden taxa
         if "/Index" in self.db.db:
-            attrs = self.db.db.root.Index._v_attrs
-            self.k = attrs["k"]
-            alphabet_n = attrs["alphabet_n"]
-            self.hidden_taxa = attrs["hidden_taxa"]
-            # k-mers in more families than this are ignored, 0: no cap (as
-            # in databases built before the cap)
-            self.kmer_max_df = int(getattr(attrs, "kmer_max_df", 0))
-            self.ss_kmer_max_df = int(getattr(attrs, "ss_kmer_max_df", 0))
+            self.k = self.db.db.root.Index._v_attrs["k"]
+            alphabet_n = self.db.db.root.Index._v_attrs["alphabet_n"]
+            self.hidden_taxa = self.db.db.root.Index._v_attrs["hidden_taxa"]
         else:
             self.k = k
             alphabet_n = 21 if not reduced_alphabet else 13
@@ -106,13 +101,6 @@ class Index(object):
         return {
             "buff": self.db._db_Index_TableBuffer,
             "idx": self.db._db_Index_TableIndex,
-        }
-
-    @property
-    def ss_kmer_table(self):
-        return {
-            "buff": self.db._db_Index_SSTableBuffer,
-            "idx": self.db._db_Index_SSTableIndex,
         }
 
     ### main function to build the index ###

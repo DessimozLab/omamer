@@ -145,6 +145,25 @@ def test_exclude_families(dataset, tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("selection", ["filter", "choose_scored"])
+def test_search_a_single_family_database(dataset, tmp_path, selection):
+    from omamer.merge_search import MergeSearch
+
+    # the only family has hit probability 1: its tests must not divide by 0
+    exclude = tmp_path / "excluded.txt"
+    exclude.write_text("HOG:0000001\n")
+    db_path = tmp_path / "one.h5"
+    _mkdb(db_path, dataset, "--exclude_families", str(exclude))
+    query = dataset[1][_protein_id(1, "A")]
+    with Database(str(db_path)) as db:
+        assert list(db._db_Index_FamilyProbability[:]) == [1.0]
+        df = MergeSearch(db.ki).merge_search(
+            seqs=[query], ids=["q"], family_selection=selection, alpha=1.0
+        )
+    assert list(df["hogid"]) == ["HOG:0000002"]
+    assert 0.0 < df["family_p"][0] < 1e-6
+
+
 def test_structure_build_aligns_3di_with_proteins(dataset, tmp_path):
     path, seqs, structures = dataset
     db_path = tmp_path / "ss.h5"

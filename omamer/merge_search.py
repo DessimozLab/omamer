@@ -73,9 +73,10 @@ FAMILY_SELECTIONS = {
     "choose_scored": FAMILY_SELECT_CHOOSE_SCORED,
 }
 
-# Bounds of a family hit probability after the query-specific scaling.
-MIN_SCALED_PROBABILITY = 1e-100
-MAX_SCALED_PROBABILITY = 1.0 - 1e-9
+# Bounds of a family hit probability in the tests: p = 1 (e.g. the only
+# family of a database) or a scaled p above 1 would divide by zero.
+MIN_PROBABILITY = 1e-100
+MAX_PROBABILITY = 1.0 - 1e-9
 
 MODALITY_NAMES = {
     SEARCH_SEQUENCE: "seq",
@@ -210,6 +211,12 @@ def make_search_results(n_queries, top_n_families):
 
 
 @numba.njit(nogil=True)
+def clip_probability(p):
+    """p clipped to [MIN_PROBABILITY, MAX_PROBABILITY] (unchanged inside)."""
+    return min(max(p, MIN_PROBABILITY), MAX_PROBABILITY)
+
+
+@numba.njit(nogil=True)
 def binom_neglogccdf(x, n, p):
     """
     Neg-log of the upper tail P(X >= x) of a Binomial(n, p), in pure numba
@@ -221,6 +228,7 @@ def binom_neglogccdf(x, n, p):
     if x > n:
         return np.inf
 
+    p = clip_probability(p)
     log_px = (
         math.lgamma(n + 1.0)
         - math.lgamma(x + 1.0)
@@ -840,9 +848,7 @@ def query_probability_scale(index, sum_df, n):
 
 @numba.njit(nogil=True)
 def scale_probability(p, p_scale):
-    if p_scale == 1.0:
-        return p
-    return min(max(p * p_scale, MIN_SCALED_PROBABILITY), MAX_SCALED_PROBABILITY)
+    return clip_probability(p * p_scale)
 
 
 @numba.njit(nogil=True)

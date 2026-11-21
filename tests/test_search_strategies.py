@@ -466,6 +466,8 @@ def test_binom_neglogccdf_matches_scipy():
         assert binom_neglogccdf(x, n, p) == pytest.approx(expected, rel=1e-9)
     assert binom_neglogccdf(0, 10, 0.1) == 0.0
     assert binom_neglogccdf(11, 10, 0.1) == np.inf
+    # p = 1 (the only family of a database) is clipped below 1
+    assert 0.0 <= binom_neglogccdf(5, 5, 1.0) < 1e-6
 
 
 def _scratch(n_families):

@@ -130,11 +130,12 @@ def test_sequence_only_build(dataset, tmp_path):
         db.close()
 
 
-def test_exclude_families(dataset, tmp_path):
+def test_exclude_families(dataset, tmp_path, caplog):
     exclude = tmp_path / "excluded.txt"
-    exclude.write_text("HOG:0000001\n\n")
+    exclude.write_text("HOG:0000001\n\nHOG:0000009\n")
     db_path = tmp_path / "excluded.h5"
     _mkdb(db_path, dataset, "--exclude_families", str(exclude))
+    assert "1 ids of --exclude_families match no root-HOG, e.g. HOG:0000009" in caplog.text
     db = Database(str(db_path))
     try:
         assert len(db._db_Family) == FAMILIES - 1

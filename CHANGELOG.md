@@ -16,8 +16,9 @@
   probabilities and at search. `mkdb --seq_min_distinct` / `--ss_min_distinct`
   (defaults 0, off, and 3): k-mers with fewer distinct letters are ignored at
   search. The four settings are stored in the database.
-- `mkdb --exclude_families` leaves the given root-HOGs out of a build, e.g. to
-  obtain queries without a family for benchmarks.
+- `mkdb --exclude_families` leaves the given root-HOGs (ids of
+  `OmaServer.h5`) out of a browser build, e.g. to obtain queries without a
+  family for benchmarks.
 - `search -s/--structure` takes the 3Di sequences of the queries (same ids, in
   the same order as `--query`); the database needs a 3Di index.
 - `search --search_mode`: `seq`, `ss` (3Di only), `sqs` (sequence, then 3Di

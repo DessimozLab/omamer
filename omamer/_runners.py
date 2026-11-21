@@ -125,7 +125,7 @@ def mkdb_oma(args):
             for line in args.exclude_families
             if line.strip()
         }
-        LOG.info("Excluding {} families".format(len(db.excluded_families)))
+        LOG.info("Read {} root-HOG ids to exclude".format(len(db.excluded_families)))
 
     # add sequences from database
     LOG.info("Loading sequences")

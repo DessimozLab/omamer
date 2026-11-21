@@ -850,9 +850,8 @@ class DatabaseFromOMA(Database):
                         )
                     )
                     # families removed on purpose, e.g. to make negative queries
-                    if ok and curr_oma_hog.split(b".")[0] in getattr(
-                        self, "excluded_families", ()
-                    ):
+                    if curr_oma_hog.split(b".")[0] in excluded_families:
+                        excluded_roothogs.append(curr_oma_hog)
                         ok = False
                     if ok:
                         fam += 1
@@ -976,6 +975,11 @@ class DatabaseFromOMA(Database):
         tax2level = dict(zip(self._db_Taxonomy[:]["ID"], self._db_Taxonomy[:]["Level"]))
         # hog_tab = h5file.root.HogLevel
 
+        # root-HOG ids to leave out (mkdb --exclude_families), and the
+        # root-HOGs left out
+        excluded_families = getattr(self, "excluded_families", set())
+        excluded_roothogs = []
+
         # containers
         fam2hogs = defaultdict(set)
         hog2oma_hog = dict()
@@ -1039,6 +1043,18 @@ class DatabaseFromOMA(Database):
             self.min_fam_completeness,
             self.logic,
         )
+
+        if excluded_families:
+            LOG.info("Excluded {} root-HOGs".format(len(excluded_roothogs)))
+            unmatched = excluded_families - {
+                h.split(b".")[0] for h in excluded_roothogs
+            }
+            if unmatched:
+                LOG.warning(
+                    "{} ids of --exclude_families match no root-HOG, e.g. {}".format(
+                        len(unmatched), min(unmatched).decode("ascii")
+                    )
+                )
 
         # todo: compute the number of proteins that we need to load in the select_and_filter_OMA_proteins
 

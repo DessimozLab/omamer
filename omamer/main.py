@@ -141,7 +141,7 @@ def main():
     mkdb_parser.add_argument(
         "--exclude_families",
         required=False,
-        help="Optional -- path to a file with OMA root-HOG ids (e.g. HOG:E0789753), one per line. These families and all their sub-HOGs are left out of the database, e.g. to obtain queries without a family for benchmarks.",
+        help="Optional -- path to a file with OMA root-HOG ids (e.g. HOG:E0789753, the ids of OmaServer.h5), one per line. These families and all their sub-HOGs are left out of the database, e.g. to obtain queries without a family for benchmarks. [BROWSERBUILD]",
         type=FileType("r"),
     )
     # mkdb_parser.add_argument(

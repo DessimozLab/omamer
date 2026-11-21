@@ -290,11 +290,16 @@ def main():
             "--{}_kmer_df_exponent".format(modality),
             type=float,
             default=exponent,
-            help="{} k-mers: when the chosen family is tested, its null hit "
-            "probability is p_F * (m / m0) ** b, with b this value, m the mean "
-            "document frequency (number of HOGs) of the query's k-mers and m0 "
-            "the reference (--{}_kmer_df_reference). Queries made of common "
-            "k-mers then need more hits to be significant. 0: off.".format(
+            help="{} k-mers: the null hit probability p_F of a family is "
+            "scaled to p_F * (m / m0) ** b, with b this value, m the mean "
+            "document frequency (number of families) of the query's k-mers and "
+            "m0 the reference (--{}_kmer_df_reference). With --family_selection "
+            "choose_scored, the candidates and their ranking use p_F and only "
+            "the test of the chosen family (and of the further families of -n) "
+            "uses the scaled probability; with filter, every candidate is "
+            "tested with it; in summed scores (--search_mode sum and hybrid), "
+            "every candidate is scored with it. Queries made of common k-mers "
+            "then need more hits to be significant. 0: off.".format(
                 name, modality
             ),
         )
@@ -303,7 +308,8 @@ def main():
             type=float,
             default=None,
             help="The reference m0 of --{}_kmer_df_exponent. Default: the "
-            "mean document frequency of the index's postings.".format(modality),
+            "posting-weighted mean document frequency (number of families) of "
+            "the index's k-mers.".format(modality),
         )
     for name in ("family_model", "seq_family_model", "ss_family_model"):
         search_parser.add_argument(

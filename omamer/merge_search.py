@@ -88,7 +88,7 @@ MODALITY_NAMES = {
 SequenceBatch = namedtuple("SequenceBatch", ("buffer", "offsets"))
 
 # The k-mer index of one modality and its binomial models. `max_df` > 0:
-# k-mers in more HOGs are ignored; `kmer_mask`: ignored k-mer codes (empty:
+# k-mers in more families are ignored; `kmer_mask`: ignored k-mer codes (empty:
 # none), e.g. low-complexity ones. Ignored k-mers do not count towards n.
 # `df_exponent` b > 0 makes the family hit probabilities query-specific
 # when a family is tested (see `query_probability_scale`).
@@ -1473,8 +1473,9 @@ class MergeSearch(object):
         family_selection: 'filter' or 'choose_scored' (see FAMILY_SELECT_*).
         seq_kmer_df_exponent, ss_kmer_df_exponent: exponent b of the
         query-specific family hit probabilities p_F (m / m0) ** b, with m the
-        mean document frequency of the query's k-mers, applied when the
-        chosen family is tested (see `query_probability_scale`); 0: off.
+        mean document frequency (number of families) of the query's k-mers,
+        used as `select_family_candidates` and `score_summed_candidates`
+        describe (see `query_probability_scale`); 0: off.
         seq_kmer_df_reference, ss_kmer_df_reference: m0 (None: the
         posting-weighted mean df of the index, `kmer_df_reference`).
         """

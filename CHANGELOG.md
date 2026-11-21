@@ -33,10 +33,14 @@
   `filter` is the previous rule (test every candidate, rank the significant
   ones).
 - `search --seq_kmer_df_exponent` / `--ss_kmer_df_exponent` (defaults 1.5 and
-  0): the binomial hit probability of the tested family is p_F * (m / m0)^b,
-  with m the mean number of families that contain the query's k-mers and m0 the
-  reference (`--*_kmer_df_reference`; default: the mean over the index's
-  postings). Queries made of common k-mers then need more hits.
+  0): the binomial hit probability of a family is scaled to p_F * (m / m0)^b,
+  with m the mean document frequency (number of families) of the query's k-mers
+  and m0 the reference (`--*_kmer_df_reference`; default: the posting-weighted
+  mean of the index). With `choose_scored`, the candidates and their ranking
+  use p_F and only the test of the chosen family (and of the further families
+  of `-n`) uses the scaled probability; with `filter`, every candidate is
+  tested with it; in summed scores (`sum`, `hybrid`), every candidate is scored
+  with it. Queries made of common k-mers then need more hits.
 
 ### Changed
 

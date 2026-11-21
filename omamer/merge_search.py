@@ -852,6 +852,10 @@ class MergeSearch(object):
                 elif r1[0] == x_flag:
                     continue
 
+                # k-mers with X are not searched and do not count towards n
+                # (the unique codes contain the X flag at most once)
+                n = len(r1) - np.sum(r1 == x_flag)
+
                 # Get thread-local data structures for search
                 thread_hit_fams = hit_fams[numba.get_thread_id()]
                 thread_hit_hogs = hit_hogs[numba.get_thread_id()]
@@ -883,7 +887,7 @@ class MergeSearch(object):
                 #     that have at least their expected number of k-mer matches,
                 #     because that number should be already given by random
                 #     (however is still insignificant).
-                mu = ref_fam_prob[qres["id"]] * len(r1)
+                mu = ref_fam_prob[qres["id"]] * n
                 qres = qres[qres["count"] >= mu]
 
                 #     - b. filter by sequence coverage. There is no point to
@@ -906,7 +910,6 @@ class MergeSearch(object):
                 # in logarithms later. For the other edge case, we already have k > 0
                 # guaranteed, so we're good here
                 epsilon = 1e-10
-                n = len(r1)
                 k_n = np.clip(qres["count"] / n, epsilon, 1 - epsilon)
 
                 # Now, by demanding exp(-n KL(k/n || p)) < alpha, we guarantee P < alpha too.
@@ -929,7 +932,7 @@ class MergeSearch(object):
                             (
                                 binom_neglogccdf(
                                     qres["count"][i],
-                                    len(r1),
+                                    n,
                                     ref_fam_prob[qres["id"][i]],
                                 )
                                 - correction_factor
@@ -946,9 +949,9 @@ class MergeSearch(object):
                     continue
 
                 # 4. Compute normalised count
-                expected_count = ref_fam_prob[qres["id"]] * len(r1)
+                expected_count = ref_fam_prob[qres["id"]] * n
                 qres["normcount"][:] = (qres["count"] - expected_count) / (
-                        len(r1) - expected_count
+                        n - expected_count
                 )
 
                 # 5. Store results
@@ -985,7 +988,7 @@ class MergeSearch(object):
                     # new expected count, but using old cumulation
                     (fam_hog_scores, fam_bestpath) = hog_path_placement(
                         c,
-                        r1.size,
+                        n,
                         fam_level_offsets,
                         fam_hog2parent,
                         thread_hog_counts[hog_s:hog_e],

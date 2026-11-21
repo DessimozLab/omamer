@@ -34,7 +34,7 @@ import pandas as pd
 
 from ._utils import LOG
 from .alphabets import get_transform
-from .kmer_mask import modality_kmer_mask, stored_min_distinct
+from .kmer_mask import low_complexity_mask, stored_min_distinct
 from .sequence_buffer import SequenceBuffer
 from .hierarchy import (
     get_root_leaf_offsets,
@@ -1422,11 +1422,8 @@ class MergeSearch(object):
                 self.ss_ref_fam_prob,
                 self.ss_ref_hog_prob,
             )
-        kmer_mask = modality_kmer_mask(
-            modality,
-            self.ki.k,
-            self.ki.alphabet.n,
-            stored_min_distinct(attrs, modality),
+        kmer_mask = low_complexity_mask(
+            self.ki.k, self.ki.alphabet.n, stored_min_distinct(attrs, modality)
         )
         if not df_exponent:
             (df_exponent, df_reference) = (0.0, 0.0)

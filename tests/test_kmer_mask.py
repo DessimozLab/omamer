@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from omamer.alphabets import Alphabet, get_transform
-from omamer.kmer_mask import low_complexity_mask, modality_kmer_mask
+from omamer.kmer_mask import low_complexity_mask
 
 
 def _code(seq, alphabet, k):
@@ -21,15 +21,9 @@ def test_low_complexity_mask_counts_distinct_letters():
     assert int(mask.sum()) == 21 + 21 * 20 * 3
 
 
-def test_modality_kmer_mask_per_modality(monkeypatch):
-    monkeypatch.delenv("OMAMER_SS_MIN_DISTINCT", raising=False)
-    monkeypatch.delenv("OMAMER_SEQ_MIN_DISTINCT", raising=False)
-    assert modality_kmer_mask("ss", 3, 21).size == 0
-    monkeypatch.setenv("OMAMER_SS_MIN_DISTINCT", "3")
-    assert modality_kmer_mask("seq", 3, 21).size == 0
-    np.testing.assert_array_equal(modality_kmer_mask("ss", 3, 21), low_complexity_mask(3, 21, 3))
-    monkeypatch.setenv("OMAMER_SEQ_MIN_DISTINCT", "2")
-    assert int(modality_kmer_mask("seq", 3, 21).sum()) == 21
+@pytest.mark.parametrize("min_distinct", [None, 0, 1])
+def test_low_complexity_mask_off(min_distinct):
+    assert low_complexity_mask(3, 21, min_distinct).size == 0
 
 
 @pytest.mark.parametrize("k, alphabet_n, min_distinct", [(1, 21, 2), (3, 21, 2), (4, 21, 3), (4, 5, 4)])

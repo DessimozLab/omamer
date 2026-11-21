@@ -311,13 +311,6 @@ def main():
             "posting-weighted mean document frequency (number of families) of "
             "the index's k-mers.".format(modality),
         )
-    for name in ("family_model", "seq_family_model", "ss_family_model"):
-        search_parser.add_argument(
-            "--" + name,
-            choices=("binomial",),
-            default="binomial",
-            help="Accepted for compatibility: the family model is binomial.",
-        )
     search_parser.add_argument(
         "-fo",
         "--family_only",

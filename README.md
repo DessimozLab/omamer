@@ -24,11 +24,14 @@ Note: databases included in the [Zenodo upload](https://zenodo.org/record/459370
 
 
 # omamer search - Searching a Database
-Assign proteins to families and subfamilies in a pre-existing database.
+Assign proteins to families and subfamilies in a pre-existing database, by their sequence, their 3Di sequence (structure alphabet, e.g. from Foldseek), or both. Searching 3Di sequences requires a database built with a 3Di index.
 ## Usage
-Required arguments: ``--db``, ``--query``
+Required arguments: ``--db``, and ``--query`` and/or ``--structure``
 
-    usage: omamer search [-h] -d DB -q QUERY [--threshold THRESHOLD] [--family_alpha FAMILY_ALPHA] [-fo] [-n TOP_N_FAMS] [--reference_taxon REFERENCE_TAXON]
+    usage: omamer search [-h] -d DB [-q QUERY] [-s STRUCTURE] [--search_mode {auto,seq,ss,sqs,sum,hybrid}] [--threshold THRESHOLD]
+                     [--family_alpha FAMILY_ALPHA] [--summed_alpha SUMMED_ALPHA] [--ss_weight SS_WEIGHT]
+                     [--family_selection {filter,choose_scored}] [--seq_kmer_df_exponent B] [--seq_kmer_df_reference M0]
+                     [--ss_kmer_df_exponent B] [--ss_kmer_df_reference M0] [-fo] [-n TOP_N_FAMS]
                      [-o OUT] [--include_extant_genes] [-c CHUNKSIZE] [-t {0,1,2,3,4,5,6,7,8}] [--log_level {debug,info,warning}] [--silent]
 
 ## Arguments
@@ -38,8 +41,14 @@ Required arguments: ``--db``, ``--query``
 |:-----------|:---------------------|:-----------------------|:------------|
 | [``-d``](#markdown-header-d) | [``--db``](#markdown-header--db) || Path to existing database (including filename)
 | [``-q``](#markdown-header-q) | [``--query``](#markdown-header--query) || Path to FASTA formatted sequences
+| [``-s``](#markdown-header-s) | [``--structure``](#markdown-header--structure) || Path to FASTA formatted 3Di sequences of the queries (same IDs, in the same order as ``--query``)
+| | [``--search_mode``](#markdown-header--search_mode) | auto | ``seq``: the sequence; ``ss``: the 3Di; ``sqs``: the sequence, then the 3Di alone for the queries without a significant family; ``sum``: the sum of the sequence and (weighted) 3Di family scores; ``hybrid``: the sequence, then the sum for the queries without a significant sequence family. ``auto``: ``hybrid`` with both inputs, else the one given.
 | | [``--threshold``](#markdown-header--threshold) | 0.1 | Threshold applied on the OMAmer-score that is used to vary the specificity of predicted HOGs. The lower the theshold the more (over-)specific predicted HOGs will be.
 | | [``--family_alpha``](#markdown-header--family_alpha) | 1e-6 | Significance threshold used when filtering families.
+| | [``--summed_alpha``](#markdown-header--summed_alpha) | ``--family_alpha`` | Significance threshold on the summed sequence + 3Di scores (``sum`` and ``hybrid`` modes).
+| | [``--ss_weight``](#markdown-header--ss_weight) | 0.5 | Weight w of the 3Di score in summed scores: a family is placed when E_seq * E_3Di^w <= ``--summed_alpha``.
+| | [``--family_selection``](#markdown-header--family_selection) | choose_scored | ``filter``: test every candidate family and rank the significant ones by normalised count (OMAmer 2). ``choose_scored``: rank the candidates with a positive score by normalised count and place the query only when its top family is significant.
+| | [``--seq_kmer_df_exponent``](#markdown-header--seq_kmer_df_exponent) | 1.5 | When the chosen family is tested, its null hit probability p_F is scaled by (m / m0)^b, with b this value, m the mean document frequency (number of HOGs) of the query's _k_-mers and m0 the reference (``--seq_kmer_df_reference``, default: the posting-weighted mean of the index). Queries made of common _k_-mers then need more hits to be significant. 0: off. ``--ss_kmer_df_exponent`` (default 0) and ``--ss_kmer_df_reference`` do the same for 3Di _k_-mers.
 | [``-fo``](#markdown-header-fo) | [``--family_only``](#markdown-header--family_only) | False | If set, only place at the family level. Useful for certain analysis. Note: `subfamily_medianseqlen` in the results is for the family level.
 | [``-n``](#markdown-header-n) | [``--top_n_fams``](#markdown-header--top_n_fams) | 1 | Number of top level families to place into. By default, placed into only the best scoring family.
 | [``-o``](#markdown-header-o) | [``--out``](#markdown-header--db) | stdout | Path to output. If not set, defaults to stdout.
@@ -67,13 +76,16 @@ A HOG identifier is composed of the root-HOG identifier (following “HOG:” an
 The taxonomic level that the predicted HOG is defined at.
 
 #### Family p-value (`family_p`)
-p-value of having as many or more of k-mers in common under a binomial distribution. Reported in negative natural log units.
+p-value of having as many or more of k-mers in common under a binomial distribution, with the Bonferroni correction for the number of families. Reported in negative natural log units. For summed scores (``seq+ss``), the sequence score plus w times the 3Di score.
 
 #### Family count (`family_count`)
 Count of _k_-mers in common with the family / root level HOG.
 
 #### Family normalised count (`family_normcount`)
 Family count, normalised by the expected number of hits for the query's sequence length, with the family's _k_-mer content.
+
+#### Modality (`modality`)
+The scores the family was selected with: ``seq`` (sequence), ``ss`` (3Di) or ``seq+ss`` (summed scores). With ``seq+ss``, the subfamily is placed with the sequence _k_-mers when the sequence has the family as a candidate, else with the 3Di _k_-mers.
 
 #### Sub-Family score (`subfamily_score`)
 The OMAmer-score of the predicted HOG. At the subfamily level, this score captures the excess of similarity that is shared between the query and a given HOG, thus excluding the similarity with regions conserved in more ancestral HOGs.

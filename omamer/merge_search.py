@@ -955,15 +955,16 @@ class MergeSearch(object):
                 # - a. sort by normcount, then overlap, then p-value for tie-breaking
                 qres = family_result_sort(qres, top_n_fams)
 
-                # - b. store results
-                family_results["id"][zz, :top_n_fams] = qres["id"][:top_n_fams] + 1
-                family_results["pvalue"][zz, :top_n_fams] = qres["pvalue"][:top_n_fams]
-                family_results["count"][zz, :top_n_fams] = qres["count"][:top_n_fams]
-                family_results["normcount"][zz, :top_n_fams] = qres["normcount"][:top_n_fams]
-                family_results["overlap"][zz, :top_n_fams] = qres["overlap"][:top_n_fams]
+                # - b. store results (fewer than top_n_fams may be significant)
+                n_store = min(len(qres), top_n_fams)
+                family_results["id"][zz, :n_store] = qres["id"][:n_store] + 1
+                family_results["pvalue"][zz, :n_store] = qres["pvalue"][:n_store]
+                family_results["count"][zz, :n_store] = qres["count"][:n_store]
+                family_results["normcount"][zz, :n_store] = qres["normcount"][:n_store]
+                family_results["overlap"][zz, :n_store] = qres["overlap"][:n_store]
 
                 # 5. Place within families
-                for i in numba.prange(min(len(qres), top_n_fams)):
+                for i in numba.prange(n_store):
                     entry = fam_tab[qres["id"][i]]
                     hog_s = entry["HOGoff"]
                     hog_e = hog_s + entry["HOGnum"]

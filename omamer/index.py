@@ -32,19 +32,40 @@ from .merge_search import cumulate_counts_1fam
 
 
 class Index(object):
-    def __init__(self, db, k=6, reduced_alphabet=False, hidden_taxa=[]):
+    def __init__(
+        self,
+        db,
+        k=6,
+        reduced_alphabet=False,
+        hidden_taxa=[],
+        kmer_max_df=0,
+        ss_kmer_max_df=0,
+        seq_min_distinct=None,
+        ss_min_distinct=None,
+    ):
         # load database object
         self.db = db
 
         # load k, alphabet size and hidden taxa
         if "/Index" in self.db.db:
-            self.k = self.db.db.root.Index._v_attrs["k"]
-            alphabet_n = self.db.db.root.Index._v_attrs["alphabet_n"]
-            self.hidden_taxa = self.db.db.root.Index._v_attrs["hidden_taxa"]
+            attrs = self.db.db.root.Index._v_attrs
+            self.k = attrs["k"]
+            alphabet_n = attrs["alphabet_n"]
+            self.hidden_taxa = attrs["hidden_taxa"]
+            # k-mers in more families than this are ignored, 0: no cap (as
+            # in databases built before the cap)
+            self.kmer_max_df = int(getattr(attrs, "kmer_max_df", 0))
+            self.ss_kmer_max_df = int(getattr(attrs, "ss_kmer_max_df", 0))
         else:
             self.k = k
             alphabet_n = 21 if not reduced_alphabet else 13
             self.hidden_taxa = hidden_taxa
+            if kmer_max_df < 0 or ss_kmer_max_df < 0:
+                raise ValueError("k-mer document-frequency caps must be >= 0")
+            self.kmer_max_df = int(kmer_max_df)
+            self.ss_kmer_max_df = int(ss_kmer_max_df)
+            # low-complexity k-mer mask of each modality, stored for search
+            self.min_distinct = {"seq": seq_min_distinct, "ss": ss_min_distinct}
 
         self.alphabet = Alphabet(n=alphabet_n)
 
@@ -87,15 +108,34 @@ class Index(object):
             "idx": self.db._db_Index_TableIndex,
         }
 
+    @property
+    def ss_kmer_table(self):
+        return {
+            "buff": self.db._db_Index_SSTableBuffer,
+            "idx": self.db._db_Index_SSTableIndex,
+        }
+
     ### main function to build the index ###
-    def build_kmer_table(self, seq_buff):
+    def build_kmer_table(self, seq_buff, ss_buff=None):
+        """
+        Build the k-mer table of the sequences and, if ss_buff is given, the
+        one of the 3Di sequences. Record i of both buffers is protein i.
+        """
         assert self.db.mode in {"w", "a"}, "Index must be opened in write mode."
         assert "/Index" not in self.db.db, "Index has already been computed"
 
-        # build suffix array with option to translate the sequence buffer first
-        translated = self.alphabet.translate(seq_buff)
-        sa = self._build_suffixarray(translated, len(self.db._db_Protein))
-        self._build_kmer_table(seq_buff, sa, translated)
+        idx = self.db.db.create_group("/", "Index", "hog indexes")
+        idx._f_setattr("k", self.k)
+        idx._f_setattr("alphabet_n", self.alphabet.n)
+        idx._f_setattr("hidden_taxa", self.hidden_taxa)
+
+        for modality, buff in (("seq", seq_buff), ("ss", ss_buff)):
+            if buff is None:
+                continue
+            # build suffix array with option to translate the sequence buffer first
+            translated = self.alphabet.translate(buff)
+            sa = self._build_suffixarray(translated, len(self.db._db_Protein))
+            self._build_kmer_table(buff, sa, translated, modality=modality)
 
     @staticmethod
     def _build_suffixarray(seqs, n):
@@ -109,16 +149,21 @@ class Index(object):
         sa[:n].sort()  # Sort delimiters by position
         return sa
 
-    def _build_kmer_table(self, seq_buff, sa, translated=None):
+    def _build_kmer_table(self, seq_buff, sa, translated=None, modality="seq"):
         """
         Build the k-mer table from the suffix array of the translated sequence
         buffer. The k-mer codes are computed from the original sequences, the
         suffixes of a k-mer are found by comparing the translated ones, as with
         a reduced alphabet different k-mers of the original sequences belong
         to the same k-mer.
+
+        modality is "seq" (sequences) or "ss" (3Di sequences, stored with the
+        prefix SS). The family and HOG probabilities ignore the k-mers found
+        in more families than the document-frequency cap of the modality.
         """
         if translated is None:
             translated = self.alphabet.translate(seq_buff)
+        max_df = self.kmer_max_df if modality == "seq" else self.ss_kmer_max_df
 
         @numba.njit(parallel=True, nogil=True)
         def _compute_mask_and_filter(
@@ -187,6 +232,7 @@ class Index(object):
             k,
             DIGITS_AA,
             DIGITS_AA_LOOKUP,
+            max_df,
         ):
             ii = 0  # pointer to sa offset of kk
             kk = 0  # pointer to k-mer (offset in table_idx)
@@ -232,11 +278,13 @@ class Index(object):
                     hog_offsets, fam_offsets, hog_parents
                 )
 
-                ## store kmer counts of fams and lca hogs
-                hog_kmer_counts[lca_hog_offsets] = hog_kmer_counts[lca_hog_offsets] + 1
+                ## store kmer counts of fams and lca hogs, without the
+                ## k-mers above the document-frequency cap
+                nr_lca_hog_offsets = len(lca_hog_offsets)
+                if max_df == 0 or nr_lca_hog_offsets <= max_df:
+                    hog_kmer_counts[lca_hog_offsets] = hog_kmer_counts[lca_hog_offsets] + 1
 
                 ## store LCA HOGs in table buffer
-                nr_lca_hog_offsets = len(lca_hog_offsets)
                 table_buff[
                     ii_table_buff : ii_table_buff + nr_lca_hog_offsets
                 ] = lca_hog_offsets
@@ -253,19 +301,24 @@ class Index(object):
             table_idx[kk:] = ii_table_buff
             return ii_table_buff
 
-        def estimate_family_prob(tab, idx, h2f):
+        def estimate_family_prob(tab, idx, h2f, max_df):
             @numba.njit
-            def count_family_occurrence(tab, idx, h2f):
-                c = np.zeros(h2f.max() + 1, dtype=np.uint32)
+            def count_family_occurrence(tab, idx, h2f, max_df):
+                c = np.zeros(h2f.max() + 1, dtype=np.int64)
+                n = 0
                 for i in range(len(idx) - 1):
+                    df = np.int64(idx[i + 1]) - np.int64(idx[i])
+                    if max_df != 0 and df > max_df:
+                        continue
                     hogs = tab[idx[i] : idx[i + 1]]
-                    c[h2f[hogs]] += idx[i + 1] - idx[i]
-                return c
+                    c[h2f[hogs]] += df
+                    n += df
+                return c, n
 
-            fam_occ = count_family_occurrence(tab, idx, h2f)
-            return fam_occ / idx[-1]
+            fam_occ, n = count_family_occurrence(tab, idx, h2f, max_df)
+            return fam_occ / n
 
-        def estimate_hog_prob(idx, hog_counts, fam_tab, level_arr, hog2parent):
+        def estimate_hog_prob(hog_counts, fam_tab, level_arr, hog2parent):
             @numba.njit(parallel=True, nogil=True)
             def cumulate_counts_nfams(
                 hog_counts, fam_level_off, fam_level_num, level_arr, hog2parent
@@ -288,7 +341,7 @@ class Index(object):
                 hog2parent,
             )
 
-            return hog_occ / idx[-1]
+            return hog_occ / hog_counts.sum()
 
         LOG.debug(" - filter suffix array and compute its HOG mask")
         n = len(self.db._db_Protein)
@@ -337,36 +390,38 @@ class Index(object):
             self.k,
             self.alphabet.DIGITS_AA,
             self.alphabet.DIGITS_AA_LOOKUP,
+            max_df,
         )
 
         # remove extra space
         table_buff = table_buff[:ii_table_buff]
 
         LOG.debug(" - write k-mer table")
-        idx = self.db.db.create_group("/", "Index", "hog indexes")
-        idx._f_setattr("k", self.k)
-        idx._f_setattr("alphabet_n", self.alphabet.n)
-        idx._f_setattr("hidden_taxa", self.hidden_taxa)
+        idx = self.db.db.root.Index
+        prefix = "" if modality == "seq" else "SS"
+        idx._f_setattr("kmer_max_df" if modality == "seq" else "ss_kmer_max_df", max_df)
+        min_distinct = self.min_distinct.get(modality)
+        if min_distinct is not None:
+            idx._f_setattr("{}_kmer_min_distinct".format(modality), int(min_distinct))
         self.db.db.create_carray(
-            idx, "TableIndex", obj=table_idx, filters=self.db._compr
+            idx, prefix + "TableIndex", obj=table_idx, filters=self.db._compr
         )
         self.db.db.create_carray(
-            idx, "TableBuffer", obj=table_buff, filters=self.db._compr
+            idx, prefix + "TableBuffer", obj=table_buff, filters=self.db._compr
         )
 
         # compute the family / hog probability estimates, assuming binomial distns
-        fam_prob = estimate_family_prob(table_buff, table_idx, h2f)
+        fam_prob = estimate_family_prob(table_buff, table_idx, h2f, max_df)
         self.db.db.create_carray(
-            idx, "FamilyProbability", obj=fam_prob, filters=self.db._compr
+            idx, prefix + "FamilyProbability", obj=fam_prob, filters=self.db._compr
         )
 
         hog_prob = estimate_hog_prob(
-            table_idx,
             hog_kmer_counts,
             self.db._db_Family,
             self.db._db_LevelOffsets,
             self.db._db_HOG.col("ParentOff"),
         )
         self.db.db.create_carray(
-            idx, "HOGProbability", obj=hog_prob, filters=self.db._compr
+            idx, prefix + "HOGProbability", obj=hog_prob, filters=self.db._compr
         )

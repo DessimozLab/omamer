@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import tables
+from property_manager import set_property
 
 from omamer.database import Database, DatabaseFromOMA
 from omamer.hierarchy import get_root_leaf_offsets
@@ -331,11 +332,10 @@ def test_tiny_sequence_index(tmp_path):
     try:
         index = Index(db, k=2, reduced_alphabet=False, hidden_taxa=())
         sequence_buffer = np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1")
-        suffix_array = index._build_suffixarray(
-            index.alphabet.translate(sequence_buffer),
-            len(db._db_Protein),
-        )
-        index._build_kmer_table(sequence_buffer, suffix_array)
+        # Without a 3Di buffer only the sequence half of the index is built.
+        index.build_kmer_table(sequence_buffer)
+
+        assert "/Index/SSTableIndex" not in db.db
 
         table_index = db.db.root.Index.TableIndex[:]
         table_buffer = db.db.root.Index.TableBuffer[:]
@@ -385,6 +385,133 @@ def test_tiny_sequence_index_reduced_alphabet(tmp_path):
         np.testing.assert_allclose(
             db.db.root.Index.HOGProbability[:], [0.5, 0.0, 0.5]
         )
+    finally:
+        db.close()
+
+
+def test_reduced_alphabet_index_has_one_posting_per_family(tmp_path):
+    """
+    The suffix array is sorted on the reduced alphabet, where AS and AT are
+    the same k-mer. Comparing the k-mers on the original letters split them
+    into separate runs of the same code, so a family was listed once per run.
+    """
+    db = TinyIndexDatabase(tmp_path / "reduced.h5")
+    try:
+        index = Index(db, k=2, reduced_alphabet=True, hidden_taxa=())
+        # proteins 0 and 1 are in family 0, protein 2 in family 1
+        index.build_kmer_table(np.frombuffer(b"ASC ATA ASD ", dtype="S1"))
+
+        table_index = db.db.root.Index.TableIndex[:]
+        table_buffer = db.db.root.Index.TableBuffer[:]
+        hog_families = db._db_HOG.col("FamOff")
+        alphabet = index.alphabet
+        for code in np.flatnonzero(np.diff(table_index)):
+            families = hog_families[table_buffer[table_index[code]:table_index[code + 1]]]
+            assert len(families) == len(set(families)), code
+
+        # AS == AT: one posting per family, families 0 and 1
+        code = alphabet.DIGITS_AA_LOOKUP[ord("A")] * alphabet.n + alphabet.DIGITS_AA_LOOKUP[ord("S")]
+        families = hog_families[table_buffer[table_index[code]:table_index[code + 1]]]
+        assert sorted(families) == [0, 1]
+        # family 0 has AA and AC, family 1 AA and AD: with each k-mer counted
+        # once per family, the two families are symmetric
+        np.testing.assert_allclose(db.db.root.Index.FamilyProbability[:], [0.75, 0.75])
+    finally:
+        db.close()
+
+
+def test_tiny_structure_index(tmp_path):
+    """A 3Di buffer adds a structure half without disturbing the sequence half."""
+    db = TinyIndexDatabase(tmp_path / "tiny-structure-index.h5")
+    try:
+        index = Index(db, k=2, reduced_alphabet=False, hidden_taxa=())
+        sequence_buffer = np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1")
+        # The same proteins relabelled, so the two halves index disjoint k-mer
+        # codes but must agree on every derived probability.
+        structure_buffer = np.frombuffer(b"CCCC CCCD CCCE ", dtype="S1")
+        index.build_kmer_table(sequence_buffer, structure_buffer)
+
+        idx = db.db.root.Index
+        assert "/Index/SSTableIndex" in db.db
+
+        structure_index = idx.SSTableIndex[:]
+        nonempty_codes = np.flatnonzero(np.diff(structure_index))
+        # "CC", "CD" and "CE" over the 21-letter alphabet.
+        np.testing.assert_array_equal(nonempty_codes, [22, 23, 24])
+        np.testing.assert_array_equal(structure_index[nonempty_codes], [0, 2, 3])
+        np.testing.assert_array_equal(structure_index[nonempty_codes + 1], [2, 3, 4])
+        np.testing.assert_array_equal(idx.SSTableBuffer[:], [0, 2, 0, 2])
+
+        np.testing.assert_allclose(idx.SSFamilyProbability[:], [0.75, 0.75])
+        np.testing.assert_allclose(idx.SSHOGProbability[:], [0.5, 0.0, 0.5])
+        np.testing.assert_allclose(idx.SSFamilyProbability[:], idx.FamilyProbability[:])
+        np.testing.assert_allclose(idx.SSHOGProbability[:], idx.HOGProbability[:])
+    finally:
+        db.close()
+
+
+def test_modalities_keep_independent_document_frequency_caps(tmp_path):
+    db = TinyIndexDatabase(tmp_path / "capped-index.h5")
+    try:
+        index = Index(
+            db, k=2, kmer_max_df=1, ss_kmer_max_df=2, seq_min_distinct=0, ss_min_distinct=3
+        )
+        index.build_kmer_table(
+            np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1"),
+            np.frombuffer(b"CCCC CCCC CCCC ", dtype="S1"),
+        )
+
+        idx = db.db.root.Index
+        attrs = idx._v_attrs
+        assert attrs.kmer_max_df == 1 and attrs.ss_kmer_max_df == 2
+        assert attrs.seq_kmer_min_distinct == 0 and attrs.ss_kmer_min_distinct == 3
+        # the k-mer tables keep every k-mer, the probabilities ignore AA (in
+        # both families) for the sequences
+        np.testing.assert_array_equal(idx.TableBuffer[:], [0, 2, 0, 2])
+        np.testing.assert_array_equal(idx.SSTableBuffer[:], [0, 2])
+        np.testing.assert_allclose(idx.FamilyProbability[:], [0.5, 0.5])
+        np.testing.assert_allclose(idx.SSFamilyProbability[:], [1.0, 1.0])
+        np.testing.assert_allclose(idx.HOGProbability[:], [0.5, 0.0, 0.5])
+        np.testing.assert_allclose(idx.SSHOGProbability[:], [0.5, 0.0, 0.5])
+    finally:
+        db.close()
+
+
+def test_sequence_only_index_has_no_3di_attributes(tmp_path):
+    db = TinyIndexDatabase(tmp_path / "seq-index.h5")
+    try:
+        index = Index(db, k=2, ss_kmer_max_df=1000, ss_min_distinct=3)
+        index.build_kmer_table(np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1"))
+        names = db.db.root.Index._v_attrs._f_list()
+        assert "kmer_max_df" in names
+        assert not {"ss_kmer_max_df", "ss_kmer_min_distinct", "seq_kmer_min_distinct"} & set(names)
+    finally:
+        db.close()
+
+
+def test_hidden_species_excluded_from_both_modalities(tmp_path):
+    db = TinyIndexDatabase(tmp_path / "hidden-species-index.h5")
+    try:
+        index = Index(db, k=2)
+        set_property(index, "sp_filter", np.asarray([True, False]))
+        index.build_kmer_table(
+            np.frombuffer(b"AAAA AAAC AAAG ", dtype="S1"),
+            np.frombuffer(b"CCCC CCCD CCCE ", dtype="S1"),
+        )
+
+        idx = db.db.root.Index
+        for prefix, expected_codes in (("", [0, 1]), ("SS", [22, 23])):
+            table_index = getattr(idx, prefix + "TableIndex")[:]
+            np.testing.assert_array_equal(
+                np.flatnonzero(np.diff(table_index)), expected_codes
+            )
+            np.testing.assert_array_equal(getattr(idx, prefix + "TableBuffer")[:], [0, 0])
+            np.testing.assert_allclose(
+                getattr(idx, prefix + "FamilyProbability")[:], [1.0, 0.0]
+            )
+            np.testing.assert_allclose(
+                getattr(idx, prefix + "HOGProbability")[:], [1.0, 0.0, 0.0]
+            )
     finally:
         db.close()
 

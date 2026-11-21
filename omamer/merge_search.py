@@ -1340,6 +1340,17 @@ class MergeSearch(object):
         return self.db._db_Index_HOGProbability[:]
 
     @cached_property
+    def hog_id_buff(self):
+        # in memory: decoding the HOG ids of the results from it is far
+        # cheaper than a read of the (compressed) HDF5 table per result row
+        return self.db._db_HOGIDBuffer[:]
+
+    def get_hog_id(self, i):
+        ent = self.hog_tab[i]
+        s = ent["IDBufferOff"]
+        return self.hog_id_buff[s : s + ent["IDLen"]].tobytes().decode("ascii")
+
+    @cached_property
     def ss_kmer_table(self):
         return {
             "idx": self.db._db_Index_SSTableIndex[:],
@@ -1628,7 +1639,7 @@ class MergeSearch(object):
 
         # add the hog id
         df.loc[hog_f, "hogid"] = df.loc[hog_f, "hog_offset"].apply(
-            lambda i: self.db.get_hog_id(i - 1)
+            lambda i: self.get_hog_id(i - 1)
         )
         # add the hog level
         df.loc[hog_f, "hoglevel"] = df.loc[hog_f, "hog_offset"].apply(

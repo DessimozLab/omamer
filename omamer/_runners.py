@@ -389,6 +389,7 @@ def _ensure_data_loaded(ms, load_structure=True):
     _load("tax_tab", "taxonomy information")
     _load("fam_tab", "family information")
     _load("hog_tab", "sub-family information")
+    _load("hog_id_buff", "sub-family ids")
     _load("level_arr", "family hierarchy")
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")

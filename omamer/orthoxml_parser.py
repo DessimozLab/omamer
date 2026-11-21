@@ -375,13 +375,24 @@ class AllSpecies(object):
 
         return (species, max_ids)
 
+    @lazy_property
+    def _gene2species(self):
+        # the genes are known unless loaded without xrefs or from an OMA browser
+        return {
+            gene_id: species
+            for species in self._species.values()
+            for gene_id in species.genes
+        }
+
     def get_species(self, ids):
         """
-        Gets a species (name) from a gene ID, based on ID range.
-        Makes assumption that all gene ids are contiguous integers in the header file.
-        This might need to be replaced for more general OrthoXML.
-        NOTE: this might not work with non-OMA. Unsure of standard for this.
+        Gets a species (name) from a gene ID, from the genes of the species or,
+        when they are not loaded, based on ID range. The latter assumes that
+        the gene ids of a species are contiguous integers in the header file.
         """
+        if np.ndim(ids) == 0 and ids in self._gene2species:
+            return self._gene2species[ids]
+
         species = self._species_table[0]
         max_ids = self._species_table[1]
 

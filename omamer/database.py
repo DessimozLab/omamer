@@ -1540,6 +1540,21 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
             "/", "ProteinIDBuffer", tables.StringAtom(1), (0,), filters=self._compr
         )
 
+        # the proteins are appended in batches: one append per protein takes
+        # ~1 h for LUCA
+        prot_rows = []
+        prot_ids = []
+        id_off = 0
+
+        def append_proteins():
+            if prot_rows:
+                prot_tab.append(prot_rows)
+                prot_id_buff.append(
+                    np.frombuffer(b"".join(prot_ids), dtype=tables.StringAtom(1))
+                )
+                prot_rows.clear()
+                prot_ids.clear()
+
         for r in tqdm(
             genome_tab,
             disable=is_progress_disabled(),
@@ -1574,18 +1589,15 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
                     seq = oma_seq_buffer[oma_seq_off : oma_seq_off + seq_len + np.uint64(1)]
                     seq_buffs.append(seq)
 
-                    # store protein row
+                    # store protein row and id
                     oma_id = "{}{:05d}".format(
                         sp_code.decode("ascii"), rr["EntryNr"] - entry_off
-                    )
-                    prot_tab.append(
-                        [(len(prot_id_buff), len(oma_id), sp_off, 0, seq_len)]
-                    )
-
-                    # store protein id
-                    prot_id_buff.append(
-                        np.frombuffer(oma_id.encode("ascii"), dtype=tables.StringAtom(1))
-                    )
+                    ).encode("ascii")
+                    prot_rows.append((id_off, len(oma_id), sp_off, 0, seq_len))
+                    prot_ids.append(oma_id)
+                    id_off += len(oma_id)
+                    if len(prot_rows) >= 1000000:
+                        append_proteins()
 
                     # track hog and family
                     hog = oma_hog2hog[oma_hog]
@@ -1596,6 +1608,8 @@ class DatabaseFromOMABrowser(DatabaseFromOMA):
 
                 # store species info
                 sp_rows[sp2sp_off[sp]] = (sp, 0)
+
+        append_proteins()
 
         # fill species and protein tables
         sp_tab = self.db.create_table(

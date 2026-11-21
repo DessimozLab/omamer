@@ -1048,10 +1048,13 @@ class DatabaseFromOMA(Database):
         )
 
         if excluded_families:
-            LOG.info("Excluded {} root-HOGs".format(len(excluded_roothogs)))
-            unmatched = excluded_families - {
-                h.split(b".")[0] for h in excluded_roothogs
-            }
+            matched = {h.split(b".")[0] for h in excluded_roothogs}
+            LOG.info(
+                "Excluded {} families from {} root-HOGs".format(
+                    len(excluded_roothogs), len(matched)
+                )
+            )
+            unmatched = excluded_families - matched
             if unmatched:
                 LOG.warning(
                     "{} ids of --exclude_families match no root-HOG, e.g. {}".format(

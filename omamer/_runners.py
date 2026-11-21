@@ -277,6 +277,11 @@ def search(args):
                 search_mode=args.search_mode,
                 summed_alpha=args.summed_alpha,
                 ss_weight=args.ss_weight,
+                family_selection=args.family_selection,
+                seq_kmer_df_exponent=args.seq_kmer_df_exponent,
+                ss_kmer_df_exponent=args.ss_kmer_df_exponent,
+                seq_kmer_df_reference=args.seq_kmer_df_reference,
+                ss_kmer_df_reference=args.ss_kmer_df_reference,
             )
             t_search1 = time()
 
@@ -297,6 +302,22 @@ def search(args):
                         file=args.out,
                     )
                     print("!db-path: {}".format(db.filename), file=args.out)
+                    print(
+                        "!family-selection: {}".format(args.family_selection),
+                        file=args.out,
+                    )
+                    if ms.kmer_df_correction:
+                        print(
+                            "!kmer-df-correction: {}".format(
+                                ",".join(
+                                    "{}:b={:g},m0={:.2f}".format(m, b, m0)
+                                    for m, (b, m0) in sorted(
+                                        ms.kmer_df_correction.items()
+                                    )
+                                )
+                            ),
+                            file=args.out,
+                        )
 
                     # include some of the db metadata
                     db_info = dict(_format_info_db(db))

@@ -61,6 +61,22 @@ SEARCH_SUM = 4
 # sequence family
 SEARCH_HYBRID = 5
 
+# How the family of a query is selected:
+# - filter: test every candidate, rank the significant ones (OMAmer 2);
+# - choose_scored: rank the candidates with a positive score (p < 1/N with
+#   the Bonferroni correction), then test the chosen one: the query is
+#   placed only when its top family is significant.
+FAMILY_SELECT_FILTER = 0
+FAMILY_SELECT_CHOOSE_SCORED = 1
+FAMILY_SELECTIONS = {
+    "filter": FAMILY_SELECT_FILTER,
+    "choose_scored": FAMILY_SELECT_CHOOSE_SCORED,
+}
+
+# Bounds of a family hit probability after the query-specific scaling.
+MIN_SCALED_PROBABILITY = 1e-100
+MAX_SCALED_PROBABILITY = 1.0 - 1e-9
+
 MODALITY_NAMES = {
     SEARCH_SEQUENCE: "seq",
     SEARCH_STRUCTURE: "ss",
@@ -73,6 +89,8 @@ SequenceBatch = namedtuple("SequenceBatch", ("buffer", "offsets"))
 # The k-mer index of one modality and its binomial models. `max_df` > 0:
 # k-mers in more HOGs are ignored; `kmer_mask`: ignored k-mer codes (empty:
 # none), e.g. low-complexity ones. Ignored k-mers do not count towards n.
+# `df_exponent` b > 0 makes the family hit probabilities query-specific
+# when a family is tested (see `query_probability_scale`).
 KmerIndex = namedtuple(
     "KmerIndex",
     (
@@ -83,6 +101,8 @@ KmerIndex = namedtuple(
         "kmer_mask",
         "family_probability",
         "hog_probability",
+        "df_reference",
+        "df_exponent",
     ),
 )
 
@@ -101,6 +121,7 @@ SearchConfig = namedtuple(
         "top_n_families",
         "subfamily_score_threshold",
         "family_only",
+        "family_selection",
         "neglog_alpha",
         "log_correction",
         # threshold on the summed scores and the weight w of the 3Di score
@@ -462,9 +483,10 @@ def search_seq_kmers(r1, p1, hog2fam, x_flag, index, scratch, thread_id):
     family and record the first and last query locations of these hits.
 
     Returns the number of skipped k-mers (with X, masked, or above the
-    document frequency cap) and the searched k-mers that have postings (in
+    document frequency cap), the searched k-mers that have postings (in
     query order), from which `count_family_hogs` recovers the per-HOG
-    counts of a family.
+    counts of a family, and the sum of the document frequencies of the
+    k-mers counted (not skipped).
     """
     table_idx = index.table_idx
     table_buff = index.table_buff
@@ -485,6 +507,7 @@ def search_seq_kmers(r1, p1, hog2fam, x_flag, index, scratch, thread_id):
 
     thread_num_hit_fams = 0
     n_skipped = 0
+    sum_df = 0.0
     kmers = np.empty(r1.shape[0], dtype=r1.dtype)
     n_searched = 0
 
@@ -513,6 +536,7 @@ def search_seq_kmers(r1, p1, hog2fam, x_flag, index, scratch, thread_id):
             n_skipped += 1
             continue
 
+        sum_df += df
         if df > 0:
             kmers[n_searched] = kmer
             n_searched += 1
@@ -531,7 +555,7 @@ def search_seq_kmers(r1, p1, hog2fam, x_flag, index, scratch, thread_id):
             thread_fam_highloc[fam_off] = loc
 
     scratch.num_hit_families[thread_id] = thread_num_hit_fams
-    return n_skipped, kmers[:n_searched]
+    return n_skipped, kmers[:n_searched], sum_df
 
 
 @numba.njit(nogil=True)
@@ -712,7 +736,8 @@ def find_family_candidates(sequence, database, index, scratch):
     (`score_family_candidates`).
 
     Returns the candidates (unsorted), the number n of k-mers used for
-    scoring and the searched k-mers (see `search_seq_kmers`).
+    scoring, the searched k-mers and the sum of the document frequencies of
+    the n k-mers (see `search_seq_kmers`).
     """
     k = database.k
     query_len = sequence.shape[0]
@@ -721,7 +746,9 @@ def find_family_candidates(sequence, database, index, scratch):
 
     no_kmers = np.empty(0, dtype=np.uint32)
     if n_kmers <= 0:
-        return np.zeros(0, dtype=QUERY_FAMILY_RESULT_DTYPE), np.int64(0), no_kmers
+        return (
+            np.zeros(0, dtype=QUERY_FAMILY_RESULT_DTYPE), np.int64(0), no_kmers, 0.0
+        )
 
     # seq -> bag of kmers
     (r1, p1, _) = parse_seq(
@@ -730,10 +757,12 @@ def find_family_candidates(sequence, database, index, scratch):
 
     # skip if only one k-mer with X
     if len(r1) == 1 and r1[0] == x_flag:
-        return np.zeros(0, dtype=QUERY_FAMILY_RESULT_DTYPE), np.int64(0), no_kmers
+        return (
+            np.zeros(0, dtype=QUERY_FAMILY_RESULT_DTYPE), np.int64(0), no_kmers, 0.0
+        )
 
     thread_id = numba.get_thread_id()
-    (n_skipped, kmers) = search_seq_kmers(
+    (n_skipped, kmers, sum_df) = search_seq_kmers(
         r1, p1, database.hog2fam, x_flag, index, scratch, thread_id
     )
 
@@ -770,7 +799,50 @@ def find_family_candidates(sequence, database, index, scratch):
         ) / query_len
 
     n = np.int64(len(r1) - n_skipped)
-    return qres, n, kmers
+    return qres, n, kmers, sum_df
+
+
+def kmer_df_reference(table_idx, max_df=0, kmer_mask=None):
+    """
+    The posting-weighted mean document frequency m0 = sum(df^2) / sum(df) of
+    the k-mers a search counts (not masked, df <= max_df when max_df > 0):
+    the mean df of a k-mer drawn like the postings, which is how the family
+    probabilities p_F are defined. If the chance that a family contains a
+    k-mer is proportional to its df, a query whose k-mers have mean df m
+    expects n p_F m / m0 hits in family F.
+    """
+    df = np.diff(np.asarray(table_idx, dtype=np.int64)).astype(np.float64)
+    keep = np.ones(df.size, dtype=np.bool_)
+    if max_df > 0:
+        keep &= df <= max_df
+    if kmer_mask is not None and kmer_mask.size > 0:
+        keep &= ~kmer_mask[: df.size]
+    df = df[keep]
+    total = df.sum()
+    return float(np.dot(df, df) / total) if total > 0 else 0.0
+
+
+@numba.njit(nogil=True)
+def query_probability_scale(index, sum_df, n):
+    """
+    The factor (m / m0) ** b of the family hit probabilities of one query
+    (1 when off), with m the mean document frequency of its n k-mers
+    (`sum_df` / n), m0 = `index.df_reference` and b = `index.df_exponent`:
+    queries made of common k-mers need more hits to be significant.
+    """
+    if index.df_exponent == 0.0 or index.df_reference <= 0.0 or n <= 0:
+        return 1.0
+    mean_df = sum_df / n
+    if mean_df <= 0.0:
+        return 1.0
+    return (mean_df / index.df_reference) ** index.df_exponent
+
+
+@numba.njit(nogil=True)
+def scale_probability(p, p_scale):
+    if p_scale == 1.0:
+        return p
+    return min(max(p * p_scale, MIN_SCALED_PROBABILITY), MAX_SCALED_PROBABILITY)
 
 
 @numba.njit(nogil=True)
@@ -781,22 +853,27 @@ def is_significant(score, neglog_alpha):
 
 
 @numba.njit(nogil=True)
-def score_family_tails(qres, n, index, log_correction):
+def score_family_tails(qres, n, index, log_correction, p_scale=1.0):
     """
     Set the corrected score (-log tail probability minus the correction,
-    clipped to [0, MAX_LOGP]) of every candidate, in place.
+    clipped to [0, MAX_LOGP]) of every candidate, in place, with the family
+    hit probabilities scaled by `p_scale` (see `query_probability_scale`).
     """
     for i in range(len(qres)):
-        p = index.family_probability[qres["id"][i]]
+        p = scale_probability(index.family_probability[qres["id"][i]], p_scale)
         neglog_tail = binom_neglogccdf(qres["count"][i], n, p)
         qres["pvalue"][i] = min(MAX_LOGP, max(0.0, neglog_tail - log_correction))
 
 
 @numba.njit(nogil=True)
-def score_family_candidates(qres, n, index, neglog_alpha, log_correction):
+def score_family_candidates(
+    qres, n, index, neglog_alpha, log_correction, p_scale=1.0
+):
     """
     The significant family candidates of a query, with their scores (in
-    corrected -log units) and normcounts.
+    corrected -log units) and normcounts. The scores use the family hit
+    probabilities scaled by `p_scale` (see `query_probability_scale`), the
+    normcounts, which rank the families of a query, the unscaled ones.
 
     Two fast filters come first, in one pass: the count filter (families
     with fewer k-mer hits than expected are not significant) and the
@@ -805,7 +882,9 @@ def score_family_candidates(qres, n, index, neglog_alpha, log_correction):
     epsilon = 1e-10
     keep = np.full(len(qres), True)
     for i in range(len(qres)):
-        expected = index.family_probability[qres["id"][i]]
+        expected = scale_probability(
+            index.family_probability[qres["id"][i]], p_scale
+        )
         if not qres["count"][i] >= expected * n:
             keep[i] = False
             continue
@@ -828,7 +907,7 @@ def score_family_candidates(qres, n, index, neglog_alpha, log_correction):
     if len(qres) == 0:
         return qres
 
-    score_family_tails(qres, n, index, log_correction)
+    score_family_tails(qres, n, index, log_correction, p_scale)
 
     # normalised count
     expected_count = index.family_probability[qres["id"]] * n
@@ -838,6 +917,45 @@ def score_family_candidates(qres, n, index, neglog_alpha, log_correction):
     for i in range(len(qres)):
         keep[i] = is_significant(qres["pvalue"][i], neglog_alpha)
     return qres[keep]
+
+
+@numba.njit(nogil=True)
+def keep_if_chosen_significant(qres, neglog_alpha):
+    """
+    Ranked candidates (best first) -> the significant ones if the best one
+    is significant, else none.
+    """
+    if len(qres) == 0 or not is_significant(qres["pvalue"][0], neglog_alpha):
+        return qres[:0]
+    keep = np.empty(len(qres), dtype=np.bool_)
+    for i in range(len(qres)):
+        keep[i] = is_significant(qres["pvalue"][i], neglog_alpha)
+    return qres[keep]
+
+
+@numba.njit(nogil=True)
+def select_family_candidates(qres, n, index, config, p_scale):
+    """
+    The significant family candidates of a query under the selection rule
+    `config.family_selection` (see FAMILY_SELECT_*), unsorted for the filter
+    rule and ranked for choose_scored. The tests use the family hit
+    probabilities scaled by `p_scale` (see `query_probability_scale`). With
+    choose_scored, the candidates and their ranking do not: the scaling
+    only decides whether the chosen families are significant.
+    """
+    if config.family_selection == FAMILY_SELECT_FILTER:
+        return score_family_candidates(
+            qres, n, index, config.neglog_alpha, config.log_correction, p_scale
+        )
+
+    qres = score_family_candidates(qres, n, index, 0.0, config.log_correction)
+    if len(qres) == 0:
+        return qres
+    qres = family_result_sort(qres, config.top_n_families, False)
+    if p_scale != 1.0:
+        # only the ranked candidates are scored again, with the scaling
+        score_family_tails(qres, n, index, config.log_correction, p_scale)
+    return keep_if_chosen_significant(qres, config.neglog_alpha)
 
 
 @numba.njit(nogil=True)
@@ -931,10 +1049,12 @@ def place_sequence(
     config, scratch,
 ):
     """Search and place one query in one modality; False if not placed."""
-    (qres, n, kmers) = find_family_candidates(sequence, database, index, scratch)
+    (qres, n, kmers, sum_df) = find_family_candidates(
+        sequence, database, index, scratch
+    )
     if len(qres) > 0:
-        qres = score_family_candidates(
-            qres, n, index, config.neglog_alpha, config.log_correction
+        qres = select_family_candidates(
+            qres, n, index, config, query_probability_scale(index, sum_df, n)
         )
     if len(qres) == 0:
         return False
@@ -947,16 +1067,34 @@ def place_sequence(
 
 
 @numba.njit(nogil=True)
+def score_summed_candidates(qres, n, index, config, p_scale):
+    """
+    Score the family candidates of one modality for a sum: without a
+    significance threshold (as with alpha = 1, every family with a positive
+    corrected score is kept), so that a family weakly supported by both
+    modalities is not lost. The candidates are those of the unscaled model,
+    with the scores of the scaled one (see `query_probability_scale`; a
+    score may then be 0).
+    """
+    qres = score_family_candidates(qres, n, index, 0.0, config.log_correction)
+    if p_scale != 1.0 and len(qres) > 0:
+        score_family_tails(qres, n, index, config.log_correction, p_scale)
+    return qres
+
+
+@numba.njit(nogil=True)
 def search_families(sequence, database, index, config, scratch):
     """
     Search the k-mers of one query and score its family candidates for a
-    sum: without a significance threshold (as with alpha = 1, every family
-    with a positive corrected score is kept), so that a family weakly
-    supported by both modalities is not lost.
+    sum (`score_summed_candidates`).
     """
-    (qres, n, kmers) = find_family_candidates(sequence, database, index, scratch)
+    (qres, n, kmers, sum_df) = find_family_candidates(
+        sequence, database, index, scratch
+    )
     if len(qres) > 0:
-        qres = score_family_candidates(qres, n, index, 0.0, config.log_correction)
+        qres = score_summed_candidates(
+            qres, n, index, config, query_probability_scale(index, sum_df, n)
+        )
     return qres, n, kmers
 
 
@@ -1050,13 +1188,13 @@ def place_sequence_hybrid(
     the sum, without. The 3Di is searched only for the queries without a
     significant sequence family.
     """
-    (candidates, seq_n, seq_kmers) = find_family_candidates(
+    (candidates, seq_n, seq_kmers, sum_df) = find_family_candidates(
         sequence, database, seq_index, scratch
     )
+    p_scale = query_probability_scale(seq_index, sum_df, seq_n)
     if len(candidates) > 0:
-        qres = score_family_candidates(
-            candidates, seq_n, seq_index, config.neglog_alpha,
-            config.log_correction,
+        qres = select_family_candidates(
+            candidates, seq_n, seq_index, config, p_scale
         )
         if len(qres) > 0:
             place_family_results(
@@ -1064,8 +1202,8 @@ def place_sequence_hybrid(
                 seq_kmers, database, seq_index, config,
             )
             return True
-        candidates = score_family_candidates(
-            candidates, seq_n, seq_index, 0.0, config.log_correction
+        candidates = score_summed_candidates(
+            candidates, seq_n, seq_index, config, p_scale
         )
     return place_summed(
         family_results, subfam_results, sequence_id, candidates, seq_n,
@@ -1159,6 +1297,10 @@ class MergeSearch(object):
         self.db = ki.db
         self.ki = ki
         self.has_structure = self.db.has_structure()
+        # per modality: the k-mer df reference m0 of the index, and the
+        # (exponent, reference) of the df correction in use
+        self._df_reference = {}
+        self.kmer_df_correction = {}
 
         self.include_extant_genes = include_extant_genes
 
@@ -1224,8 +1366,12 @@ class MergeSearch(object):
             np.ascontiguousarray(self.hog_tab["FamOff"]),
         )
 
-    def _kmer_index(self, modality):
-        """The k-mer index and models of a modality ('seq' or 'ss')."""
+    def _kmer_index(self, modality, df_exponent=0.0, df_reference=None):
+        """
+        The k-mer index and models of a modality ('seq' or 'ss'), with the
+        k-mer df correction of exponent `df_exponent` and reference
+        `df_reference` (None: `kmer_df_reference` of the index).
+        """
         attrs = self.db.db.root.Index._v_attrs
         if modality == "seq":
             (table, source, max_df, family_probability, hog_probability) = (
@@ -1249,6 +1395,24 @@ class MergeSearch(object):
             self.ki.alphabet.n,
             stored_min_distinct(attrs, modality),
         )
+        if not df_exponent:
+            (df_exponent, df_reference) = (0.0, 0.0)
+            self.kmer_df_correction.pop(modality, None)
+        else:
+            if df_reference is None:
+                if modality not in self._df_reference:
+                    self._df_reference[modality] = kmer_df_reference(
+                        table["idx"], max_df, kmer_mask
+                    )
+                    LOG.info(
+                        "k-mer df correction for modality '%s': exponent %g, "
+                        "reference df %.2f",
+                        modality,
+                        df_exponent,
+                        self._df_reference[modality],
+                    )
+                df_reference = self._df_reference[modality]
+            self.kmer_df_correction[modality] = (df_exponent, df_reference)
         return KmerIndex(
             table["idx"],
             table["buff"],
@@ -1257,6 +1421,8 @@ class MergeSearch(object):
             kmer_mask,
             family_probability,
             hog_probability,
+            float(df_reference),
+            float(df_exponent),
         )
 
     def merge_search(
@@ -1272,6 +1438,11 @@ class MergeSearch(object):
         search_mode="auto",
         summed_alpha=None,
         ss_weight=0.5,
+        family_selection="choose_scored",
+        seq_kmer_df_exponent=1.5,
+        ss_kmer_df_exponent=0.0,
+        seq_kmer_df_reference=None,
+        ss_kmer_df_reference=None,
     ):
         """
         seqs, struct_seqs: the sequences and the 3Di sequences of the queries
@@ -1282,6 +1453,13 @@ class MergeSearch(object):
         mode, and the second stage of the hybrid mode); None: alpha.
         ss_weight: weight w of the 3Di score in these sums
         (sequence + w * 3Di).
+        family_selection: 'filter' or 'choose_scored' (see FAMILY_SELECT_*).
+        seq_kmer_df_exponent, ss_kmer_df_exponent: exponent b of the
+        query-specific family hit probabilities p_F (m / m0) ** b, with m the
+        mean document frequency of the query's k-mers, applied when the
+        chosen family is tested (see `query_probability_scale`); 0: off.
+        seq_kmer_df_reference, ss_kmer_df_reference: m0 (None: the
+        posting-weighted mean df of the index, `kmer_df_reference`).
         """
         t0 = time()
         if not 0.0 < alpha <= 1.0:
@@ -1292,6 +1470,17 @@ class MergeSearch(object):
             raise ValueError("summed_alpha must be in the interval (0, 1]")
         if not ss_weight > 0.0:
             raise ValueError("ss_weight must be positive")
+        if family_selection not in FAMILY_SELECTIONS:
+            raise ValueError(
+                "family_selection must be 'filter' or 'choose_scored', got "
+                "{!r}".format(family_selection)
+            )
+        for exponent in (seq_kmer_df_exponent, ss_kmer_df_exponent):
+            if not exponent >= 0.0:
+                raise ValueError("kmer_df_exponent must be >= 0")
+        for reference in (seq_kmer_df_reference, ss_kmer_df_reference):
+            if reference is not None and not reference > 0.0:
+                raise ValueError("kmer_df_reference must be positive")
 
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
         ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
@@ -1300,9 +1489,13 @@ class MergeSearch(object):
         )
         seq_index = ss_index = None
         if mode != SEARCH_STRUCTURE:
-            seq_index = self._kmer_index("seq")
+            seq_index = self._kmer_index(
+                "seq", seq_kmer_df_exponent, seq_kmer_df_reference
+            )
         if mode != SEARCH_SEQUENCE:
-            ss_index = self._kmer_index("ss")
+            ss_index = self._kmer_index(
+                "ss", ss_kmer_df_exponent, ss_kmer_df_reference
+            )
             if seq_index is not None and len(sbuff.idx) != len(ssbuff.idx):
                 raise ValueError(
                     "Sequence and structure queries must have matching counts"
@@ -1316,6 +1509,7 @@ class MergeSearch(object):
             int(top_n_fams),
             float(sst),
             bool(family_only),
+            FAMILY_SELECTIONS[family_selection],
             -math.log(alpha),
             math.log(self.fam_tab.size),
             -math.log(summed_alpha),

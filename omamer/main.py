@@ -275,6 +275,36 @@ def main():
         "and hybrid): a family is placed when E_seq * E_3Di^w <= "
         "--summed_alpha, with E the per-query E-values of the family.",
     )
+    search_parser.add_argument(
+        "--family_selection",
+        choices=("filter", "choose_scored"),
+        default="choose_scored",
+        help="How the family of a query is selected. 'filter' tests every "
+        "candidate family and ranks the significant ones by normcount. "
+        "'choose_scored' ranks the candidates with a positive score by "
+        "normcount and places the query only when its top family is "
+        "significant.",
+    )
+    for modality, name, exponent in (("seq", "amino-acid", 1.5), ("ss", "3Di", 0.0)):
+        search_parser.add_argument(
+            "--{}_kmer_df_exponent".format(modality),
+            type=float,
+            default=exponent,
+            help="{} k-mers: when the chosen family is tested, its null hit "
+            "probability is p_F * (m / m0) ** b, with b this value, m the mean "
+            "document frequency (number of HOGs) of the query's k-mers and m0 "
+            "the reference (--{}_kmer_df_reference). Queries made of common "
+            "k-mers then need more hits to be significant. 0: off.".format(
+                name, modality
+            ),
+        )
+        search_parser.add_argument(
+            "--{}_kmer_df_reference".format(modality),
+            type=float,
+            default=None,
+            help="The reference m0 of --{}_kmer_df_exponent. Default: the "
+            "mean document frequency of the index's postings.".format(modality),
+        )
     for name in ("family_model", "seq_family_model", "ss_family_model"):
         search_parser.add_argument(
             "--" + name,

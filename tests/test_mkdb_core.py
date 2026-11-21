@@ -612,3 +612,43 @@ def test_normalise_structure_sequence(seq):
 def test_normalise_structure_sequence_sanitises_as_sequences():
     norm = DatabaseFromOMA._normalise_structure_sequence("deaBz")
     assert norm.tobytes() == b"DEAXX "
+
+
+def _structure_file(path, records):
+    """An OMA browser structure file with the given {EntryNr: 3Di} records."""
+    h5 = tables.open_file(str(path), mode="w")
+    index = h5.create_table(
+        "/",
+        "index",
+        {
+            "EntryNr": tables.UInt32Col(pos=0),
+            "Offset_3DI": tables.UInt64Col(pos=1),
+            "Length_3DI": tables.UInt32Col(pos=2),
+        },
+    )
+    buff = h5.create_earray("/", "sequences_3di", tables.UInt8Atom(), (0,))
+    off = 0
+    for entry_nr, seq in records:
+        data = (seq + " ").encode("ascii") if seq else b""
+        index.append([(entry_nr, off, len(data))])
+        buff.append(np.frombuffer(data, dtype=np.uint8))
+        off += len(data)
+    index.flush()
+    return h5
+
+
+def test_load_3di_sequences_in_protein_order(tmp_path):
+    from omamer.database import DatabaseFromOMABrowser
+
+    db = DatabaseFromOMABrowser.__new__(DatabaseFromOMABrowser)
+    with _structure_file(tmp_path / "ss.h5", [(3, "CCC"), (1, "AAAA"), (2, "dd"), (4, "")]) as h5:
+        ss_buff = db.load_3di_sequences(h5, [2, 3, 1])
+        assert ss_buff.tobytes() == b"DD CCC AAAA "
+        # entry 4 has an empty 3Di sequence, entry 5 none
+        for entry_nrs in ([1, 4], [5, 1]):
+            with pytest.raises(ValueError, match="Did not find 3Di sequences for 1 of 2"):
+                db.load_3di_sequences(h5, entry_nrs)
+
+    with _structure_file(tmp_path / "dup.h5", [(1, "AA"), (1, "CC")]) as h5:
+        with pytest.raises(ValueError, match="multiple 3Di index rows for EntryNr=1"):
+            db.load_3di_sequences(h5, [1])

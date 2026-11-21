@@ -47,8 +47,25 @@ from .hierarchy import (
 # maximum neglogp to set
 MAX_LOGP = 20000.0
 
+# Search modes. SEARCH_SEQUENCE, SEARCH_STRUCTURE and SEARCH_SUM are also
+# the values of the `modality` result field: the scores a family was
+# selected with.
 SEARCH_SEQUENCE = 1
 SEARCH_STRUCTURE = 2
+# the sequence, then the 3Di alone for the queries without a significant
+# sequence family
+SEARCH_SEQUENCE_THEN_STRUCTURE = 3
+# family scores summed over the two modalities (sequence + w * 3Di)
+SEARCH_SUM = 4
+# the sequence, then the summed scores for the queries without a significant
+# sequence family
+SEARCH_HYBRID = 5
+
+MODALITY_NAMES = {
+    SEARCH_SEQUENCE: "seq",
+    SEARCH_STRUCTURE: "ss",
+    SEARCH_SUM: "seq+ss",
+}
 
 # Array carriers passed to the compiled search (see `lookup_queries`).
 SequenceBatch = namedtuple("SequenceBatch", ("buffer", "offsets"))
@@ -86,6 +103,9 @@ SearchConfig = namedtuple(
         "family_only",
         "neglog_alpha",
         "log_correction",
+        # threshold on the summed scores and the weight w of the 3Di score
+        "summed_neglog_alpha",
+        "ss_weight",
     ),
 )
 
@@ -101,6 +121,38 @@ SearchScratch = namedtuple(
         "num_hit_families",
     ),
 )
+
+def resolve_search_mode(mode, has_sequence, has_structure):
+    """The search mode for the given queries ('auto': hybrid with both
+    modalities, else the one given)."""
+    if mode in (None, "auto"):
+        if has_sequence and has_structure:
+            return SEARCH_HYBRID
+        if has_sequence:
+            return SEARCH_SEQUENCE
+        if has_structure:
+            return SEARCH_STRUCTURE
+        raise ValueError("Search requires sequence or structure queries")
+
+    modes = {
+        "seq": (SEARCH_SEQUENCE, has_sequence),
+        "ss": (SEARCH_STRUCTURE, has_structure),
+        "sqs": (SEARCH_SEQUENCE_THEN_STRUCTURE, has_sequence and has_structure),
+        "sum": (SEARCH_SUM, has_sequence and has_structure),
+        "hybrid": (SEARCH_HYBRID, has_sequence and has_structure),
+    }
+    try:
+        selected, available = modes[mode]
+    except KeyError:
+        raise ValueError(
+            "search_mode must be 'auto', 'seq', 'ss', 'sqs', 'sum' or 'hybrid'"
+        ) from None
+    if not available:
+        raise ValueError(
+            "search_mode={!r} requires matching query data and index".format(mode)
+        )
+    return selected
+
 
 QUERY_FAMILY_RESULT_DTYPE = np.dtype(
     [
@@ -894,6 +946,138 @@ def place_sequence(
     return True
 
 
+@numba.njit(nogil=True)
+def search_families(sequence, database, index, config, scratch):
+    """
+    Search the k-mers of one query and score its family candidates for a
+    sum: without a significance threshold (as with alpha = 1, every family
+    with a positive corrected score is kept), so that a family weakly
+    supported by both modalities is not lost.
+    """
+    (qres, n, kmers) = find_family_candidates(sequence, database, index, scratch)
+    if len(qres) > 0:
+        qres = score_family_candidates(qres, n, index, 0.0, config.log_correction)
+    return qres, n, kmers
+
+
+@numba.njit(nogil=True)
+def sum_family_scores(seq_res, ss_res, ss_weight):
+    """
+    Union of the family candidates of the two modalities, keyed by family.
+
+    The score (`pvalue`, in corrected -log units) of a family is its sequence
+    score plus `ss_weight` times its 3Di score; a family missing from one
+    modality takes 0 from it. The other fields (count, normcount, overlap)
+    are those of the sequence candidate when there is one, else of the 3Di
+    one: the modality whose HOG counts are used for the placement.
+    """
+    n_seq = len(seq_res)
+    combined = np.zeros(n_seq + len(ss_res), dtype=QUERY_FAMILY_RESULT_DTYPE)
+    combined[:n_seq] = seq_res
+
+    order = np.argsort(seq_res["id"])
+    seq_ids = seq_res["id"][order]
+    n_combined = n_seq
+    for i in range(len(ss_res)):
+        family_id = ss_res["id"][i]
+        j = np.searchsorted(seq_ids, family_id)
+        if j < n_seq and seq_ids[j] == family_id:
+            combined["pvalue"][order[j]] += ss_weight * ss_res["pvalue"][i]
+        else:
+            combined[n_combined] = ss_res[i]
+            combined["pvalue"][n_combined] = ss_weight * ss_res["pvalue"][i]
+            n_combined += 1
+    return combined[:n_combined]
+
+
+@numba.njit(nogil=True)
+def place_summed(
+    family_results, subfam_results, sequence_id, seq_res, seq_n, seq_kmers,
+    structure, database, seq_index, ss_index, config, scratch,
+):
+    """
+    Search the 3Di of a query, given its sequence candidates `seq_res`
+    (`search_families`), and rank families by the sum of their two scores
+    (`sum_family_scores`); the threshold `config.summed_neglog_alpha`
+    applies to the sum. Within a family, the query is placed with the
+    sequence HOG counts when the family is a sequence candidate, else with
+    the 3Di ones.
+    """
+    (ss_res, ss_n, ss_kmers) = search_families(
+        structure, database, ss_index, config, scratch
+    )
+    qres = sum_family_scores(seq_res, ss_res, config.ss_weight)
+    keep = np.empty(len(qres), dtype=np.bool_)
+    for i in range(len(qres)):
+        keep[i] = is_significant(qres["pvalue"][i], config.summed_neglog_alpha)
+    qres = qres[keep]
+    if len(qres) == 0:
+        return False
+    # ranked by the summed score
+    top_n_fams = config.top_n_families
+    qres = family_result_sort(qres, top_n_fams, True)
+    n_store = min(len(qres), top_n_fams)
+    store_family_results(family_results, sequence_id, qres, n_store, SEARCH_SUM)
+
+    # placement modality: the sequence when it has the family as a candidate
+    seq_ids = np.sort(seq_res["id"])
+    for i in range(n_store):
+        family_id = qres["id"][i]
+        j = np.searchsorted(seq_ids, family_id)
+        if j < len(seq_ids) and seq_ids[j] == family_id:
+            place_in_family(
+                subfam_results, sequence_id, i, family_id, seq_n, seq_kmers,
+                seq_index, database, config,
+            )
+        else:
+            place_in_family(
+                subfam_results, sequence_id, i, family_id, ss_n, ss_kmers,
+                ss_index, database, config,
+            )
+    return True
+
+
+@numba.njit(nogil=True)
+def place_sequence_hybrid(
+    family_results, subfam_results, sequence, structure, sequence_id, database,
+    seq_index, ss_index, config, scratch,
+):
+    """
+    Place a query by its sequence when it has a significant sequence family
+    (as `place_sequence`); otherwise search its 3Di and rank families by the
+    sum of the sequence and 3Di scores (`place_summed`). The sequence search
+    is shared: its candidates are scored twice, with the threshold and, for
+    the sum, without. The 3Di is searched only for the queries without a
+    significant sequence family.
+    """
+    (candidates, seq_n, seq_kmers) = find_family_candidates(
+        sequence, database, seq_index, scratch
+    )
+    if len(candidates) > 0:
+        qres = score_family_candidates(
+            candidates, seq_n, seq_index, config.neglog_alpha,
+            config.log_correction,
+        )
+        if len(qres) > 0:
+            place_family_results(
+                family_results, subfam_results, sequence_id, qres, seq_n,
+                seq_kmers, database, seq_index, config,
+            )
+            return True
+        candidates = score_family_candidates(
+            candidates, seq_n, seq_index, 0.0, config.log_correction
+        )
+    return place_summed(
+        family_results, subfam_results, sequence_id, candidates, seq_n,
+        seq_kmers, structure, database, seq_index, ss_index, config, scratch,
+    )
+
+
+@numba.njit(nogil=True)
+def select_from_batch(batch, i):
+    return batch.buffer[batch.offsets[i] : np.int64(batch.offsets[i + 1] - 1)]
+
+
 # inlined: the parallel lowering of `lookup_queries` does not resolve the
 # namedtuple global otherwise
 @numba.njit(nogil=True, inline="always")
@@ -909,27 +1093,62 @@ def make_search_scratch(num_threads, n_families):
 
 @numba.njit(parallel=True, nogil=True, cache=True)
 def lookup_queries(
-    family_results, subfam_results, sequences, database, index, config,
-    num_threads,
+    family_results, subfam_results, sequences, structures, database, seq_index,
+    ss_index, config, num_threads,
 ):
     """
-    Search and place every query of the batch.
+    Search and place every query of the batch in the mode `config.mode`
+    (SEARCH_*): the sequences with `seq_index`, the 3Di with `ss_index` (a
+    single-modality search may pass the same batch and index twice).
 
     num_threads is passed in (numba.get_num_threads() of the caller): that
     threading-layer intrinsic embeds a runtime function pointer, which
     would make this kernel non-cacheable.
     """
     scratch = make_search_scratch(num_threads, database.families.size)
+    mode = config.mode
+    n_queries = (
+        structures.offsets.size - 1
+        if mode == SEARCH_STRUCTURE
+        else sequences.offsets.size - 1
+    )
 
-    for sequence_id in numba.prange(sequences.offsets.size - 1):
-        sequence = sequences.buffer[
-            sequences.offsets[sequence_id] :
-            np.int64(sequences.offsets[sequence_id + 1] - 1)
-        ]
-        place_sequence(
-            family_results, subfam_results, sequence, sequence_id, database,
-            index, config, scratch,
-        )
+    for sequence_id in numba.prange(n_queries):
+        placed = False
+        if mode == SEARCH_HYBRID:
+            place_sequence_hybrid(
+                family_results, subfam_results,
+                select_from_batch(sequences, sequence_id),
+                select_from_batch(structures, sequence_id),
+                sequence_id, database, seq_index, ss_index, config, scratch,
+            )
+        elif mode == SEARCH_SUM:
+            (seq_res, seq_n, seq_kmers) = search_families(
+                select_from_batch(sequences, sequence_id), database, seq_index,
+                config, scratch,
+            )
+            place_summed(
+                family_results, subfam_results, sequence_id, seq_res, seq_n,
+                seq_kmers, select_from_batch(structures, sequence_id),
+                database, seq_index, ss_index, config, scratch,
+            )
+        elif mode != SEARCH_STRUCTURE:
+            placed = place_sequence(
+                family_results, subfam_results,
+                select_from_batch(sequences, sequence_id), sequence_id,
+                database, seq_index, config, scratch,
+            )
+
+        # the 3Di alone: in the structure mode, or as the fallback of the
+        # sequence-then-structure mode
+        if (
+            mode == SEARCH_STRUCTURE or mode == SEARCH_SEQUENCE_THEN_STRUCTURE
+        ) and not placed:
+            place_sequence(
+                family_results, subfam_results,
+                select_from_batch(structures, sequence_id), sequence_id,
+                database, ss_index, config, scratch,
+            )
 
 
 class MergeSearch(object):
@@ -939,6 +1158,7 @@ class MergeSearch(object):
         # load ki and db
         self.db = ki.db
         self.ki = ki
+        self.has_structure = self.db.has_structure()
 
         self.include_extant_genes = include_extant_genes
 
@@ -976,6 +1196,21 @@ class MergeSearch(object):
     @lazy_property
     def ref_hog_prob(self):
         return self.db._db_Index_HOGProbability[:]
+
+    @cached_property
+    def ss_kmer_table(self):
+        return {
+            "idx": self.db._db_Index_SSTableIndex[:],
+            "buff": self.db._db_Index_SSTableBuffer[:],
+        }
+
+    @lazy_property
+    def ss_ref_fam_prob(self):
+        return self.db._db_Index_SSFamilyProbability[:]
+
+    @lazy_property
+    def ss_ref_hog_prob(self):
+        return self.db._db_Index_SSHOGProbability[:]
 
     @cached_property
     def _search_database(self):
@@ -1033,26 +1268,67 @@ class MergeSearch(object):
         sst=0.1,
         family_only=False,
         ref_taxon_off=None,
+        struct_seqs=(),
+        search_mode="auto",
+        summed_alpha=None,
+        ss_weight=0.5,
     ):
+        """
+        seqs, struct_seqs: the sequences and the 3Di sequences of the queries
+        (either may be empty), in the same order.
+        search_mode: 'auto' (hybrid with both, else the one given), 'seq',
+        'ss', 'sqs', 'sum' or 'hybrid' (see SEARCH_*).
+        summed_alpha: threshold on the summed sequence + 3Di scores (sum
+        mode, and the second stage of the hybrid mode); None: alpha.
+        ss_weight: weight w of the 3Di score in these sums
+        (sequence + w * 3Di).
+        """
         t0 = time()
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in the interval (0, 1]")
+        if summed_alpha is None:
+            summed_alpha = alpha
+        if not 0.0 < summed_alpha <= 1.0:
+            raise ValueError("summed_alpha must be in the interval (0, 1]")
+        if not ss_weight > 0.0:
+            raise ValueError("ss_weight must be positive")
+
         sbuff = SequenceBuffer(seqs=seqs, ids=ids)
+        ssbuff = SequenceBuffer(seqs=struct_seqs, ids=ids)
+        mode = resolve_search_mode(
+            search_mode, len(seqs) > 0, self.has_structure and len(struct_seqs) > 0
+        )
+        seq_index = ss_index = None
+        if mode != SEARCH_STRUCTURE:
+            seq_index = self._kmer_index("seq")
+        if mode != SEARCH_SEQUENCE:
+            ss_index = self._kmer_index("ss")
+            if seq_index is not None and len(sbuff.idx) != len(ssbuff.idx):
+                raise ValueError(
+                    "Sequence and structure queries must have matching counts"
+                )
+        qbuff = ssbuff if mode == SEARCH_STRUCTURE else sbuff
 
         # perform the search
-        results = make_search_results(len(sbuff.idx) - 1, top_n_fams)
+        results = make_search_results(len(qbuff.idx) - 1, top_n_fams)
         config = SearchConfig(
-            SEARCH_SEQUENCE,
+            mode,
             int(top_n_fams),
             float(sst),
             bool(family_only),
             -math.log(alpha),
             math.log(self.fam_tab.size),
+            -math.log(summed_alpha),
+            float(ss_weight),
         )
         lookup_queries(
             results.families,
             results.subfamilies,
             SequenceBatch(sbuff.buff, sbuff.idx),
+            SequenceBatch(ssbuff.buff, ssbuff.idx),
             self._search_database,
-            self._kmer_index("seq"),
+            seq_index if seq_index is not None else ss_index,
+            ss_index if ss_index is not None else seq_index,
             config,
             numba.get_num_threads(),
         )
@@ -1060,7 +1336,7 @@ class MergeSearch(object):
 
         t1 = time()
         td = max((t1 - t0), 1e-3)
-        n = len(sbuff.ids)
+        n = len(qbuff.ids)
         LOG.debug(
             "{:.02f} seconds for block of {:d} sequences (~{:.02f} queries/second)".format(
                 td, n, n / td
@@ -1068,7 +1344,7 @@ class MergeSearch(object):
         )
 
         return self.output_results(
-            family_results, subfam_results, sbuff, top_n_fams, ref_taxon_off
+            family_results, subfam_results, qbuff, top_n_fams, ref_taxon_off
         )
 
     def output_results(
@@ -1086,6 +1362,7 @@ class MergeSearch(object):
             "family_p",
             "family_count",
             "family_normcount",
+            "modality",
             "subfamily_score",
             "subfamily_count",
             "qseqlen",
@@ -1107,6 +1384,7 @@ class MergeSearch(object):
                             "subfamily_score": subfam_results["score"][i, j],
                             "family_count": family_results["count"][i, j],
                             "family_normcount": family_results["normcount"][i, j],
+                            "modality": family_results["modality"][i, j],
                             "subfamily_count": subfam_results["count"][i, j],
                         }
 
@@ -1124,6 +1402,7 @@ class MergeSearch(object):
         na_value = 0
         for k in df.keys():
             df.loc[df[k] == na_value, k] = pd.NA
+        df["modality"] = df["modality"].map(MODALITY_NAMES)
 
         # set the query ids
         qseq_offsets = df["qseq_offset"].to_numpy(dtype=np.uint32)

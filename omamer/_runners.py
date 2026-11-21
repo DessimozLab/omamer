@@ -179,6 +179,8 @@ def search(args):
         from time import time
         import os
 
+        import numpy as np
+
         from . import __version__
         from ._utils import compute_file_md5
         from .database import Database
@@ -214,7 +216,9 @@ def search(args):
     else:
         ref_taxoff = None
 
-    _ensure_data_loaded(ms)
+    _ensure_data_loaded(
+        ms, load_structure=bool(args.structure) and args.search_mode != "seq"
+    )
 
     search_times = []
 
@@ -232,13 +236,34 @@ def search(args):
 
     print_message("")
     with alive_bar(**search_pbar_kwargs) as pbar:
-        for ids, seqs in SequenceReader.read(
-            args.query,
-            k=db.ki.k,
-            format="fasta",
-            chunksize=args.chunksize,
-            sanitiser=db.ki.alphabet.sanitise_seq,
-        ):
+        def read(filename):
+            return SequenceReader.read(
+                filename,
+                k=db.ki.k,
+                format="fasta",
+                chunksize=args.chunksize,
+                sanitiser=db.ki.alphabet.sanitise_seq,
+            )
+
+        # the sequence and 3Di files are read in lock-step chunks
+        query_iter = read(args.query) if args.query else None
+        struct_iter = read(args.structure) if args.structure else None
+        for ids, seqs in query_iter if query_iter is not None else struct_iter:
+            struct_seqs = []
+            if query_iter is None:
+                (seqs, struct_seqs) = ([], seqs)
+            elif struct_iter is not None:
+                (struct_ids, struct_seqs) = next(struct_iter, (None, None))
+                if struct_ids is None:
+                    raise RuntimeError(
+                        "The structure file has fewer records than the query file"
+                    )
+                if not np.array_equal(ids, struct_ids):
+                    raise RuntimeError(
+                        "Query and structure IDs must match, record by record "
+                        "(records shorter than k are skipped in both files)"
+                    )
+
             t_search0 = time()
             df = ms.merge_search(
                 seqs=seqs,
@@ -248,6 +273,10 @@ def search(args):
                 sst=args.threshold,
                 family_only=args.family_only,
                 ref_taxon_off=ref_taxoff,
+                struct_seqs=struct_seqs,
+                search_mode=args.search_mode,
+                summed_alpha=args.summed_alpha,
+                ss_weight=args.ss_weight,
             )
             t_search1 = time()
 
@@ -258,7 +287,9 @@ def search(args):
                     # write the top header
                     print("!omamer-version: {}".format(__version__), file=args.out)
                     print(
-                        "!query-md5: {}".format(compute_file_md5(args.query)),
+                        "!query-md5: {}".format(
+                            compute_file_md5(args.query or args.structure)
+                        ),
                         file=args.out,
                     )
                     print(
@@ -283,6 +314,15 @@ def search(args):
                 print_header = False
             search_times.append((len(ids), t_search1 - t_search0))
 
+        if (
+            query_iter is not None
+            and struct_iter is not None
+            and next(struct_iter, None) is not None
+        ):
+            raise RuntimeError(
+                "The structure file has more records than the query file"
+            )
+
     db.close()
     if args.out is not sys.stdout:
         args.out.close()
@@ -302,7 +342,7 @@ def _ensure_db_build_dependencies_available():
         sys.exit(1)
 
 
-def _ensure_data_loaded(ms):
+def _ensure_data_loaded(ms, load_structure=True):
     from alive_progress import alive_bar
     import sys
 
@@ -332,6 +372,11 @@ def _ensure_data_loaded(ms):
     _load("kmer_table", "k-mer index")
     _load("ref_fam_prob", "family probability estimates")
     _load("ref_hog_prob", "sub-family probability estimates")
+    # a sequence-only search does not need the 3Di index of the database
+    if load_structure and ms.has_structure:
+        _load("ss_kmer_table", "3Di k-mer index")
+        _load("ss_ref_fam_prob", "3Di family probability estimates")
+        _load("ss_ref_hog_prob", "3Di sub-family probability estimates")
 
     print_message("\nFinished loading required data\n")
     print_line(80)
@@ -388,7 +433,10 @@ def print_run_data(args):
     print_line(80)
     print_message("\nRunning OMAmer on {}, using:".format(platform.node()))
     print_message(" - database: {}".format(args.db))
-    print_message(" - query: {}".format(args.query))
+    if args.query:
+        print_message(" - query: {}".format(args.query))
+    if args.structure:
+        print_message(" - 3Di query: {}".format(args.structure))
     print_message(" - version: {}".format(__version__))
     print_message("")
     print_line(80)
@@ -429,9 +477,13 @@ def goodbye(args, time_taken, search_rate):
 
 
 def check_args(args):
-    # Enforce query existence check before loading DB
-    with open(args.query, "r") as _:
-        pass
+    if not args.query and not args.structure:
+        raise RuntimeError("At least one of --query or --structure must be provided")
+    for filename in (args.query, args.structure):
+        if filename:
+            # Enforce query existence check before loading DB
+            with open(filename, "r") as _:
+                pass
 
-    if os.path.getsize(args.query) == 0:
-        raise RuntimeError(f"Input file {args.query} is empty")
+            if os.path.getsize(filename) == 0:
+                raise RuntimeError(f"Input file {filename} is empty")

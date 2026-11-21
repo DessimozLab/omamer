@@ -209,7 +209,7 @@ def main():
         "search",
         formatter_class=ArgumentDefaultsHelpFormatter,
         help="Search an existing database.",
-        description="Search for protein sequences, given in FASTA format, against an existing database.",
+        description="Search for protein sequences and/or their 3Di sequences, given in FASTA format, against an existing database.",
     )
     search_parser.set_defaults(func=search)
     search_parser.add_argument(
@@ -221,9 +221,30 @@ def main():
     search_parser.add_argument(
         "-q",
         "--query",
-        required=True,
         help="Path to FASTA formatted sequences",
         type=str,
+    )
+    search_parser.add_argument(
+        "-s",
+        "--structure",
+        help="Path to FASTA formatted 3Di sequences of the queries (same IDs, "
+        "in the same order). Requires a database with a 3Di index.",
+        type=str,
+    )
+    search_parser.add_argument(
+        "--search_mode",
+        choices=("auto", "seq", "ss", "sqs", "sum", "hybrid"),
+        default="auto",
+        help="Query strategy: 'seq' the sequence, 'ss' the 3Di, 'sqs' the "
+        "sequence, then the 3Di alone for the queries without a significant "
+        "family, 'sum' the sum of the sequence and 3Di family scores (each "
+        "modality scores its candidates as with --family_alpha 1, "
+        "--summed_alpha then applies to the sum; subfamilies are placed with "
+        "the sequence when it has the family as a candidate, else with the "
+        "3Di), 'hybrid' the sequence, then the sum for the queries without a "
+        "significant sequence family (their 3Di is searched only then). "
+        "'auto': 'hybrid' when both --query and --structure are given, else "
+        "the one given.",
     )
 
     search_parser.add_argument(
@@ -238,6 +259,29 @@ def main():
         type=float,
         help="Significance threshold used when filtering families.",
     )
+    search_parser.add_argument(
+        "--summed_alpha",
+        type=float,
+        default=None,
+        help="Significance threshold on the summed sequence + 3Di scores "
+        "(--search_mode sum and the second stage of hybrid). Default: "
+        "--family_alpha.",
+    )
+    search_parser.add_argument(
+        "--ss_weight",
+        type=float,
+        default=0.5,
+        help="Weight w of the 3Di score in summed scores (--search_mode sum "
+        "and hybrid): a family is placed when E_seq * E_3Di^w <= "
+        "--summed_alpha, with E the per-query E-values of the family.",
+    )
+    for name in ("family_model", "seq_family_model", "ss_family_model"):
+        search_parser.add_argument(
+            "--" + name,
+            choices=("binomial",),
+            default="binomial",
+            help="Accepted for compatibility: the family model is binomial.",
+        )
     search_parser.add_argument(
         "-fo",
         "--family_only",

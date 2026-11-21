@@ -60,6 +60,20 @@ def test_levels_are_branch_lengths_to_the_whole_tree_root():
             "(('S. cerevisiae (strain S288c)',B)'Sacc. (x)',C)R;",
             {"R", "Sacc. (x)", "S. cerevisiae (strain S288c)", "B", "C"},
         ),
+        # double-quoted names, as in the OMA browser speciestree.nwk, with
+        # unbalanced parentheses, apostrophes, commas and colons inside
+        (
+            '(("Synechococcus sp. (strain JA-2-3B\'a(2-13))", "E. coli (strain \'clone D i14\')")'
+            '"s__JA-3-3Ab sp000013225", ("a, b: c")"g__X")"LUCA";',
+            {
+                "LUCA",
+                "s__JA-3-3Ab sp000013225",
+                "Synechococcus sp. (strain JA-2-3B'a(2-13))",
+                "E. coli (strain 'clone D i14')",
+                "g__X",
+                "a, b: c",
+            },
+        ),
         # underscores are kept
         ("((Homo_sapiens,B)Homi_ninae,C)R;", {"R", "Homi_ninae", "Homo_sapiens", "B", "C"}),
         # comments are ignored
@@ -68,6 +82,27 @@ def test_levels_are_branch_lengths_to_the_whole_tree_root():
 )
 def test_names(newick, names):
     assert set(_taxa(newick)) == names
+
+
+def test_double_quoted_names_keep_topology_and_branch_lengths(tmp_path):
+    # Bio.Phylo alone splits double-quoted names at the parentheses inside
+    # them and builds a different tree, or fails on unbalanced ones
+    path = tmp_path / "speciestree.nwk"
+    path.write_text('(("A (x)":2, "B (y))":1)"AB (z)":0.5, C)R;\n')
+    tree = SpeciesTree.read(str(path))
+    taxa = {
+        name: (parent, children, level)
+        for name, parent, children, level, *_ in tree.subtree("R").taxa()
+    }
+    assert taxa == {
+        "R": (None, ["AB (z)", "C"], 0.0),
+        "AB (z)": ("R", ["A (x)", "B (y))"], 0.5),
+        "A (x)": ("AB (z)", [], 2.5),
+        "B (y))": ("AB (z)", [], 1.5),
+        "C": ("R", [], 1.0),
+    }
+    with open(path) as fp:
+        assert list(SpeciesTree.read(fp).taxa()) == list(tree.taxa())
 
 
 def test_lookup_by_exact_name():

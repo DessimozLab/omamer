@@ -16,9 +16,16 @@
     You should have received a copy of the GNU Lesser General Public License
     along with OMAmer. If not, see <http://www.gnu.org/licenses/>.
 """
+import re
 from collections import Counter
 
 MAX_REPORTED = 10
+
+# a single- or double-quoted newick label, as ete3 reads them
+QUOTED_LABEL_RE = re.compile(
+    r"""(?=["'])(?:"[^"\\]*(?:\\[\s\S][^"\\]*)*"|'[^'\\]*(?:\\[\s\S][^'\\]*)*')"""
+)
+QUOTED_LABEL_PREFIX = "omamer_quoted_label_"
 
 
 class SpeciesTreeError(ValueError):
@@ -62,21 +69,48 @@ class SpeciesTree(object):
         Read a species tree in newick format, with labelled internal nodes,
         from a path or a file handle.
         """
+        import io
+
         from Bio import Phylo
+
+        if hasattr(path, "read"):
+            newick = path.read()
+        else:
+            with open(path, "rt") as fp:
+                newick = fp.read()
+
+        # Bio.Phylo only knows single-quoted labels, while the OMA browser
+        # double-quotes names, which may contain parentheses, commas or
+        # apostrophes (e.g. "Synechococcus sp. (strain JA-2-3B'a(2-13))").
+        # As ete3 did, replace every quoted label by a placeholder before
+        # parsing and restore the name (without the quotes) afterwards.
+        quoted = []
+
+        def unquote(match):
+            quoted.append(match.group(0)[1:-1])
+            return "{}{}".format(QUOTED_LABEL_PREFIX, len(quoted) - 1)
+
+        newick = QUOTED_LABEL_RE.sub(unquote, newick)
+
+        def name_of(clade):
+            name = clade.name
+            if name and name.startswith(QUOTED_LABEL_PREFIX):
+                return quoted[int(name[len(QUOTED_LABEL_PREFIX):])]
+            return name if name else None
 
         # By default, Bio.Phylo stores internal node labels that look like
         # numbers (e.g. NCBI taxon ids) as confidence values and drops the
         # label. comments_are_confidence=True switches this off; the
         # confidence values are then taken from [...] comments instead,
         # which are not used here.
-        tree = Phylo.read(path, "newick", comments_are_confidence=True)
+        tree = Phylo.read(io.StringIO(newick), "newick", comments_are_confidence=True)
 
         names, parents, children, levels = [], [], [], []
         stack = [(tree.root, -1, 0.0)]
         while stack:
             clade, parent, level = stack.pop()
             node = len(names)
-            names.append(clade.name if clade.name else None)
+            names.append(name_of(clade))
             parents.append(parent)
             children.append([])
             levels.append(level)
